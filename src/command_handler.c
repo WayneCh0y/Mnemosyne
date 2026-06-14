@@ -2,12 +2,13 @@
 #include <string.h>
 
 #include "command_handler.h"
+#include "help.h"
 
 static void cmd_add(int argc, char *argv[]);
-static void cmd_search(int argc, char *argv[]);
-static void cmd_list(int argc, char *argv[]);
-static void cmd_remove(int argc, char *argv[]);
-static void cmd_config(int argc, char *argv[]);
+static void cmd_search(int argc, char *argv[]) { return; }
+static void cmd_list(int argc, char *argv[]) { return; }
+static void cmd_remove(int argc, char *argv[]) { return; }
+static void cmd_config(int argc, char *argv[]) { return; }
 
 void handle_command(int argc, char *argv[]) {
     const char *cmd = argv[1];
@@ -22,6 +23,6 @@ void handle_command(int argc, char *argv[]) {
     fprintf(stderr, "Unknown command: %s\n", cmd);
 }
 
-void cmd_add(int argc, char *argv[]) {
+static void cmd_add(int argc, char *argv[]) {
     return;
 }
