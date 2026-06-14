@@ -11,11 +11,11 @@ Mnemosyne is designed to grow incrementally. Each version builds directly on the
 **Search strategy:** `strstr()` scan across all stored plain-text documents.
 
 **Features**
-- `recall add` — ingest `.txt`, `.md`, `.tex`, `.pdf`
-- `recall search` — keyword search with interactive result picker
-- `recall config ide` — configure which IDE to open files in
-- `recall list` — show indexed files
-- `recall remove` — remove a file from the index
+- `mnemosyne add` — ingest `.txt`, `.md`, `.tex`, `.pdf`
+- `mnemosyne search` — keyword search with interactive result picker
+- `mnemosyne config ide` — configure which IDE to open files in
+- `mnemosyne list` — show indexed files
+- `mnemosyne remove` — remove a file from the index
 - Results ranked by match count (most hits shown first)
 - ±2 lines of surrounding context per result
 
@@ -35,7 +35,7 @@ Mnemosyne is designed to grow incrementally. Each version builds directly on the
 **New features**
 - Case-insensitive search by default
 - `-c` / `--case-sensitive` flag to opt back in
-- `recall reindex` command to rebuild the inverted index from stored docs
+- `mnemosyne reindex` command to rebuild the inverted index from stored docs
 - Index stored as a compact binary file (`~/.mnemosyne/index/inverted.bin`)
 
 **Breaking changes:** none — same commands, faster results.
@@ -50,7 +50,7 @@ Mnemosyne is designed to grow incrementally. Each version builds directly on the
 
 **New features**
 - Significantly better result ordering for multi-word queries
-- `recall search <query> --top N` to limit output to N results
+- `mnemosyne search <query> --top N` to limit output to N results
 - Stemming support (e.g. `"run"` matches `"running"`, `"runs"`)
 
 ---
@@ -68,11 +68,11 @@ Mnemosyne is designed to grow incrementally. Each version builds directly on the
 - At search time: embed the query, compute cosine similarity against all vectors, rank results
 
 **New commands**
-- `recall model set <model-path>` — point to a local GGML model file
-- `recall model status` — show currently loaded model
+- `mnemosyne model set <model-path>` — point to a local GGML model file
+- `mnemosyne model status` — show currently loaded model
 
 **New features**
-- `recall search "what is the fastest sorting algorithm"` finds documents about sorting even if they never use those exact words
+- `mnemosyne search "what is the fastest sorting algorithm"` finds documents about sorting even if they never use those exact words
 - `-e` / `--exact` flag to force v1-style keyword match instead
 
 **System requirements**
@@ -83,8 +83,8 @@ Mnemosyne is designed to grow incrementally. Each version builds directly on the
 
 ## Future Ideas (unscheduled)
 
-- `recall watch <dir>` — auto-index new files dropped into a folder
-- `recall export` — export the full index as JSON
+- `mnemosyne watch <dir>` — auto-index new files dropped into a folder
+- `mnemosyne export` — export the full index as JSON
 - OCR support for scanned PDFs (via Tesseract)
 - Multi-language support
-- Web UI (`recall serve`) for browser-based search
+- Web UI (`mnemosyne serve`) for browser-based search

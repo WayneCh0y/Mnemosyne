@@ -3,8 +3,8 @@
 A command-line tool that lets you search all your personal files and notes instantly — like a local Google for your computer.
 
 ```
-recall add thesis.pdf
-recall search "simplex algorithm"
+mnemosyne add thesis.pdf
+mnemosyne search "simplex algorithm"
 ```
 
 Named after the Greek goddess of memory.
@@ -21,7 +21,7 @@ Named after the Greek goddess of memory.
 ## Building
 
 ```bash
-make          # builds ./recall
+make          # builds ./mnemosyne binary
 make install  # copies to /usr/local/bin
 make test     # runs unit tests
 ```
@@ -32,12 +32,12 @@ Requires `pdftotext` (poppler) for PDF support. See [file-types.md](documentatio
 
 ```bash
 # configure your IDE (once)
-recall config ide code
+mnemosyne config ide code
 
 # add some files
-recall add notes.txt
-recall add ~/Documents/thesis.pdf
+mnemosyne add notes.txt
+mnemosyne add ~/Documents/thesis.pdf
 
 # search
-recall search simplex
+mnemosyne search simplex
 ```

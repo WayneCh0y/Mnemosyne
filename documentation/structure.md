@@ -12,7 +12,7 @@ Mnemosyne is a local-first, command-line file search tool. It ingests plain and 
 graph TD
     User([User])
 
-    subgraph CLI ["recall CLI"]
+    subgraph CLI ["mnemosyne CLI"]
         CMD[Command Dispatcher\nmain.c]
     end
 
@@ -39,7 +39,7 @@ graph TD
         LAUNCHER[IDE Launcher\nlauncher.c]
     end
 
-    User -- "recall add file" --> CMD
+    User -- "mnemosyne add file" --> CMD
     CMD --> ING
     ING -- ".txt / .md" --> P_TXT
     ING -- ".md" --> P_MD
@@ -48,7 +48,7 @@ graph TD
     P_TXT & P_MD & P_TEX & P_PDF --> MANIFEST
     P_TXT & P_MD & P_TEX & P_PDF --> DOCS
 
-    User -- "recall search query" --> CMD
+    User -- "mnemosyne search query" --> CMD
     CMD --> SE
     SE -- reads --> DOCS
     SE -- reads --> MANIFEST
@@ -57,7 +57,7 @@ graph TD
     LAUNCHER -- reads --> CFG
     LAUNCHER -- opens file --> User
 
-    User -- "recall config ide name" --> CMD
+    User -- "mnemosyne config ide name" --> CMD
     CMD --> CFG
 ```
 

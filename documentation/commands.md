@@ -1,23 +1,23 @@
 # Command Reference
 
-All commands are issued through the `recall` binary.
+All commands are issued through the `mnemosyne` binary.
 
 ---
 
-## `recall add <file>`
+## `mnemosyne add <file>`
 
 Ingests a file into the local index. The file's text is extracted, stored under `~/.mnemosyne/index/docs/`, and its metadata is recorded in `manifest.json`.
 
 **Usage**
 ```
-recall add <path-to-file>
+mnemosyne add <path-to-file>
 ```
 
 **Examples**
 ```
-recall add notes.txt
-recall add ~/Documents/thesis.pdf
-recall add project/design.md
+mnemosyne add notes.txt
+mnemosyne add ~/Documents/thesis.pdf
+mnemosyne add project/design.md
 ```
 
 **Supported file types:** `.txt`, `.md`, `.tex`, `.pdf`
@@ -30,20 +30,20 @@ See [file-types.md](file-types.md) for how each format is parsed.
 
 ---
 
-## `recall search <query>`
+## `mnemosyne search <query>`
 
 Searches all indexed documents for the given keyword or phrase. Results are ranked by match count and displayed in an interactive picker. Selecting a result opens the original file in your configured IDE.
 
 **Usage**
 ```
-recall search <query>
+mnemosyne search <query>
 ```
 
 **Examples**
 ```
-recall search simplex
-recall search "linear programming"
-recall search docker compose
+mnemosyne search simplex
+mnemosyne search "linear programming"
+mnemosyne search docker compose
 ```
 
 **Interactive picker**
@@ -66,19 +66,19 @@ Select [1-3] or q to quit: _
 
 - Type a number and press Enter to open that file.
 - Type `q` and press Enter to cancel.
-- The file opens in the IDE set by `recall config ide`.
+- The file opens in the IDE set by `mnemosyne config ide`.
 
-**If no IDE is configured**, `recall` prints an error asking you to run `recall config ide <name>` first.
+**If no IDE is configured**, `mnemosyne` prints an error asking you to run `mnemosyne config ide <name>` first.
 
 ---
 
-## `recall list`
+## `mnemosyne list`
 
 Lists all files currently in the index.
 
 **Usage**
 ```
-recall list
+mnemosyne list
 ```
 
 **Example output**
@@ -92,31 +92,31 @@ Indexed files (3):
 
 ---
 
-## `recall remove <file>`
+## `mnemosyne remove <file>`
 
 Removes a file from the index. Does not delete the original file.
 
 **Usage**
 ```
-recall remove <path-to-file>
+mnemosyne remove <path-to-file>
 ```
 
 **Example**
 ```
-recall remove notes.txt
+mnemosyne remove notes.txt
 ```
 
 Prints an error if the file is not currently indexed.
 
 ---
 
-## `recall config ide <name>`
+## `mnemosyne config ide <name>`
 
-Sets the IDE that `recall search` opens files in.
+Sets the IDE that `mnemosyne search` opens files in.
 
 **Usage**
 ```
-recall config ide <name>
+mnemosyne config ide <name>
 ```
 
 **Supported IDE keys**
@@ -132,8 +132,8 @@ recall config ide <name>
 
 **Example**
 ```
-recall config ide code
-recall config ide nvim
+mnemosyne config ide code
+mnemosyne config ide nvim
 ```
 
 The setting is saved to `~/.mnemosyne/config.json` and persists across sessions.
