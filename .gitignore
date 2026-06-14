@@ -1,0 +1,19 @@
+# Build artifacts
+*.o
+*.a
+recall
+
+# Build directories
+build/
+bin/
+
+# Editor artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS artifacts
+.DS_Store
+Thumbs.db

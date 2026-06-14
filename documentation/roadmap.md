@@ -1,0 +1,90 @@
+# Roadmap
+
+Mnemosyne is designed to grow incrementally. Each version builds directly on the previous one — no rewrites, only additions.
+
+---
+
+## v1 — Direct Match (current)
+
+**Goal:** A working, useful tool with the simplest possible search.
+
+**Search strategy:** `strstr()` scan across all stored plain-text documents.
+
+**Features**
+- `recall add` — ingest `.txt`, `.md`, `.tex`, `.pdf`
+- `recall search` — keyword search with interactive result picker
+- `recall config ide` — configure which IDE to open files in
+- `recall list` — show indexed files
+- `recall remove` — remove a file from the index
+- Results ranked by match count (most hits shown first)
+- ±2 lines of surrounding context per result
+
+**Limitations**
+- Linear scan: slow at very large index sizes (thousands of large documents)
+- Exact string match only: `"run"` does not match `"running"`
+- Case-sensitive by default
+
+---
+
+## v2 — Inverted Index
+
+**Goal:** Make search fast regardless of index size.
+
+**Search strategy:** Pre-built inverted index: `word → [doc_id, ...]`. Lookup is O(1) per term instead of O(n × file_size).
+
+**New features**
+- Case-insensitive search by default
+- `-c` / `--case-sensitive` flag to opt back in
+- `recall reindex` command to rebuild the inverted index from stored docs
+- Index stored as a compact binary file (`~/.mnemosyne/index/inverted.bin`)
+
+**Breaking changes:** none — same commands, faster results.
+
+---
+
+## v3 — TF-IDF Ranking
+
+**Goal:** Surface the most relevant results first, not just the most frequent ones.
+
+**Search strategy:** Score each document with TF-IDF (Term Frequency × Inverse Document Frequency). Documents that contain a rare query term score higher than documents that happen to contain a common word many times.
+
+**New features**
+- Significantly better result ordering for multi-word queries
+- `recall search <query> --top N` to limit output to N results
+- Stemming support (e.g. `"run"` matches `"running"`, `"runs"`)
+
+---
+
+## v4 — Semantic Search (LLM-based)
+
+**Goal:** Match by meaning, not just exact words.
+
+**Search strategy:** Embed each document chunk and the query into a shared vector space using a lightweight on-device embedding model. Return results by cosine similarity.
+
+**Approach**
+- Use a small GGML-compatible embedding model (e.g. `nomic-embed-text`, `all-MiniLM-L6-v2`) via [llama.cpp](https://github.com/ggerganov/llama.cpp) or a thin wrapper
+- Documents are chunked at ingest time (e.g. 512-token windows with 64-token overlap)
+- Embeddings stored as float32 arrays in `~/.mnemosyne/index/vectors/`
+- At search time: embed the query, compute cosine similarity against all vectors, rank results
+
+**New commands**
+- `recall model set <model-path>` — point to a local GGML model file
+- `recall model status` — show currently loaded model
+
+**New features**
+- `recall search "what is the fastest sorting algorithm"` finds documents about sorting even if they never use those exact words
+- `-e` / `--exact` flag to force v1-style keyword match instead
+
+**System requirements**
+- A GGML-compatible model file (~100 MB–4 GB depending on quality)
+- CPU inference; GPU optional
+
+---
+
+## Future Ideas (unscheduled)
+
+- `recall watch <dir>` — auto-index new files dropped into a folder
+- `recall export` — export the full index as JSON
+- OCR support for scanned PDFs (via Tesseract)
+- Multi-language support
+- Web UI (`recall serve`) for browser-based search
