@@ -6,10 +6,16 @@
 #ifdef _WIN32
   #include <direct.h>
   #include <sys/stat.h>
+  #include <io.h>
   #define make_dir(p) _mkdir(p)
 #else
   #include <sys/stat.h>
+  #include <unistd.h>
   #define make_dir(p) mkdir(p, 0755)
+#endif
+
+#ifndef F_OK
+  #define F_OK 0
 #endif
 
 #include "init.h"
@@ -50,7 +56,7 @@ static int dir_exists(const char *path) {
 }
 
 static int create_dirs(void) {
-    char path[1024];
+    char path[2048];
 
     if (make_dir(data_path) != 0 && errno != EEXIST) return -1;
 
@@ -59,6 +65,14 @@ static int create_dirs(void) {
 
     snprintf(path, sizeof(path), "%s/index/docs", data_path);
     if (make_dir(path) != 0 && errno != EEXIST) return -1;
+
+    snprintf(path, sizeof(path), "%s/index/manifest.json", data_path);
+    if (access(path, F_OK) != 0) {
+        FILE *f = fopen(path, "w");
+        if (f == NULL) return -1;
+        fprintf(f, "[]\n");
+        fclose(f);
+    }
 
     return 0;
 }
@@ -80,12 +94,15 @@ static int first_time_setup(void) {
 
         if (fgets(input, sizeof(input), stdin) == NULL) {
             strncpy(data_path, default_path, sizeof(data_path) - 1);
+            data_path[sizeof(data_path) - 1] = '\0';
         } else {
             input[strcspn(input, "\n")] = '\0';
             if (strlen(input) == 0) {
                 strncpy(data_path, default_path, sizeof(data_path) - 1);
+                data_path[sizeof(data_path) - 1] = '\0';
             } else {
                 strncpy(data_path, input, sizeof(data_path) - 1);
+                data_path[sizeof(data_path) - 1] = '\0';
             }
         }
 
@@ -129,7 +146,15 @@ void check_init(void) {
             data_path[strcspn(data_path, "\n")] = '\0';
         fclose(conf);
 
-        if (dir_exists(data_path)) return;
+        if (dir_exists(data_path)) {
+            char manifest[2048];
+            snprintf(manifest, sizeof(manifest), "%s/index/manifest.json", data_path);
+            if (access(manifest, F_OK) != 0) {
+                FILE *f = fopen(manifest, "w");
+                if (f != NULL) { fprintf(f, "[]\n"); fclose(f); }
+            }
+            return;
+        }
 
         fprintf(stderr, "warning: storage directory missing, re-running setup.\n");
         remove(conf_path);
