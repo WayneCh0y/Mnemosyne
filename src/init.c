@@ -5,6 +5,7 @@
 
 #ifdef _WIN32
   #include <direct.h>
+  #include <sys/stat.h>
   #define make_dir(p) _mkdir(p)
 #else
   #include <sys/stat.h>
@@ -34,6 +35,20 @@ static void build_conf_path(void) {
     snprintf(conf_path, sizeof(conf_path), "%s/.mnemosyne.conf", home);
 }
 
+static int is_valid_path(const char *path) {
+#ifdef _WIN32
+    return strlen(path) >= 2 && path[1] == ':';
+#else
+    return path[0] == '/';
+#endif
+}
+
+static int dir_exists(const char *path) {
+    struct stat st;
+    if (stat(path, &st) != 0) return 0;
+    return (st.st_mode & S_IFDIR) != 0;
+}
+
 static int create_dirs(void) {
     char path[1024];
 
@@ -48,7 +63,7 @@ static int create_dirs(void) {
     return 0;
 }
 
-static void first_time_setup(void) {
+static int first_time_setup(void) {
     const char *home = get_home();
     char default_path[1024];
     char input[1024];
@@ -58,37 +73,51 @@ static void first_time_setup(void) {
     printf(YELLOW "Welcome to Mnemosyne!\n" RESET);
     printf("This looks like your first time running the program.\n\n");
     printf("Where would you like to store your data?\n");
-    printf(CYAN "[default: %s]: " RESET, default_path);
-    fflush(stdout);
 
-    if (fgets(input, sizeof(input), stdin) == NULL) {
-        strncpy(data_path, default_path, sizeof(data_path) - 1);
-    } else {
-        input[strcspn(input, "\n")] = '\0';
-        if (strlen(input) == 0) {
+    while (1) {
+        printf(CYAN "[default: %s]: " RESET, default_path);
+        fflush(stdout);
+
+        if (fgets(input, sizeof(input), stdin) == NULL) {
             strncpy(data_path, default_path, sizeof(data_path) - 1);
         } else {
-            strncpy(data_path, input, sizeof(data_path) - 1);
+            input[strcspn(input, "\n")] = '\0';
+            if (strlen(input) == 0) {
+                strncpy(data_path, default_path, sizeof(data_path) - 1);
+            } else {
+                strncpy(data_path, input, sizeof(data_path) - 1);
+            }
         }
-    }
 
-    printf("\nCreating storage at: %s\n", data_path);
+        if (!is_valid_path(data_path)) {
+            fprintf(stderr, "error: please enter an absolute path");
+#ifdef _WIN32
+            fprintf(stderr, " (e.g. C:\\Users\\Wayne\\notes)");
+#else
+            fprintf(stderr, " (e.g. /home/user/notes)");
+#endif
+            fprintf(stderr, "\n\n");
+            continue;
+        }
 
-    if (create_dirs() != 0) {
-        fprintf(stderr, "error: could not create storage directory: %s\n", data_path);
-        fprintf(stderr, "Check that the path is valid and you have write permission.\n");
-        return;
+        printf("\nCreating storage at: %s\n", data_path);
+
+        if (create_dirs() == 0) break;
+
+        fprintf(stderr, "error: could not create directory: %s\n", data_path);
+        fprintf(stderr, "Please enter a valid path.\n\n");
     }
 
     FILE *conf = fopen(conf_path, "w");
     if (conf == NULL) {
         fprintf(stderr, "error: could not write config file: %s\n", conf_path);
-        return;
+        return -1;
     }
     fprintf(conf, "%s\n", data_path);
     fclose(conf);
 
     printf(BOLD "Setup complete.\n\n" RESET);
+    return 0;
 }
 
 void check_init(void) {
@@ -99,10 +128,17 @@ void check_init(void) {
         if (fgets(data_path, sizeof(data_path), conf) != NULL)
             data_path[strcspn(data_path, "\n")] = '\0';
         fclose(conf);
-        return;
+
+        if (dir_exists(data_path)) return;
+
+        fprintf(stderr, "warning: storage directory missing, re-running setup.\n");
+        remove(conf_path);
     }
 
-    first_time_setup();
+    if (first_time_setup() != 0) {
+        fprintf(stderr, "Setup failed. Exiting.\n");
+        exit(1);
+    }
 }
 
 const char *get_data_path(void) {
