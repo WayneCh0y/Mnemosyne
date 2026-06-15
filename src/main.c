@@ -12,7 +12,8 @@ int main(int argc, char *argv[]) {
     }
 
     check_init();
-    handle_command(argc, argv);
 
+    handle_command(argc, argv);
+    
     return 0;
 }
