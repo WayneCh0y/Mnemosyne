@@ -12,7 +12,8 @@ endif
 
 SRCS = src/main.c \
        src/help.c \
-       src/command_handler.c
+       src/command_handler.c \
+       src/init.c
 
 $(TARGET): $(SRCS)
 	$(CC) $(CFLAGS) $(SRCS) -o $(TARGET)

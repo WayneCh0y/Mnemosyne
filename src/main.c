@@ -3,6 +3,7 @@
 
 #include "help.h"
 #include "command_handler.h"
+#include "init.h"
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
@@ -10,7 +11,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    handle_command(argc, argv);
+    check_init();
 
+    handle_command(argc, argv);
+    
     return 0;
 }
