@@ -4,7 +4,7 @@
 
 #include "search.h"
 #include "index.h"
-#include "init.h"
+#include "config.h"
 
 static int cmp(const void *a, const void *b) {
     const SearchResult *ra = a, *rb = b;
