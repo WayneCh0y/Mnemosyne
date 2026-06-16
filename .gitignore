@@ -17,3 +17,6 @@ bin/
 # OS artifacts
 .DS_Store
 Thumbs.db
+
+# Binaries
+*.exe
