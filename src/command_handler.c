@@ -9,6 +9,7 @@
 #include "ingest.h"
 #include "index.h"
 #include "search.h"
+#include "config.h"
 
 static int is_valid_add(int argc) {
     if (argc == 3) {
@@ -97,7 +98,21 @@ static void cmd_search(int argc, char *argv[]) {
 
 static void cmd_list(int argc, char *argv[]) { return; }
 static void cmd_remove(int argc, char *argv[]) { return; }
-static void cmd_config(int argc, char *argv[]) { return; }
+
+static int is_valid_config(int argc, char *argv[]) {
+    if (argc == 4 && strcmp(argv[2], "ide") == 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static void cmd_config(int argc, char *argv[]) { 
+    if (!is_valid_config(argc, argv)) { print_help(); return; }
+
+    if (set_ide(argv[3]) == 0) {
+        printf("Default IDE updated to: %s\n", argv[3]);
+    }
+}
 
 void handle_command(int argc, char *argv[]) {
     const char *cmd = argv[1];

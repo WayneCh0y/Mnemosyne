@@ -66,9 +66,7 @@ Select [1-3] or q to quit: _
 
 - Type a number and press Enter to open that file.
 - Type `q` and press Enter to cancel.
-- The file opens in the IDE set by `mnemosyne config ide`.
-
-**If no IDE is configured**, `mnemosyne` prints an error asking you to run `mnemosyne config ide <name>` first.
+- The file opens in the IDE set during first-time setup, or last changed via `mnemosyne config ide`.
 
 ---
 
@@ -112,7 +110,7 @@ Prints an error if the file is not currently indexed.
 
 ## `mnemosyne config ide <name>`
 
-Sets the IDE that `mnemosyne search` opens files in.
+Changes the IDE that `mnemosyne search` opens files in. The initial value is set during first-time setup (see below); use this command to change it later.
 
 **Usage**
 ```
@@ -136,7 +134,20 @@ mnemosyne config ide code
 mnemosyne config ide nvim
 ```
 
-The setting is saved to `~/.mnemosyne/config.json` and persists across sessions.
+An invalid key prints the list of supported options and exits without changing anything.
+
+The setting is saved to `~/.mnemosyne.conf` (plain text, one value per line) and persists across sessions.
+
+---
+
+## First-time setup
+
+The first time you run any `mnemosyne` command, you are prompted for:
+
+1. **Storage location** — where to keep the index. Defaults to `~/.mnemosyne`.
+2. **Default IDE** — which editor `search` results open in. Defaults to `code`.
+
+Pressing Enter at either prompt accepts the default. Both values are saved to `~/.mnemosyne.conf` and reused on every subsequent run. To re-run setup, delete `~/.mnemosyne.conf`.
 
 ---
 

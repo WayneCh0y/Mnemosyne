@@ -4,7 +4,7 @@
 #include <sys/stat.h>
 
 #include "ingest.h"
-#include "init.h"
+#include "config.h"
 #include "sha256.h"
 #include "index.h"
 #include "parser/parser.h"

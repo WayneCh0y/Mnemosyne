@@ -3,7 +3,7 @@
 #include <string.h>
 
 #include "index.h"
-#include "init.h"
+#include "config.h"
 #include "cJSON.h"
 
 void index_add(const char *original_path, const char *hash,
