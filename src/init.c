@@ -19,14 +19,12 @@
 #endif
 
 #include "init.h"
+#include "config.h"
 
 #define BOLD    "\033[1m"
 #define CYAN    "\033[36m"
 #define YELLOW  "\033[1;33m"
 #define RESET   "\033[0m"
-
-static char data_path[1024];
-static char conf_path[1024];
 
 static const char *get_home(void) {
 #ifdef _WIN32
@@ -34,11 +32,6 @@ static const char *get_home(void) {
 #else
     return getenv("HOME");
 #endif
-}
-
-static void build_conf_path(void) {
-    const char *home = get_home();
-    snprintf(conf_path, sizeof(conf_path), "%s/.mnemosyne.conf", home);
 }
 
 static int is_valid_path(const char *path) {
@@ -55,18 +48,18 @@ static int dir_exists(const char *path) {
     return (st.st_mode & S_IFDIR) != 0;
 }
 
-static int create_dirs(void) {
+static int create_dirs(const char *base) {
     char path[2048];
 
-    if (make_dir(data_path) != 0 && errno != EEXIST) return -1;
+    if (make_dir(base) != 0 && errno != EEXIST) return -1;
 
-    snprintf(path, sizeof(path), "%s/index", data_path);
+    snprintf(path, sizeof(path), "%s/index", base);
     if (make_dir(path) != 0 && errno != EEXIST) return -1;
 
-    snprintf(path, sizeof(path), "%s/index/docs", data_path);
+    snprintf(path, sizeof(path), "%s/index/docs", base);
     if (make_dir(path) != 0 && errno != EEXIST) return -1;
 
-    snprintf(path, sizeof(path), "%s/index/manifest.json", data_path);
+    snprintf(path, sizeof(path), "%s/index/manifest.json", base);
     if (access(path, F_OK) != 0) {
         FILE *f = fopen(path, "w");
         if (f == NULL) return -1;
@@ -77,10 +70,24 @@ static int create_dirs(void) {
     return 0;
 }
 
+static void read_with_default(char *dest, size_t dest_size, const char *default_val) {
+    char input[1024];
+    const char *src = default_val;
+
+    if (fgets(input, sizeof(input), stdin) != NULL) {
+        input[strcspn(input, "\n")] = '\0';
+        if (input[0] != '\0') src = input;
+    }
+
+    strncpy(dest, src, dest_size - 1);
+    dest[dest_size - 1] = '\0';
+}
+
 static int first_time_setup(void) {
     const char *home = get_home();
     char default_path[1024];
-    char input[1024];
+    char chosen_path[1024];
+    char chosen_ide[32];
 
     snprintf(default_path, sizeof(default_path), "%s/.mnemosyne", home);
 
@@ -92,21 +99,9 @@ static int first_time_setup(void) {
         printf(CYAN "[default: %s]: " RESET, default_path);
         fflush(stdout);
 
-        if (fgets(input, sizeof(input), stdin) == NULL) {
-            strncpy(data_path, default_path, sizeof(data_path) - 1);
-            data_path[sizeof(data_path) - 1] = '\0';
-        } else {
-            input[strcspn(input, "\n")] = '\0';
-            if (strlen(input) == 0) {
-                strncpy(data_path, default_path, sizeof(data_path) - 1);
-                data_path[sizeof(data_path) - 1] = '\0';
-            } else {
-                strncpy(data_path, input, sizeof(data_path) - 1);
-                data_path[sizeof(data_path) - 1] = '\0';
-            }
-        }
+        read_with_default(chosen_path, sizeof(chosen_path), default_path);
 
-        if (!is_valid_path(data_path)) {
+        if (!is_valid_path(chosen_path)) {
             fprintf(stderr, "error: please enter an absolute path");
 #ifdef _WIN32
             fprintf(stderr, " (e.g. C:\\Users\\Wayne\\notes)");
@@ -117,55 +112,55 @@ static int first_time_setup(void) {
             continue;
         }
 
-        printf("\nCreating storage at: %s\n", data_path);
+        printf("\nCreating storage at: %s\n", chosen_path);
 
-        if (create_dirs() == 0) break;
+        if (create_dirs(chosen_path) == 0) {
+            if (set_data_path(chosen_path) != 0) return -1;
+            break;
+        }
 
-        fprintf(stderr, "error: could not create directory: %s\n", data_path);
+        fprintf(stderr, "error: could not create directory: %s\n", chosen_path);
         fprintf(stderr, "Please enter a valid path.\n\n");
     }
 
-    FILE *conf = fopen(conf_path, "w");
-    if (conf == NULL) {
-        fprintf(stderr, "error: could not write config file: %s\n", conf_path);
-        return -1;
+    printf("\nWhich IDE do you want to set as your default?\n");
+
+    const char *default_ide = "code";
+
+    while (1) {
+        printf(CYAN "[default: %s]: " RESET, default_ide);
+        fflush(stdout);
+
+        read_with_default(chosen_ide, sizeof(chosen_ide), default_ide);
+
+        if (set_ide(chosen_ide) != 0) {
+            fprintf(stderr, "\n");
+            continue;
+        }
+
+        printf("\nUsing %s as your default IDE.\n\n", chosen_ide);
+        break;
     }
-    fprintf(conf, "%s\n", data_path);
-    fclose(conf);
 
     printf(BOLD "Setup complete.\n\n" RESET);
     return 0;
 }
 
 void check_init(void) {
-    build_conf_path();
-
-    FILE *conf = fopen(conf_path, "r");
-    if (conf != NULL) {
-        if (fgets(data_path, sizeof(data_path), conf) != NULL)
-            data_path[strcspn(data_path, "\n")] = '\0';
-        fclose(conf);
-
-        if (dir_exists(data_path)) {
-            char manifest[2048];
-            snprintf(manifest, sizeof(manifest), "%s/index/manifest.json", data_path);
-            if (access(manifest, F_OK) != 0) {
-                FILE *f = fopen(manifest, "w");
-                if (f != NULL) { fprintf(f, "[]\n"); fclose(f); }
-            }
-            return;
+    if (load_config() == 0 && dir_exists(get_data_path())) {
+        char manifest[2048];
+        snprintf(manifest, sizeof(manifest), "%s/index/manifest.json", get_data_path());
+        if (access(manifest, F_OK) != 0) {
+            FILE *f = fopen(manifest, "w");
+            if (f != NULL) { fprintf(f, "[]\n"); fclose(f); }
         }
-
-        fprintf(stderr, "warning: storage directory missing, re-running setup.\n");
-        remove(conf_path);
+        return;
     }
+
+    fprintf(stderr, "warning: config incomplete or storage missing, re-running setup.\n");
 
     if (first_time_setup() != 0) {
         fprintf(stderr, "Setup failed. Exiting.\n");
         exit(1);
     }
-}
-
-const char *get_data_path(void) {
-    return data_path;
 }

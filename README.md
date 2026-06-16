@@ -30,14 +30,18 @@ Requires `pdftotext` (poppler) for PDF support. See [file-types.md](documentatio
 
 ## Quick Start
 
-```bash
-# configure your IDE (once)
-mnemosyne config ide code
+On first run, Mnemosyne prompts you for a storage location and a default IDE — you can press Enter to accept the defaults.
 
+```bash
 # add some files
 mnemosyne add notes.txt
 mnemosyne add ~/Documents/thesis.pdf
 
 # search
 mnemosyne search simplex
+
+# change your default IDE later
+mnemosyne config ide nvim
 ```
+
+Supported IDE keys: `code`, `cursor`, `nvim`, `vim`, `nano`, `idea`.
