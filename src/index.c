@@ -91,9 +91,12 @@ IndexEntry *index_get_entries(int *count) {
     for (int i = 0; i < n; i++) {
         cJSON *entry       = cJSON_GetArrayItem(root, i);
         cJSON *op          = cJSON_GetObjectItem(entry, "original_path");
+        cJSON *h           = cJSON_GetObjectItem(entry, "hash");
         cJSON *lm          = cJSON_GetObjectItem(entry, "last_modified");
         strncpy(entries[i].original_path, op->valuestring, sizeof(entries[i].original_path) - 1);
         entries[i].original_path[sizeof(entries[i].original_path) - 1] = '\0';
+        strncpy(entries[i].hash, h->valuestring, sizeof(entries[i].hash) - 1);
+        entries[i].hash[sizeof(entries[i].hash) - 1] = '\0';
         entries[i].last_modified = (long)lm->valuedouble;
     }
 

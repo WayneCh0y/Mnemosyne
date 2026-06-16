@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <ctype.h>
 
 #include "txt.h"
 
@@ -17,7 +18,10 @@ char *parse_txt(const char *path) {
 
     fread(buf, 1, size, f);
     buf[size] = '\0';
-
     fclose(f);
+
+    for (long i = 0; i < size; i++)
+        buf[i] = (char)tolower((unsigned char)buf[i]);
+
     return buf;
 }

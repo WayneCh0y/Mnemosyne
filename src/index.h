@@ -3,6 +3,7 @@
 
 typedef struct {
     char original_path[4096];
+    char hash[65];
     long last_modified;
 } IndexEntry;
 
