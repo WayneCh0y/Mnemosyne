@@ -86,7 +86,7 @@ static void cmd_search(int argc, char *argv[]) {
     int display = count < 5 ? count : 5;
     
     for (int i = 0; i < display; i++) {
-        printf("[%d] %s (%d matches)\n", i + 1, results[i].original_path, results[i].match_count);
+        printf("[%d] %s\n", i + 1, results[i].original_path);
         printf("    %s\n", results[i].context);
     }
 
