@@ -1,9 +1,12 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <sys/stat.h>
 
 #include "command_handler.h"
 #include "help.h"
 #include "ingest.h"
+#include "index.h"
 
 static int is_valid_add(int argc) {
     if (argc == 3) {
@@ -20,7 +23,30 @@ static void cmd_add(int argc, char *argv[]) {
     return;
 }
 
-static void cmd_search(int argc, char *argv[]) { return; }
+static int is_valid_search(int argc) {
+    if (argc >= 3) { return 1; }
+    return 0;
+}
+
+static void update_files(void) {
+    int count;
+    IndexEntry *entries = index_get_entries(&count);
+    if (entries == NULL) return;
+
+    for (int i = 0; i < count; i++) {
+        struct stat st;
+        if (stat(entries[i].original_path, &st) != 0) continue;
+        if ((long)st.st_mtime > entries[i].last_modified)
+            ingest_file(entries[i].original_path);
+    }
+
+    free(entries);
+}
+
+static void cmd_search(int argc, char *argv[]) {
+    if (!is_valid_search(argc)) { print_help(); return; }
+}
+
 static void cmd_list(int argc, char *argv[]) { return; }
 static void cmd_remove(int argc, char *argv[]) { return; }
 static void cmd_config(int argc, char *argv[]) { return; }

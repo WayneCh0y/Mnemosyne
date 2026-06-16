@@ -69,3 +69,35 @@ void index_add(const char *original_path, const char *hash,
     free(output);
     cJSON_Delete(root);
 }
+
+IndexEntry *index_get_entries(int *count) {
+    char manifest_path[4096];
+    snprintf(manifest_path, sizeof(manifest_path), "%s/index/manifest.json", get_data_path());
+
+    FILE *f = fopen(manifest_path, "r");
+    if (f == NULL) { fprintf(stderr, "error: could not open manifest: %s\n", manifest_path); *count = 0; return NULL; }
+    fseek(f, 0, SEEK_END); long size = ftell(f); rewind(f);
+    char *buf = malloc(size + 1);
+    if (buf == NULL) { fclose(f); *count = 0; return NULL; }
+    fread(buf, 1, size, f); buf[size] = '\0'; fclose(f);
+
+    cJSON *root = cJSON_Parse(buf); free(buf);
+    if (root == NULL) { fprintf(stderr, "error: manifest.json is malformed\n"); *count = 0; return NULL; }
+
+    int n = cJSON_GetArraySize(root);
+    IndexEntry *entries = malloc(n * sizeof(IndexEntry));
+    if (entries == NULL) { cJSON_Delete(root); *count = 0; return NULL; }
+
+    for (int i = 0; i < n; i++) {
+        cJSON *entry       = cJSON_GetArrayItem(root, i);
+        cJSON *op          = cJSON_GetObjectItem(entry, "original_path");
+        cJSON *lm          = cJSON_GetObjectItem(entry, "last_modified");
+        strncpy(entries[i].original_path, op->valuestring, sizeof(entries[i].original_path) - 1);
+        entries[i].original_path[sizeof(entries[i].original_path) - 1] = '\0';
+        entries[i].last_modified = (long)lm->valuedouble;
+    }
+
+    cJSON_Delete(root);
+    *count = n;
+    return entries;
+}
