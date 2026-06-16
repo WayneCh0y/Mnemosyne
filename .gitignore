@@ -1,7 +1,8 @@
 # Build artifacts
 *.o
 *.a
-recall
+mnemosyne
+*.exe
 
 # Build directories
 build/
