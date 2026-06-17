@@ -46,7 +46,17 @@ make install PREFIX=$HOME/.local       # no-sudo alternative (~/.local/bin)
 ```
 > `gcc` on macOS is aliased to Apple Clang — this is fine, the build works as-is.
 
-**Windows** (PowerShell with MinGW `make` on PATH)
+**Windows**
+
+Windows doesn't ship with `gcc` or `make`. Install them via [MSYS2](https://www.msys2.org/) (recommended) or Chocolatey:
+```powershell
+# MSYS2 (after installing from msys2.org, run in the MSYS2 shell):
+pacman -S mingw-w64-ucrt-x86_64-gcc make
+
+# or Chocolatey:
+choco install mingw
+```
+Then, from PowerShell with `gcc` and `make` on your PATH:
 ```powershell
 make install
 ```
@@ -58,7 +68,7 @@ Copies `mnemosyne.exe` to `%USERPROFILE%\bin\`. If that folder is not yet on you
 
 **Uninstalling**
 ```bash
-make uninstall          # Linux/macOS
+make uninstall          # Windows / Linux / macOS
 sudo make uninstall     # Linux/macOS if installed to /usr/local/bin
 ```
 
