@@ -20,7 +20,7 @@ static void find_git_root(const char *original_path, char *out, size_t out_size)
     if (sep) *sep = '\0';
 
     while (dir[0] != '\0') {
-        char git_path[4096];
+        char git_path[4096 + 6];
 #ifdef _WIN32
         snprintf(git_path, sizeof(git_path), "%s\\.git", dir);
 #else
