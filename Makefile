@@ -17,6 +17,7 @@ SRCS = src/main.c \
        src/config.c \
        src/sha256.c \
        src/parser/txt.c \
+       src/parser/md.c \
        src/parser/parser.c \
        src/ingest.c \
        src/index.c \
