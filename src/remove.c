@@ -30,7 +30,7 @@ void remove_file(const char *path) {
 
     /* Step 3: Remove from index */
     int rc = index_remove(abs_path);
-    if (rc == 1)      {         
+    if (rc == 1) {
         /* Step 4: Remove the corresponding file in docs/ */
         char doc_path[4096];
         snprintf(doc_path, sizeof(doc_path), "%s/index/docs/%s.txt", get_data_path(), hash);
