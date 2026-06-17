@@ -11,7 +11,18 @@ else
 endif
 
 SRCS = src/main.c \
-       src/help.c
+       src/help.c \
+       src/command_handler.c \
+       src/init.c \
+       src/config.c \
+       src/sha256.c \
+       src/parser/txt.c \
+       src/parser/md.c \
+       src/parser/parser.c \
+       src/ingest.c \
+       src/index.c \
+       src/search.c \
+       src/cJSON.c
 
 $(TARGET): $(SRCS)
 	$(CC) $(CFLAGS) $(SRCS) -o $(TARGET)

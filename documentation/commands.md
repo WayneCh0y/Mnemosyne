@@ -32,7 +32,7 @@ See [file-types.md](file-types.md) for how each format is parsed.
 
 ## `mnemosyne search <query>`
 
-Searches all indexed documents for the given keyword or phrase. Results are ranked by match count and displayed in an interactive picker. Selecting a result opens the original file in your configured IDE.
+Searches all indexed documents for the given keyword or phrase. The query is case-insensitive. Modified files are automatically re-indexed before searching. Up to 5 results are shown, ranked by recency then match count.
 
 **Usage**
 ```
@@ -46,29 +46,21 @@ mnemosyne search "linear programming"
 mnemosyne search docker compose
 ```
 
-**Interactive picker**
+**Output format**
 
-After running the command, you see a numbered result list:
+Each result shows the original file path and a context snippet of up to 256 characters centered on the first match (25% before, 75% after), with `...` where the file extends beyond the window:
+
 ```
-Found 3 matches for "simplex":
-
-  [1] notes.txt                     5 matches
-      "...the simplex algorithm is used for linear programming..."
-
-  [2] chat1.txt                     2 matches
-      "...we discussed the simplex method for LP..."
-
-  [3] project/design.md             1 match
-      "...optimization using simplex..."
-
-Select [1-3] or q to quit: _
+[1] /home/user/notes.txt
+    ...the simplex algorithm is used for linear...
+[2] /home/user/project/design.md
+    ...optimization using simplex methods across...
 ```
 
-- Type a number and press Enter to open that file.
-- Type `q` and press Enter to cancel.
-- The file opens in the IDE set by `mnemosyne config ide`.
-
-**If no IDE is configured**, `mnemosyne` prints an error asking you to run `mnemosyne config ide <name>` first.
+For `.md` files, the context is rendered with formatting:
+- Headings appear in **magenta**
+- List items appear as `- item one` / `- item two` (one per line)
+- Links appear as `link` in **blue**
 
 ---
 
@@ -112,7 +104,7 @@ Prints an error if the file is not currently indexed.
 
 ## `mnemosyne config ide <name>`
 
-Sets the IDE that `mnemosyne search` opens files in.
+Changes the IDE that `mnemosyne search` opens files in. The initial value is set during first-time setup (see below); use this command to change it later.
 
 **Usage**
 ```
@@ -136,7 +128,20 @@ mnemosyne config ide code
 mnemosyne config ide nvim
 ```
 
-The setting is saved to `~/.mnemosyne/config.json` and persists across sessions.
+An invalid key prints the list of supported options and exits without changing anything.
+
+The setting is saved to `~/.mnemosyne.conf` (plain text, one value per line) and persists across sessions.
+
+---
+
+## First-time setup
+
+The first time you run any `mnemosyne` command, you are prompted for:
+
+1. **Storage location** — where to keep the index. Defaults to `~/.mnemosyne`.
+2. **Default IDE** — which editor `search` results open in. Defaults to `code`.
+
+Pressing Enter at either prompt accepts the default. Both values are saved to `~/.mnemosyne.conf` and reused on every subsequent run. To re-run setup, delete `~/.mnemosyne.conf`.
 
 ---
 
