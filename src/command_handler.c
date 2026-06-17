@@ -176,24 +176,44 @@ static void render_results(SearchResult *results, int display, int selected) {
     fflush(stdout);
 }
 
+static void handle_enter(SearchResult *results, int selected) {
+    const char *file_path = results[selected].original_path;
+    const char *open_path = file_path;
+    int entry_count;
+    IndexEntry *entries = index_get_entries(&entry_count);
+    if (entries) {
+        for (int i = 0; i < entry_count; i++) {
+            if (strcmp(entries[i].original_path, file_path) == 0) {
+                if (strcmp(entries[i].repository, "none") != 0)
+                    open_path = entries[i].repository;
+                break;
+            }
+        }
+    }
+    char launch[8192];
+    snprintf(launch, sizeof(launch), "%s \"%s\"", get_ide(), open_path);
+    free(entries);
+    system(launch);
+}
+
 static int run_picker(SearchResult *results, int display) {
     int selected = 0;
+    int done = 0;
     printf(ANSI_CURSOR_HIDE);
     render_results(results, display, selected);
-    while (1) {
+    while (!done) {
         int key = read_key();
-        int done = 0;
         switch (key) {
-        case KEY_UP: if (selected > 0) { selected--; } break;
-        case KEY_DOWN: if (selected < display - 1)  { selected++; } break;
-        case KEY_ENTER: { done = 1; } break;
-        case KEY_ESC: { selected = -1; done = 1; } break;
+        case KEY_UP:    if (selected > 0)           selected--; break;
+        case KEY_DOWN:  if (selected < display - 1) selected++; break;
+        case KEY_ENTER: done = 1;                               break;
+        case KEY_ESC:   selected = -1; done = 1;               break;
         default: break;
         }
-        if (done) { break; }
-        render_results(results, display, selected);
+        if (!done) render_results(results, display, selected);
     }
     printf(ANSI_CURSOR_SHOW);
+    fflush(stdout);
     return selected;
 }
 
@@ -223,12 +243,9 @@ static void cmd_search(int argc, char *argv[]) {
     int display = count < 5 ? count : 5;
 
     int chosen = run_picker(results, display);
-    if (chosen == -1) {
-        printf(ANSI_CLEAR);
-    } else {
-        (void)chosen;
-    }
-
+    printf(ANSI_CLEAR ANSI_RESET);
+    if (chosen != -1)
+        handle_enter(results, chosen);
     free(results);
 
     return;
