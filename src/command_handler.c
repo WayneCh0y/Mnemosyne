@@ -61,6 +61,36 @@ static char* build_query(int argc, char *argv[]) {
     return query;
 }
 
+static void print_context(const SearchResult *r) {
+    int is_md = (strcmp(r->file_type, "md") == 0);
+    int at_line_start = 1;
+    printf("    ");
+    const char *p = r->context;
+    while (*p != '\0') {
+        if (is_md && at_line_start && *p == '#') {
+            while (*p == '#') p++;
+            if (*p == ' ') p++;
+            printf("\033[35m");
+            while (*p != '\0' && *p != '\n') putchar(*p++);
+            printf("\033[0m");
+            at_line_start = 0;
+        } else if (is_md && strncmp(p, "[LIST] ", 7) == 0) {
+            printf("- "); p += 7; at_line_start = 0;
+        } else if (is_md && strncmp(p, " | ", 3) == 0) {
+            printf("\n    - "); p += 3; at_line_start = 0;
+        } else if (is_md && strncmp(p, "[/LIST]", 7) == 0) {
+            p += 7;
+        } else if (is_md && strncmp(p, "[LINK]", 6) == 0) {
+            printf("\033[34mlink\033[0m"); p += 6; at_line_start = 0;
+        } else if (*p == '\n') {
+            printf("\n    "); p++; at_line_start = 1;
+        } else {
+            putchar(*p++); at_line_start = 0;
+        }
+    }
+    printf("\n");
+}
+
 static void cmd_search(int argc, char *argv[]) {
     /*
         We update files regardless, when a search command is triggered.
@@ -88,7 +118,7 @@ static void cmd_search(int argc, char *argv[]) {
     
     for (int i = 0; i < display; i++) {
         printf("[%d] %s\n", i + 1, results[i].original_path);
-        printf("    %s\n", results[i].context);
+        print_context(&results[i]);
     }
 
     free(results);

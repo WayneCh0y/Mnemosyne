@@ -138,6 +138,7 @@ IndexEntry *index_get_entries(int *count) {
         cJSON *h           = cJSON_GetObjectItem(entry, "hash");
         cJSON *lm          = cJSON_GetObjectItem(entry, "last_modified");
         cJSON *repo        = cJSON_GetObjectItem(entry, "repository");
+        cJSON *ft          = cJSON_GetObjectItem(entry, "file_type");
         strncpy(entries[i].original_path, op->valuestring, sizeof(entries[i].original_path) - 1);
         entries[i].original_path[sizeof(entries[i].original_path) - 1] = '\0';
         strncpy(entries[i].hash, h->valuestring, sizeof(entries[i].hash) - 1);
@@ -148,6 +149,12 @@ IndexEntry *index_get_entries(int *count) {
             entries[i].repository[sizeof(entries[i].repository) - 1] = '\0';
         } else {
             strncpy(entries[i].repository, "none", sizeof(entries[i].repository) - 1);
+        }
+        if (ft && ft->valuestring) {
+            strncpy(entries[i].file_type, ft->valuestring, sizeof(entries[i].file_type) - 1);
+            entries[i].file_type[sizeof(entries[i].file_type) - 1] = '\0';
+        } else {
+            strncpy(entries[i].file_type, "txt", sizeof(entries[i].file_type) - 1);
         }
     }
 
