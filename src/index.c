@@ -46,33 +46,58 @@ static void find_git_root(const char *original_path, char *out, size_t out_size)
     out[out_size - 1] = '\0';
 }
 
-void index_add(const char *original_path, const char *hash,
-               long size_bytes, long last_modified, const char *file_type) {
+/* Returns a cJSON object representing the manifest */
+static cJSON *load_manifest(void) {
     char manifest_path[4096];
     snprintf(manifest_path, sizeof(manifest_path), "%s/index/manifest.json", get_data_path());
 
-    /* Read manifest into buffer */
     FILE *f = fopen(manifest_path, "r");
     if (f == NULL) {
         fprintf(stderr, "error: could not open manifest: %s\n", manifest_path);
-        return;
+        return NULL;
     }
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
     rewind(f);
     char *buf = malloc(size + 1);
-    if (buf == NULL) { fclose(f); return; }
+    if (buf == NULL) { fclose(f); return NULL; }
     fread(buf, 1, size, f);
     buf[size] = '\0';
     fclose(f);
 
-    /* Parse JSON array */
     cJSON *root = cJSON_Parse(buf);
     free(buf);
     if (root == NULL) {
         fprintf(stderr, "error: manifest.json is malformed\n");
-        return;
+        return NULL;
     }
+    return root;
+}
+
+/* Overwrites manifest.json with root's JSON */
+static int save_manifest(cJSON *root) {
+    char manifest_path[4096];
+    snprintf(manifest_path, sizeof(manifest_path), "%s/index/manifest.json", get_data_path());
+
+    char *output = cJSON_Print(root);
+    if (output == NULL) return -1;
+
+    FILE *f = fopen(manifest_path, "w");
+    if (f == NULL) {
+        fprintf(stderr, "error: could not write manifest\n");
+        free(output);
+        return -1;
+    }
+    fprintf(f, "%s\n", output);
+    fclose(f);
+    free(output);
+    return 0;
+}
+
+void index_add(const char *original_path, const char *hash,
+               long size_bytes, long last_modified, const char *file_type) {
+    cJSON *root = load_manifest();
+    if (root == NULL) return;
 
     /* Remove existing entry for this path (re-index case) */
     int n = cJSON_GetArraySize(root);
@@ -98,35 +123,36 @@ void index_add(const char *original_path, const char *hash,
     cJSON_AddStringToObject(entry, "repository",    repository);
     cJSON_AddItemToArray(root, entry);
 
-    /* Write back */
-    char *output = cJSON_Print(root);
-    f = fopen(manifest_path, "w");
-    if (f == NULL) {
-        fprintf(stderr, "error: could not write manifest\n");
-        free(output);
-        cJSON_Delete(root);
-        return;
-    }
-    fprintf(f, "%s\n", output);
-    fclose(f);
-
-    free(output);
+    save_manifest(root);
     cJSON_Delete(root);
 }
 
+int index_remove(const char *original_path) {
+    cJSON *root = load_manifest();
+    if (root == NULL) return -1;
+
+    int has_removed = 0;
+    int n = cJSON_GetArraySize(root);
+    for (int i = 0; i < n; i++) {
+        cJSON *entry = cJSON_GetArrayItem(root, i);
+        cJSON *op = cJSON_GetObjectItem(entry, "original_path");
+        if (op && strcmp(op->valuestring, original_path) == 0) {
+            cJSON_DeleteItemFromArray(root, i);
+            has_removed = 1;
+            break;
+        }
+    }
+
+    int rc = has_removed;
+    /* Save manifest only if anything was removed */
+    if (has_removed && save_manifest(root) != 0) rc = -1;
+    cJSON_Delete(root);
+    return rc;
+}
+
 IndexEntry *index_get_entries(int *count) {
-    char manifest_path[4096];
-    snprintf(manifest_path, sizeof(manifest_path), "%s/index/manifest.json", get_data_path());
-
-    FILE *f = fopen(manifest_path, "r");
-    if (f == NULL) { fprintf(stderr, "error: could not open manifest: %s\n", manifest_path); *count = 0; return NULL; }
-    fseek(f, 0, SEEK_END); long size = ftell(f); rewind(f);
-    char *buf = malloc(size + 1);
-    if (buf == NULL) { fclose(f); *count = 0; return NULL; }
-    fread(buf, 1, size, f); buf[size] = '\0'; fclose(f);
-
-    cJSON *root = cJSON_Parse(buf); free(buf);
-    if (root == NULL) { fprintf(stderr, "error: manifest.json is malformed\n"); *count = 0; return NULL; }
+    cJSON *root = load_manifest();
+    if (root == NULL) { *count = 0; return NULL; }
 
     int n = cJSON_GetArraySize(root);
     IndexEntry *entries = malloc(n * sizeof(IndexEntry));

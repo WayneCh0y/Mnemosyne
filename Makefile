@@ -27,6 +27,7 @@ SRCS = src/main.c \
        src/ingest.c \
        src/index.c \
        src/search.c \
+       src/remove.c \
        src/cJSON.c
 
 $(TARGET): $(SRCS)

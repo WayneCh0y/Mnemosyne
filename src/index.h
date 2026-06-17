@@ -17,6 +17,8 @@ void index_add(
     const char* file_type
 );
 
+int index_remove(const char* original_path);
+
 IndexEntry *index_get_entries(int *count);
 
 #endif
