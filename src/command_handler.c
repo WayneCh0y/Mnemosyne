@@ -17,6 +17,7 @@
 #include "index.h"
 #include "search.h"
 #include "config.h"
+#include "remove.h"
 
 #define KEY_UP    1000
 #define KEY_DOWN  1001
@@ -96,6 +97,7 @@ static int is_valid_search(int argc) {
     return 0;
 }
 
+/* Updates the index if a file has been modified or deleted. */
 static void update_files(void) {
     int count;
     IndexEntry *entries = index_get_entries(&count);
@@ -103,8 +105,9 @@ static void update_files(void) {
 
     for (int i = 0; i < count; i++) {
         struct stat st;
-        if (stat(entries[i].original_path, &st) != 0) continue;
-        if ((long)st.st_mtime > entries[i].last_modified)
+        if (stat(entries[i].original_path, &st) != 0)
+            remove_entry_by_abs_path(entries[i].original_path);
+        else if ((long)st.st_mtime > entries[i].last_modified)
             ingest_file(entries[i].original_path);
     }
 
@@ -260,7 +263,17 @@ static void cmd_search(int argc, char *argv[]) {
 }
 
 static void cmd_list(int argc, char *argv[])   { (void)argc; (void)argv; }
-static void cmd_remove(int argc, char *argv[]) { (void)argc; (void)argv; }
+
+static int is_valid_remove(int argc) {
+    if (argc == 3) { return 1; }
+    return 0;
+}
+
+static void cmd_remove(int argc, char *argv[]) {
+    if (!is_valid_remove(argc)) { print_help() ; return; }
+    
+    remove_file(argv[2]);
+}
 
 static int is_valid_config(int argc, char *argv[]) {
     if (argc == 4 && strcmp(argv[2], "ide") == 0) {
