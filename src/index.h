@@ -5,6 +5,7 @@ typedef struct {
     char original_path[4096];
     char hash[65];
     long last_modified;
+    char repository[4096];
 } IndexEntry;
 
 void index_add(

@@ -1,10 +1,50 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "index.h"
 #include "config.h"
 #include "cJSON.h"
+
+static void find_git_root(const char *original_path, char *out, size_t out_size) {
+    char dir[4096];
+    strncpy(dir, original_path, sizeof(dir) - 1);
+    dir[sizeof(dir) - 1] = '\0';
+
+#ifdef _WIN32
+    char *sep = strrchr(dir, '\\');
+#else
+    char *sep = strrchr(dir, '/');
+#endif
+    if (sep) *sep = '\0';
+
+    while (dir[0] != '\0') {
+        char git_path[4096];
+#ifdef _WIN32
+        snprintf(git_path, sizeof(git_path), "%s\\.git", dir);
+#else
+        snprintf(git_path, sizeof(git_path), "%s/.git", dir);
+#endif
+        struct stat st;
+        if (stat(git_path, &st) == 0) {
+            strncpy(out, dir, out_size - 1);
+            out[out_size - 1] = '\0';
+            return;
+        }
+
+#ifdef _WIN32
+        char *last = strrchr(dir, '\\');
+#else
+        char *last = strrchr(dir, '/');
+#endif
+        if (last == NULL) break;
+        *last = '\0';
+    }
+
+    strncpy(out, "none", out_size - 1);
+    out[out_size - 1] = '\0';
+}
 
 void index_add(const char *original_path, const char *hash,
                long size_bytes, long last_modified, const char *file_type) {
@@ -46,12 +86,16 @@ void index_add(const char *original_path, const char *hash,
     }
 
     /* Build and append new entry */
+    char repository[4096];
+    find_git_root(original_path, repository, sizeof(repository));
+
     cJSON *entry = cJSON_CreateObject();
     cJSON_AddStringToObject(entry, "original_path", original_path);
     cJSON_AddStringToObject(entry, "hash",          hash);
     cJSON_AddNumberToObject(entry, "size_bytes",    (double)size_bytes);
     cJSON_AddNumberToObject(entry, "last_modified", (double)last_modified);
     cJSON_AddStringToObject(entry, "file_type",     file_type);
+    cJSON_AddStringToObject(entry, "repository",    repository);
     cJSON_AddItemToArray(root, entry);
 
     /* Write back */
@@ -93,11 +137,18 @@ IndexEntry *index_get_entries(int *count) {
         cJSON *op          = cJSON_GetObjectItem(entry, "original_path");
         cJSON *h           = cJSON_GetObjectItem(entry, "hash");
         cJSON *lm          = cJSON_GetObjectItem(entry, "last_modified");
+        cJSON *repo        = cJSON_GetObjectItem(entry, "repository");
         strncpy(entries[i].original_path, op->valuestring, sizeof(entries[i].original_path) - 1);
         entries[i].original_path[sizeof(entries[i].original_path) - 1] = '\0';
         strncpy(entries[i].hash, h->valuestring, sizeof(entries[i].hash) - 1);
         entries[i].hash[sizeof(entries[i].hash) - 1] = '\0';
         entries[i].last_modified = (long)lm->valuedouble;
+        if (repo && repo->valuestring) {
+            strncpy(entries[i].repository, repo->valuestring, sizeof(entries[i].repository) - 1);
+            entries[i].repository[sizeof(entries[i].repository) - 1] = '\0';
+        } else {
+            strncpy(entries[i].repository, "none", sizeof(entries[i].repository) - 1);
+        }
     }
 
     cJSON_Delete(root);
