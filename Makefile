@@ -40,10 +40,16 @@ install: $(TARGET)
 ifeq ($(OS), Windows_NT)
 	@if not exist "$(INSTALL_DIR)" mkdir "$(INSTALL_DIR)"
 	$(COPY) $(TARGET) "$(INSTALL_DIR)\$(TARGET)"
+	@powershell -NoProfile -Command " \
+		$$cur = [Environment]::GetEnvironmentVariable('PATH','User'); \
+		if ($$cur -notlike '*$(INSTALL_DIR)*') { \
+			[Environment]::SetEnvironmentVariable('PATH', $$cur + ';$(INSTALL_DIR)', 'User'); \
+			Write-Host 'Added $(INSTALL_DIR) to user PATH.'; \
+		} else { \
+			Write-Host '$(INSTALL_DIR) already in user PATH.'; \
+		}"
 	@echo Installed to $(INSTALL_DIR)\$(TARGET)
-	@echo.
-	@echo If 'mnemosyne' is not found, run this in PowerShell then open a new terminal:
-	@echo   [Environment]::SetEnvironmentVariable('PATH', $$env:PATH+';$(INSTALL_DIR)', 'User')
+	@echo Open a new terminal window for PATH changes to take effect.
 else
 	install -d $(INSTALL_DIR)
 	$(COPY) $(TARGET) $(INSTALL_DIR)/$(TARGET)
