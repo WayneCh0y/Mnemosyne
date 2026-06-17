@@ -20,21 +20,32 @@ Read directly with `fread`. No transformation applied. The raw byte content is s
 
 **Parser:** `src/parser/md.c`
 
-Read as plain text. Markdown syntax markers are stripped so that search results show readable prose rather than raw markup.
+Markdown is converted to a structured plain-text format. All output is lowercased. Inline formatting delimiters are stripped; block structure is captured with lightweight tokens used by the search display layer.
 
-**Stripped patterns**
+**Transformation table**
 
-| Pattern | Example input | Stored as |
-|---|---|---|
-| ATX headings | `## Section Title` | `Section Title` |
-| Bold / italic | `**word**`, `*word*` | `word` |
-| Inline code | `` `code` `` | `code` |
-| Links | `[text](url)` | `text` |
-| Images | `![alt](url)` | `alt` |
-| Blockquote markers | `> quote` | `quote` |
-| Horizontal rules | `---` | _(removed)_ |
+| Input | Stored as |
+|---|---|
+| `# Heading` / `## Heading` | `# heading` / `## heading` (hash markers preserved) |
+| `**bold**`, `*italic*`, `__bold__`, `_italic_` | plain text (delimiters stripped) |
+| `` `inline code` `` | content kept |
+| ` ```fenced block``` ` | content kept (lowercased) |
+| `[text](url)` links | `[LINK]` token |
+| `![alt](url)` images | _(removed entirely)_ |
+| `> blockquote` | content only, `>` stripped |
+| `---` horizontal rules | _(removed entirely)_ |
+| `$...$`, `$$...$$` math | content kept, `$` delimiters stripped |
+| List items (`-`, `*`, `1.`) | single line: `[LIST] item one \| item two [/LIST]` |
 
-Fenced code blocks (` ```...``` `) are preserved as plain text since they often contain searchable content.
+**Search display rendering**
+
+The tokens in the stored doc are interpreted by `print_context` in `command_handler.c` when showing results:
+
+| Token | Rendered as |
+|---|---|
+| `# heading text` | heading text in magenta |
+| `[LIST] … [/LIST]` | `- item one` / `- item two` (one bullet per line) |
+| `[LINK]` | `link` in blue |
 
 ---
 

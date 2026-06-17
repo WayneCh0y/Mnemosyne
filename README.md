@@ -1,6 +1,6 @@
 # Mnemosyne
 
-A command-line tool that lets you search all your personal files and notes instantly — like a local Google for your computer.
+A command-line tool that lets you search all your personal files and notes instantly -- like a local Google for your computer.
 
 ```
 mnemosyne add thesis.pdf
