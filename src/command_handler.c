@@ -97,6 +97,7 @@ static int is_valid_search(int argc) {
     return 0;
 }
 
+/* Updates the index if a file has been modified or deleted. */
 static void update_files(void) {
     int count;
     IndexEntry *entries = index_get_entries(&count);
@@ -104,8 +105,9 @@ static void update_files(void) {
 
     for (int i = 0; i < count; i++) {
         struct stat st;
-        if (stat(entries[i].original_path, &st) != 0) continue;
-        if ((long)st.st_mtime > entries[i].last_modified)
+        if (stat(entries[i].original_path, &st) != 0)
+            remove_entry_by_abs_path(entries[i].original_path);
+        else if ((long)st.st_mtime > entries[i].last_modified)
             ingest_file(entries[i].original_path);
     }
 
