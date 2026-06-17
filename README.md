@@ -72,9 +72,11 @@ Run this once in PowerShell, then open a new terminal:
 
 From PowerShell, in the Mnemosyne project directory:
 ```powershell
-make
-make install
+mingw32-make
+mingw32-make install
 ```
+> On Windows, the binary installed by `pacman` is called `mingw32-make` (not `make`). Use it everywhere this README says `make`.
+
 Copies `mnemosyne.exe` to `%USERPROFILE%\bin\`. If that folder is not yet on your PATH, run this once then open a new terminal:
 ```powershell
 [Environment]::SetEnvironmentVariable('PATH', $env:PATH+';C:\Users\<you>\bin', 'User')
