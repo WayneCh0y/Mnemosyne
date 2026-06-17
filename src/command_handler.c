@@ -23,7 +23,7 @@
 #define KEY_ENTER 13
 #define KEY_ESC   27
 
-#define ANSI_CLEAR       "\033[2J\033[H"
+#define ANSI_CLEAR       "\033[H\033[2J"
 #define ANSI_RESET       "\033[0m"
 #define ANSI_DIM         "\033[2m"
 #define ANSI_MAGENTA     "\033[35m"
@@ -49,6 +49,7 @@ static int read_key(void) {
     tcgetattr(STDIN_FILENO, &orig);
     raw = orig;
     raw.c_lflag &= ~(ICANON | ECHO);
+    raw.c_iflag &= ~ICRNL;
     raw.c_cc[VMIN] = 1;
     raw.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
@@ -115,8 +116,8 @@ static char* build_query(int argc, char *argv[]) {
     query[0] = '\0';
 
     for (int i = 2; i < argc; i++) {
-        strcat(query, argv[i]);
-        if (i < argc - 1) { strcat(query, " "); }
+        strncat(query, argv[i], sizeof(query) - strlen(query) - 1);
+        if (i < argc - 1) strncat(query, " ", sizeof(query) - strlen(query) - 1);
     }
 
     for (int i = 0; query[i]; i++)
