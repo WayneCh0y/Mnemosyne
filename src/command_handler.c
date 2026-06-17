@@ -195,7 +195,7 @@ static void handle_enter(SearchResult *results, int selected) {
         }
     }
     const char *ide_name = get_ide();
-    char launch[8192];
+    char launch[32 + 4096 + 4096 + 32];
     if (repo_path && (strcmp(ide_name, "code") == 0 || strcmp(ide_name, "cursor") == 0)) {
         snprintf(launch, sizeof(launch), "%s \"%s\" --goto \"%s\"", ide_name, repo_path, file_path);
     } else if (repo_path && strcmp(ide_name, "idea") == 0) {
