@@ -179,20 +179,27 @@ static void render_results(SearchResult *results, int display, int selected) {
 
 static void handle_enter(SearchResult *results, int selected) {
     const char *file_path = results[selected].original_path;
-    const char *open_path = file_path;
+    const char *repo_path = NULL;
     int entry_count;
     IndexEntry *entries = index_get_entries(&entry_count);
     if (entries) {
         for (int i = 0; i < entry_count; i++) {
             if (strcmp(entries[i].original_path, file_path) == 0) {
                 if (strcmp(entries[i].repository, "none") != 0)
-                    open_path = entries[i].repository;
+                    repo_path = entries[i].repository;
                 break;
             }
         }
     }
+    const char *ide_name = get_ide();
     char launch[8192];
-    snprintf(launch, sizeof(launch), "%s \"%s\"", get_ide(), open_path);
+    if (repo_path && (strcmp(ide_name, "code") == 0 || strcmp(ide_name, "cursor") == 0)) {
+        snprintf(launch, sizeof(launch), "%s \"%s\" --goto \"%s\"", ide_name, repo_path, file_path);
+    } else if (repo_path && strcmp(ide_name, "idea") == 0) {
+        snprintf(launch, sizeof(launch), "%s \"%s\" \"%s\"", ide_name, repo_path, file_path);
+    } else {
+        snprintf(launch, sizeof(launch), "%s \"%s\"", ide_name, file_path);
+    }
     free(entries);
     system(launch);
 }
