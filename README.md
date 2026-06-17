@@ -48,19 +48,34 @@ make install PREFIX=$HOME/.local       # no-sudo alternative (~/.local/bin)
 
 **Windows**
 
-Windows doesn't ship with `gcc` or `make`. Install them via [MSYS2](https://www.msys2.org/) (recommended) or Chocolatey:
-```powershell
-# MSYS2 (after installing from msys2.org, run in the MSYS2 shell):
-pacman -S mingw-w64-ucrt-x86_64-gcc make
+Windows doesn't ship with `gcc` or `make`. Follow these steps:
 
-# or Chocolatey:
-choco install mingw
+**Step 1 — Install MSYS2**
+
+Download and run the installer from [msys2.org](https://www.msys2.org/). This gives you a MinGW toolchain with `gcc` and `make`.
+
+**Step 2 — Install the build tools**
+
+Open the **MSYS2 UCRT64** shell (from the Start menu) and run:
+```bash
+pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make
 ```
-Then, from PowerShell with `gcc` and `make` on your PATH:
+
+**Step 3 — Add MSYS2 to your Windows PATH**
+
+Run this once in PowerShell, then open a new terminal:
 ```powershell
+[Environment]::SetEnvironmentVariable('PATH', $env:PATH+';C:\msys64\ucrt64\bin', 'User')
+```
+
+**Step 4 — Build and install**
+
+From PowerShell, in the Mnemosyne project directory:
+```powershell
+make
 make install
 ```
-Copies `mnemosyne.exe` to `%USERPROFILE%\bin\`. If that folder is not yet on your PATH, run this once in PowerShell then open a new terminal:
+Copies `mnemosyne.exe` to `%USERPROFILE%\bin\`. If that folder is not yet on your PATH, run this once then open a new terminal:
 ```powershell
 [Environment]::SetEnvironmentVariable('PATH', $env:PATH+';C:\Users\<you>\bin', 'User')
 ```
