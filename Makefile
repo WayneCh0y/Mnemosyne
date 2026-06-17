@@ -3,11 +3,16 @@ CFLAGS = -Wall -Wextra -std=c11 -Isrc
 
 # Detect OS — set executable name and delete command accordingly
 ifeq ($(OS), Windows_NT)
-    TARGET = mnemosyne.exe
-    DEL    = del /Q
+    TARGET      = mnemosyne.exe
+    DEL         = del /Q
+    INSTALL_DIR = $(USERPROFILE)\bin
+    COPY        = copy /Y
 else
-    TARGET = mnemosyne
-    DEL    = rm -f
+    TARGET      = mnemosyne
+    DEL         = rm -f
+    PREFIX      ?= /usr/local
+    INSTALL_DIR  = $(PREFIX)/bin
+    COPY         = install -m 755
 endif
 
 SRCS = src/main.c \
@@ -31,7 +36,32 @@ $(TARGET): $(SRCS)
 sanitize: $(SRCS)
 	$(CC) $(CFLAGS) -g -fsanitize=address,undefined -fno-omit-frame-pointer $(SRCS) -o $(TARGET)
 
+install: $(TARGET)
+ifeq ($(OS), Windows_NT)
+	@if not exist "$(INSTALL_DIR)" mkdir "$(INSTALL_DIR)"
+	$(COPY) $(TARGET) "$(INSTALL_DIR)\$(TARGET)"
+	@echo Installed to $(INSTALL_DIR)\$(TARGET)
+	@echo.
+	@echo If 'mnemosyne' is not found, run this in PowerShell then open a new terminal:
+	@echo   [Environment]::SetEnvironmentVariable('PATH', $$env:PATH+';$(INSTALL_DIR)', 'User')
+else
+	install -d $(INSTALL_DIR)
+	$(COPY) $(TARGET) $(INSTALL_DIR)/$(TARGET)
+	@echo "Installed to $(INSTALL_DIR)/$(TARGET)"
+	@echo "If using /usr/local/bin, you may need: sudo make install"
+	@echo "For a no-sudo install: make install PREFIX=\$$HOME/.local"
+endif
+
+uninstall:
+ifeq ($(OS), Windows_NT)
+	@if exist "$(INSTALL_DIR)\$(TARGET)" $(DEL) "$(INSTALL_DIR)\$(TARGET)"
+	@echo Removed $(INSTALL_DIR)\$(TARGET)
+else
+	$(DEL) $(INSTALL_DIR)/$(TARGET)
+	@echo "Removed $(INSTALL_DIR)/$(TARGET)"
+endif
+
 clean:
 	$(DEL) $(TARGET)
 
-.PHONY: clean sanitize
+.PHONY: clean sanitize install uninstall

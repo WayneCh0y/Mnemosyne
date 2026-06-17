@@ -21,9 +21,45 @@ Named after the Greek goddess of memory.
 ## Building
 
 ```bash
-make          # builds ./mnemosyne binary
-make install  # copies to /usr/local/bin
-make test     # runs unit tests
+make        # build the binary
+make clean  # remove the binary
+```
+
+### Installing (so you can type `mnemosyne` from anywhere)
+
+**Linux**
+```bash
+sudo make install                      # installs to /usr/local/bin
+make install PREFIX=$HOME/.local       # no-sudo alternative (~/.local/bin)
+```
+
+**macOS**
+
+macOS doesn't ship with `gcc` or `make`. Install Apple's Command Line Tools (not the full Xcode IDE) if you haven't already:
+```bash
+xcode-select --install
+```
+Then build and install:
+```bash
+sudo make install                      # installs to /usr/local/bin
+make install PREFIX=$HOME/.local       # no-sudo alternative (~/.local/bin)
+```
+> `gcc` on macOS is aliased to Apple Clang — this is fine, the build works as-is.
+
+**Windows** (PowerShell with MinGW `make` on PATH)
+```powershell
+make install
+```
+Copies `mnemosyne.exe` to `%USERPROFILE%\bin\`. If that folder is not yet on your PATH, run this once in PowerShell then open a new terminal:
+```powershell
+[Environment]::SetEnvironmentVariable('PATH', $env:PATH+';C:\Users\<you>\bin', 'User')
+```
+> **Note:** Do not use `setx` to add to PATH — it truncates paths longer than 1024 characters, which can silently break other tools.
+
+**Uninstalling**
+```bash
+make uninstall          # Linux/macOS
+sudo make uninstall     # Linux/macOS if installed to /usr/local/bin
 ```
 
 Requires `pdftotext` (poppler) for PDF support. See [file-types.md](documentation/file-types.md) for installation instructions.

@@ -251,8 +251,8 @@ static void cmd_search(int argc, char *argv[]) {
     return;
 }
 
-static void cmd_list(int argc, char *argv[]) { return; }
-static void cmd_remove(int argc, char *argv[]) { return; }
+static void cmd_list(int argc, char *argv[])   { (void)argc; (void)argv; }
+static void cmd_remove(int argc, char *argv[]) { (void)argc; (void)argv; }
 
 static int is_valid_config(int argc, char *argv[]) {
     if (argc == 4 && strcmp(argv[2], "ide") == 0) {
