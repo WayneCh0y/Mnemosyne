@@ -1,18 +1,29 @@
 CC     = gcc
 CFLAGS = -Wall -Wextra -std=c11 -Isrc
 
-# Detect OS — set executable name and delete command accordingly
+# Detect OS, then on Windows detect which shell make is using.
+# Strawberry Perl / GnuWin32 make use cmd.exe; MSYS2 / MinGW / Git Bash make use sh.
+# Probe: `echo "x"` keeps the quotes in cmd, strips them in sh.
 ifeq ($(OS), Windows_NT)
-    TARGET      = mnemosyne.exe
-    DEL         = del /Q
-    INSTALL_DIR = $(USERPROFILE)\bin
-    COPY        = copy /Y
+    ifeq ($(shell echo "x"),"x")
+        SHELL_KIND  := cmd
+        TARGET       = mnemosyne.exe
+        DEL          = del /Q
+        INSTALL_DIR  = $(USERPROFILE)\bin
+        COPY         = copy /Y
+    else
+        SHELL_KIND  := sh
+        TARGET       = mnemosyne.exe
+        DEL          = rm -f
+        INSTALL_DIR  = $(subst \,/,$(USERPROFILE))/bin
+        COPY         = cp -f
+    endif
 else
     TARGET      = mnemosyne
     DEL         = rm -f
-    PREFIX      ?= /usr/local
-    INSTALL_DIR  = $(PREFIX)/bin
-    COPY         = install -m 755
+    PREFIX     ?= /usr/local
+    INSTALL_DIR = $(PREFIX)/bin
+    COPY        = install -m 755
 endif
 
 SRCS = src/main.c \
@@ -38,9 +49,9 @@ sanitize: $(SRCS)
 	$(CC) $(CFLAGS) -g -fsanitize=address,undefined -fno-omit-frame-pointer $(SRCS) -o $(TARGET)
 
 install: $(TARGET)
-ifeq ($(OS), Windows_NT)
+ifeq ($(SHELL_KIND),cmd)
 	@if not exist "$(INSTALL_DIR)" mkdir "$(INSTALL_DIR)"
-	$(COPY) $(TARGET) "$(INSTALL_DIR)\$(TARGET)"
+	$(COPY) "$(TARGET)" "$(INSTALL_DIR)\$(TARGET)"
 	@powershell -NoProfile -Command " \
 		$$cur = [Environment]::GetEnvironmentVariable('PATH','User'); \
 		if ($$cur -notlike '*$(INSTALL_DIR)*') { \
@@ -51,6 +62,20 @@ ifeq ($(OS), Windows_NT)
 		}"
 	@echo Installed to $(INSTALL_DIR)\$(TARGET)
 	@echo Open a new terminal window for PATH changes to take effect.
+else ifeq ($(SHELL_KIND),sh)
+	@mkdir -p "$(INSTALL_DIR)"
+	$(COPY) "$(TARGET)" "$(INSTALL_DIR)/$(TARGET)"
+	@powershell.exe -NoProfile -Command " \
+		\$$dir = '$(INSTALL_DIR)'.Replace('/', '\\'); \
+		\$$cur = [Environment]::GetEnvironmentVariable('PATH','User'); \
+		if (\$$cur -notlike ('*' + \$$dir + '*')) { \
+			[Environment]::SetEnvironmentVariable('PATH', \$$cur + ';' + \$$dir, 'User'); \
+			Write-Host ('Added ' + \$$dir + ' to user PATH.'); \
+		} else { \
+			Write-Host (\$$dir + ' already in user PATH.'); \
+		}"
+	@echo "Installed to $(INSTALL_DIR)/$(TARGET)"
+	@echo "Open a new terminal window for PATH changes to take effect."
 else
 	install -d $(INSTALL_DIR)
 	$(COPY) $(TARGET) $(INSTALL_DIR)/$(TARGET)
@@ -60,11 +85,11 @@ else
 endif
 
 uninstall:
-ifeq ($(OS), Windows_NT)
+ifeq ($(SHELL_KIND),cmd)
 	@if exist "$(INSTALL_DIR)\$(TARGET)" $(DEL) "$(INSTALL_DIR)\$(TARGET)"
 	@echo Removed $(INSTALL_DIR)\$(TARGET)
 else
-	$(DEL) $(INSTALL_DIR)/$(TARGET)
+	$(DEL) "$(INSTALL_DIR)/$(TARGET)"
 	@echo "Removed $(INSTALL_DIR)/$(TARGET)"
 endif
 
