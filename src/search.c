@@ -34,7 +34,7 @@ static void build_context_txt(const char *line, const char *query, char *context
     int avail    = ctx_size - 1 - qlen - pre_dots - suf_dots;
     if (avail < 0) avail = 0;
 
-    int show_before = avail / 2;
+    int show_before = avail / 4;
     int show_after  = avail - show_before;
     if (show_before >= moff)  { show_before = moff;  pre_dots = 0; }
     if (show_after  >= after) { show_after  = after; suf_dots = 0; }
@@ -121,7 +121,7 @@ SearchResult *search(const char *query, int *count) {
         snprintf(doc_path, sizeof(doc_path), "%s/index/docs/%s.txt",
                  get_data_path(), entries[i].hash);
 
-        char context[64] = {0};
+        char context[256] = {0};
         int  match_count;
         switch (file_type_from_string(entries[i].file_type)) {
             case FILE_TYPE_MD:  match_count = scan_file_md(doc_path, query, context, sizeof(context));  break;
