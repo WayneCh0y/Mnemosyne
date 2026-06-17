@@ -75,7 +75,7 @@ static void process_inline(const char *text, char *out, int out_size) {
                 while (i < len && text[i] != ')') i++;
                 if (i < len) i++;
             }
-            const char *tok = "[link]";
+            const char *tok = "[LINK]";
             int tlen = 6;
             if (j + tlen < out_size - 1) { memcpy(out + j, tok, tlen); j += tlen; }
             continue;
@@ -168,6 +168,9 @@ char *parse_md(const char *path) {
     int in_math_block = 0;
     int in_list       = 0;
 
+    char list_buf[4096];
+    int  list_pos = 0;
+
     char line[4096];
     char processed[4096];
 
@@ -176,6 +179,12 @@ char *parse_md(const char *path) {
 } while (0)
 #define EMIT_STR(s) do { int _n = (int)strlen(s); EMIT((s), _n); } while (0)
 #define EMIT_CHAR(c) do { if (out_pos < out_max - 1) out[out_pos++] = (c); } while (0)
+#define CLOSE_LIST() do { \
+    EMIT_STR("[LIST] "); \
+    EMIT(list_buf, list_pos); \
+    EMIT_STR(" [/LIST]\n"); \
+    in_list = 0; list_pos = 0; \
+} while (0)
 
     char *p = buf;
     while (*p != '\0') {
@@ -231,7 +240,7 @@ char *parse_md(const char *path) {
 
         /* Blank line */
         if (blank) {
-            if (in_list) { EMIT("[/LIST]\n", 8); in_list = 0; }
+            if (in_list) { CLOSE_LIST(); }
             EMIT_CHAR('\n');
             continue;
         }
@@ -242,7 +251,7 @@ char *parse_md(const char *path) {
         /* Heading */
         int h = count_leading_hashes(line);
         if (h > 0) {
-            if (in_list) { EMIT("[/LIST]\n", 8); in_list = 0; }
+            if (in_list) { CLOSE_LIST(); }
             for (int i = 0; i < h; i++) EMIT_CHAR('#');
             EMIT_CHAR(' ');
             process_inline(line + h + 1, processed, sizeof(processed));
@@ -253,7 +262,7 @@ char *parse_md(const char *path) {
 
         /* Blockquote */
         if (line[0] == '>') {
-            if (in_list) { EMIT("[/LIST]\n", 8); in_list = 0; }
+            if (in_list) { CLOSE_LIST(); }
             const char *content = line + 1;
             if (*content == ' ') content++;
             process_inline(content, processed, sizeof(processed));
@@ -264,26 +273,35 @@ char *parse_md(const char *path) {
 
         /* List item */
         if (is_list_item(line)) {
-            if (!in_list) { EMIT("[LIST]\n", 7); in_list = 1; }
+            if (!in_list) { in_list = 1; list_pos = 0; }
+            else if (list_pos + 3 < (int)sizeof(list_buf) - 1) {
+                list_buf[list_pos++] = ' ';
+                list_buf[list_pos++] = '|';
+                list_buf[list_pos++] = ' ';
+            }
             process_inline(list_item_text(line), processed, sizeof(processed));
-            EMIT_STR(processed);
-            EMIT_CHAR('\n');
+            int plen = (int)strlen(processed);
+            int copy = plen < (int)sizeof(list_buf) - list_pos - 1 ? plen : (int)sizeof(list_buf) - list_pos - 1;
+            memcpy(list_buf + list_pos, processed, copy);
+            list_pos += copy;
+            list_buf[list_pos] = '\0';
             continue;
         }
 
         /* Normal paragraph line */
-        if (in_list) { EMIT("[/LIST]\n", 8); in_list = 0; }
+        if (in_list) { CLOSE_LIST(); }
         process_inline(line, processed, sizeof(processed));
         EMIT_STR(processed);
         EMIT_CHAR('\n');
     }
 
-    if (in_list) { EMIT("[/LIST]\n", 8); }
+    if (in_list) { CLOSE_LIST(); }
     out[out_pos] = '\0';
 
 #undef EMIT
 #undef EMIT_STR
 #undef EMIT_CHAR
+#undef CLOSE_LIST
 
     free(buf);
     return out;
