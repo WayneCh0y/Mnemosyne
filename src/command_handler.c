@@ -17,13 +17,14 @@
 #include "index.h"
 #include "search.h"
 #include "config.h"
+#include "remove.h"
 
 #define KEY_UP    1000
 #define KEY_DOWN  1001
 #define KEY_ENTER 13
 #define KEY_ESC   27
 
-#define ANSI_CLEAR       "\033[2J\033[H"
+#define ANSI_CLEAR       "\033[H\033[2J"
 #define ANSI_RESET       "\033[0m"
 #define ANSI_DIM         "\033[2m"
 #define ANSI_MAGENTA     "\033[35m"
@@ -49,6 +50,7 @@ static int read_key(void) {
     tcgetattr(STDIN_FILENO, &orig);
     raw = orig;
     raw.c_lflag &= ~(ICANON | ECHO);
+    raw.c_iflag &= ~ICRNL;
     raw.c_cc[VMIN] = 1;
     raw.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
@@ -95,6 +97,7 @@ static int is_valid_search(int argc) {
     return 0;
 }
 
+/* Updates the index if a file has been modified or deleted. */
 static void update_files(void) {
     int count;
     IndexEntry *entries = index_get_entries(&count);
@@ -102,8 +105,9 @@ static void update_files(void) {
 
     for (int i = 0; i < count; i++) {
         struct stat st;
-        if (stat(entries[i].original_path, &st) != 0) continue;
-        if ((long)st.st_mtime > entries[i].last_modified)
+        if (stat(entries[i].original_path, &st) != 0)
+            remove_entry_by_abs_path(entries[i].original_path);
+        else if ((long)st.st_mtime > entries[i].last_modified)
             ingest_file(entries[i].original_path);
     }
 
@@ -115,8 +119,8 @@ static char* build_query(int argc, char *argv[]) {
     query[0] = '\0';
 
     for (int i = 2; i < argc; i++) {
-        strcat(query, argv[i]);
-        if (i < argc - 1) { strcat(query, " "); }
+        strncat(query, argv[i], sizeof(query) - strlen(query) - 1);
+        if (i < argc - 1) strncat(query, " ", sizeof(query) - strlen(query) - 1);
     }
 
     for (int i = 0; query[i]; i++)
@@ -178,20 +182,27 @@ static void render_results(SearchResult *results, int display, int selected) {
 
 static void handle_enter(SearchResult *results, int selected) {
     const char *file_path = results[selected].original_path;
-    const char *open_path = file_path;
+    const char *repo_path = NULL;
     int entry_count;
     IndexEntry *entries = index_get_entries(&entry_count);
     if (entries) {
         for (int i = 0; i < entry_count; i++) {
             if (strcmp(entries[i].original_path, file_path) == 0) {
                 if (strcmp(entries[i].repository, "none") != 0)
-                    open_path = entries[i].repository;
+                    repo_path = entries[i].repository;
                 break;
             }
         }
     }
-    char launch[8192];
-    snprintf(launch, sizeof(launch), "%s \"%s\"", get_ide(), open_path);
+    const char *ide_name = get_ide();
+    char launch[32 + 4096 + 4096 + 32];
+    if (repo_path && (strcmp(ide_name, "code") == 0 || strcmp(ide_name, "cursor") == 0)) {
+        snprintf(launch, sizeof(launch), "%s \"%s\" --goto \"%s\"", ide_name, repo_path, file_path);
+    } else if (repo_path && strcmp(ide_name, "idea") == 0) {
+        snprintf(launch, sizeof(launch), "%s \"%s\" \"%s\"", ide_name, repo_path, file_path);
+    } else {
+        snprintf(launch, sizeof(launch), "%s \"%s\"", ide_name, file_path);
+    }
     free(entries);
     system(launch);
 }
@@ -251,8 +262,18 @@ static void cmd_search(int argc, char *argv[]) {
     return;
 }
 
-static void cmd_list(int argc, char *argv[]) { return; }
-static void cmd_remove(int argc, char *argv[]) { return; }
+static void cmd_list(int argc, char *argv[])   { (void)argc; (void)argv; }
+
+static int is_valid_remove(int argc) {
+    if (argc == 3) { return 1; }
+    return 0;
+}
+
+static void cmd_remove(int argc, char *argv[]) {
+    if (!is_valid_remove(argc)) { print_help() ; return; }
+    
+    remove_file(argv[2]);
+}
 
 static int is_valid_config(int argc, char *argv[]) {
     if (argc == 4 && strcmp(argv[2], "ide") == 0) {
