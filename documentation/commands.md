@@ -102,14 +102,17 @@ Prints an error if the file is not currently indexed.
 
 ---
 
-## `mnemosyne config ide <name>`
+## `mnemosyne config ide [name]`
 
 Changes the IDE that `mnemosyne search` opens files in. The initial value is set during first-time setup (see below); use this command to change it later.
 
 **Usage**
 ```
-mnemosyne config ide <name>
+mnemosyne config ide            # interactive picker
+mnemosyne config ide <name>     # set directly by name
 ```
+
+Running with no argument opens an arrow-key picker — use ↑/↓ to navigate, Enter to confirm, Esc to cancel without changing the current setting.
 
 **Supported IDE keys**
 
@@ -122,13 +125,14 @@ mnemosyne config ide <name>
 | `nano` | Nano |
 | `idea` | IntelliJ IDEA |
 
-**Example**
+**Examples**
 ```
+mnemosyne config ide
 mnemosyne config ide code
 mnemosyne config ide nvim
 ```
 
-An invalid key prints the list of supported options and exits without changing anything.
+When passed a name, an invalid key prints the list of supported options and exits without changing anything.
 
 The setting is saved to `~/.mnemosyne.conf` (plain text, one value per line) and persists across sessions.
 
@@ -138,10 +142,10 @@ The setting is saved to `~/.mnemosyne.conf` (plain text, one value per line) and
 
 The first time you run any `mnemosyne` command, you are prompted for:
 
-1. **Storage location** — where to keep the index. Defaults to `~/.mnemosyne`.
-2. **Default IDE** — which editor `search` results open in. Defaults to `code`.
+1. **Storage location** — where to keep the index. Defaults to `~/.mnemosyne` (press Enter to accept).
+2. **Default IDE** — which editor `search` results open in. Choose from an arrow-key picker (↑/↓ to navigate, Enter to confirm).
 
-Pressing Enter at either prompt accepts the default. Both values are saved to `~/.mnemosyne.conf` and reused on every subsequent run. To re-run setup, delete `~/.mnemosyne.conf`.
+Both values are saved to `~/.mnemosyne.conf` and reused on every subsequent run. To re-run setup, delete `~/.mnemosyne.conf`.
 
 ---
 

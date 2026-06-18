@@ -93,7 +93,7 @@ Requires `pdftotext` (poppler) for PDF support. See [file-types.md](documentatio
 
 ## Quick Start
 
-On first run, Mnemosyne prompts you for a storage location and a default IDE — you can press Enter to accept the defaults.
+On first run, Mnemosyne prompts you for a storage location and a default IDE. You can press Enter to accept the default storage path; the IDE is chosen from an arrow-key picker.
 
 ```bash
 # add some files
@@ -103,7 +103,10 @@ mnemosyne add ~/Documents/thesis.pdf
 # search
 mnemosyne search simplex
 
-# change your default IDE later
+# change your default IDE later (opens a picker)
+mnemosyne config ide
+
+# or set it directly by name
 mnemosyne config ide nvim
 ```
 
