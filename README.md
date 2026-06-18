@@ -1,6 +1,6 @@
 # Mnemosyne
 
-A command-line tool that lets you search all your personal files and notes instantly -- like a local Google for your computer.
+A command-line tool to instantly find and open any of your files from anywhere — search by content or browse your full index, and jump straight to the result in your configured IDE.
 
 ```
 mnemosyne add thesis.pdf
@@ -89,8 +89,6 @@ make uninstall          # Windows / Linux / macOS
 sudo make uninstall     # Linux/macOS if installed to /usr/local/bin
 ```
 
-Requires `pdftotext` (poppler) for PDF support. See [file-types.md](documentation/file-types.md) for installation instructions.
-
 ## Quick Start
 
 On first run, Mnemosyne prompts you for a storage location and a default IDE. You can press Enter to accept the default storage path; the IDE is chosen from an arrow-key picker.
@@ -98,7 +96,7 @@ On first run, Mnemosyne prompts you for a storage location and a default IDE. Yo
 ```bash
 # add some files
 mnemosyne add notes.txt
-mnemosyne add ~/Documents/thesis.pdf
+mnemosyne add ~/Documents/thesis.md
 
 # search
 mnemosyne search simplex
@@ -108,6 +106,9 @@ mnemosyne config ide
 
 # or set it directly by name
 mnemosyne config ide nvim
+
+# browse all indexed files interactively
+mnemosyne list
 ```
 
 Supported IDE keys: `code`, `cursor`, `nvim`, `vim`, `nano`, `idea`.

@@ -51,50 +51,13 @@ The tokens in the stored doc are interpreted by `print_context` in `command_hand
 
 ## `.tex` — LaTeX
 
-**Parser:** `src/parser/tex.c`
-
-LaTeX source is stripped of markup so that the underlying prose and math is searchable.
-
-**Stripped patterns**
-
-| Pattern | Example input | Stored as |
-|---|---|---|
-| Commands with args | `\textbf{word}` | `word` |
-| Commands no args | `\newpage` | _(removed)_ |
-| Comments | `% this is a comment` | _(removed)_ |
-| Environment tags | `\begin{equation}` | _(removed)_ |
-| Math delimiters | `$x^2$`, `\[...\]` | kept as-is (v1) |
-
-The goal is to make prose sections (abstract, introduction, body) fully searchable. Math expressions are retained verbatim in v1.
+> **Not yet implemented.** `.tex` files are recognised by extension but ingestion will fail with an error in v1. Support is planned for a future version.
 
 ---
 
 ## `.pdf` — PDF
 
-**Parser:** `src/parser/pdf.c`
-
-**v1 strategy:** shell out to `pdftotext` (part of the [Poppler](https://poppler.freedesktop.org/) utilities):
-
-```c
-snprintf(cmd, sizeof(cmd), "pdftotext \"%s\" -", path);
-FILE *pipe = popen(cmd, "r");
-// read stdout into buffer
-```
-
-This requires `pdftotext` to be installed and on `PATH`.
-
-**Installation**
-
-| Platform | Command |
-|---|---|
-| Ubuntu/Debian | `sudo apt install poppler-utils` |
-| macOS (Homebrew) | `brew install poppler` |
-| Windows (via scoop) | `scoop install poppler` |
-
-**Limitations (v1)**
-- Scanned PDFs (image-only, no embedded text layer) will produce empty output. OCR support is a v2+ feature.
-- PDFs with complex column layouts may have text extracted in the wrong reading order.
-- Password-protected PDFs will fail silently; a warning is printed.
+> **Not yet implemented.** `.pdf` files are recognised by extension but ingestion will fail with an error in v1. Support is planned for a future version.
 
 ---
 

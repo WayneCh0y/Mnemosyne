@@ -66,21 +66,26 @@ For `.md` files, the context is rendered with formatting:
 
 ## `mnemosyne list`
 
-Lists all files currently in the index.
+Opens an interactive picker showing all files currently in the index. Navigate with the arrow keys, press Enter to open the selected file in your configured IDE, or Esc to exit without opening anything.
 
 **Usage**
 ```
 mnemosyne list
 ```
 
-**Example output**
-```
-Indexed files (3):
+**Interactive controls**
 
-  notes.txt                  [txt]   4.1 KB   2026-06-10
-  ~/Documents/thesis.pdf     [pdf]  312.0 KB   2026-06-12
-  project/design.md          [md]    8.7 KB   2026-06-14
-```
+| Key | Action |
+|---|---|
+| `↑` / `↓` | Move selection up or down |
+| `Enter` | Open the selected file in the configured IDE |
+| `Esc` | Exit without opening anything |
+
+If no files are indexed, prints `No files indexed.` and exits.
+
+**Opening behaviour**
+
+Identical to `search`: if the file belongs to a git repository, VS Code and Cursor are opened with the repository root as the workspace and the file as the target (`--goto`). IntelliJ IDEA receives both the repository root and the file path. All other IDEs receive the file path only.
 
 ---
 
@@ -104,7 +109,7 @@ Prints an error if the file is not currently indexed.
 
 ## `mnemosyne config ide [name]`
 
-Changes the IDE that `mnemosyne search` opens files in. The initial value is set during first-time setup (see below); use this command to change it later.
+Changes the IDE that `mnemosyne search` and `mnemosyne list` open files in. The initial value is set during first-time setup (see below); use this command to change it later.
 
 **Usage**
 ```
