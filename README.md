@@ -91,7 +91,7 @@ sudo make uninstall     # Linux/macOS if installed to /usr/local/bin
 
 ## Quick Start
 
-On first run, Mnemosyne prompts you for a storage location and a default IDE. You can press Enter to accept the default storage path; the IDE is chosen from an arrow-key picker.
+On first run, Mnemosyne prompts you for a storage location and a default IDE. You can press Enter to accept the default storage path; the IDE is chosen from an interactive picker (arrow keys or type a number to jump to an option).
 
 ```bash
 # add some files
