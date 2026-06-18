@@ -4,13 +4,6 @@
 #include <ctype.h>
 #include <sys/stat.h>
 
-#ifdef _WIN32
-#include <conio.h>
-#else
-#include <termios.h>
-#include <unistd.h>
-#endif
-
 #include "command_handler.h"
 #include "help.h"
 #include "ingest.h"
@@ -18,64 +11,10 @@
 #include "search.h"
 #include "config.h"
 #include "remove.h"
+#include "picker.h"
 
-#define KEY_UP    1000
-#define KEY_DOWN  1001
-#define KEY_ENTER 13
-#define KEY_ESC   27
-
-#define ANSI_CLEAR       "\033[H\033[2J"
-#define ANSI_RESET       "\033[0m"
-#define ANSI_DIM         "\033[2m"
-#define ANSI_MAGENTA     "\033[35m"
-#define ANSI_BLUE        "\033[34m"
-#define ANSI_SEL         "\033[1;38;5;196m"
-#define ANSI_CURSOR_HIDE "\033[?25l"
-#define ANSI_CURSOR_SHOW "\033[?25h"
-
-#ifdef _WIN32
-static int read_key(void) {
-    int c = _getch();
-    if (c == 0 || c == 0xE0) {
-        c = _getch();
-        if (c == 72) return KEY_UP;
-        if (c == 80) return KEY_DOWN;
-        return 0;
-    }
-    return c;
-}
-#else
-static int read_key(void) {
-    struct termios orig, raw;
-    tcgetattr(STDIN_FILENO, &orig);
-    raw = orig;
-    raw.c_lflag &= ~(ICANON | ECHO);
-    raw.c_iflag &= ~ICRNL;
-    raw.c_cc[VMIN] = 1;
-    raw.c_cc[VTIME] = 0;
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
-
-    char c;
-    read(STDIN_FILENO, &c, 1);
-
-    int result = (int)(unsigned char)c;
-    if (c == '\033') {
-        raw.c_cc[VMIN] = 0;
-        raw.c_cc[VTIME] = 1;
-        tcsetattr(STDIN_FILENO, TCSANOW, &raw);
-        char seq[2] = {0, 0};
-        read(STDIN_FILENO, &seq[0], 1);
-        read(STDIN_FILENO, &seq[1], 1);
-        if (seq[0] == '[') {
-            if (seq[1] == 'A') result = KEY_UP;
-            if (seq[1] == 'B') result = KEY_DOWN;
-        }
-    }
-
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig);
-    return result;
-}
-#endif
+#define ANSI_MAGENTA "\033[35m"
+#define ANSI_BLUE    "\033[34m"
 
 static int is_valid_add(int argc) {
     if (argc == 3) {
@@ -341,14 +280,29 @@ static int is_valid_config(int argc, char *argv[]) {
     if (argc == 4 && strcmp(argv[2], "ide") == 0) {
         return 1;
     }
+    if (argc == 3 && strcmp(argv[2], "ide") == 0) {
+        return 1;
+    }
     return 0;
 }
 
-static void cmd_config(int argc, char *argv[]) { 
+static void cmd_config(int argc, char *argv[]) {
     if (!is_valid_config(argc, argv)) { print_help(); return; }
 
-    if (set_ide(argv[3]) == 0) {
-        printf("Default IDE updated to: %s\n", argv[3]);
+    if (argc == 3) {
+        size_t count;
+        const char **ide_list = get_ide_list(&count);
+        int chosen = run_ide_picker(ide_list, count);
+        printf(ANSI_CLEAR ANSI_RESET);
+        if (chosen != -1) {
+            if (set_ide(ide_list[chosen]) == 0) {
+                printf("Default IDE updated to: %s\n", ide_list[chosen]);
+            }
+        }
+    } else {
+        if (set_ide(argv[3]) == 0) {
+            printf("Default IDE updated to: %s\n", argv[3]);
+        }
     }
 }
 
