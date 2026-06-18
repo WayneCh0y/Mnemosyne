@@ -1,6 +1,6 @@
 # Mnemosyne
 
-A command-line tool that lets you search all your personal files and notes instantly -- like a local Google for your computer.
+A command-line tool to instantly find and open any of your files from anywhere — search by content or browse your full index, and jump straight to the result in your configured IDE.
 
 ```
 mnemosyne add thesis.pdf
@@ -103,8 +103,11 @@ mnemosyne add ~/Documents/thesis.pdf
 # search
 mnemosyne search simplex
 
+# browse all indexed files interactively
+mnemosyne list
+
 # change your default IDE later
-mnemosyne config ide nvim
+mnemosyne config ide code
 ```
 
 Supported IDE keys: `code`, `cursor`, `nvim`, `vim`, `nano`, `idea`.
