@@ -89,8 +89,6 @@ make uninstall          # Windows / Linux / macOS
 sudo make uninstall     # Linux/macOS if installed to /usr/local/bin
 ```
 
-Requires `pdftotext` (poppler) for PDF support. See [file-types.md](documentation/file-types.md) for installation instructions.
-
 ## Quick Start
 
 On first run, Mnemosyne prompts you for a storage location and a default IDE — you can press Enter to accept the defaults.
@@ -98,7 +96,7 @@ On first run, Mnemosyne prompts you for a storage location and a default IDE —
 ```bash
 # add some files
 mnemosyne add notes.txt
-mnemosyne add ~/Documents/thesis.pdf
+mnemosyne add ~/Documents/thesis.md
 
 # search
 mnemosyne search simplex

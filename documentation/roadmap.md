@@ -11,18 +11,18 @@ Mnemosyne is designed to grow incrementally. Each version builds directly on the
 **Search strategy:** `strstr()` scan across all stored plain-text documents.
 
 **Features**
-- `mnemosyne add` — ingest `.txt`, `.md`, `.tex`, `.pdf`
-- `mnemosyne search` — keyword search with interactive result picker
-- `mnemosyne config ide` — configure which IDE to open files in
-- `mnemosyne list` — show indexed files
+- `mnemosyne add` — ingest `.txt`, `.md`
+- `mnemosyne search` — case-insensitive keyword search with interactive result picker
+- `mnemosyne list` — interactive picker over all indexed files
 - `mnemosyne remove` — remove a file from the index
-- Results ranked by match count (most hits shown first)
-- ±2 lines of surrounding context per result
+- `mnemosyne config ide` — configure which IDE to open files in
+- Results ranked by recency, then match count
+- 256-character context snippet centred on the first match
 
 **Limitations**
+- `.tex` and `.pdf` ingestion not yet implemented
 - Linear scan: slow at very large index sizes (thousands of large documents)
 - Exact string match only: `"run"` does not match `"running"`
-- Case-sensitive by default
 
 ---
 
