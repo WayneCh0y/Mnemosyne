@@ -262,7 +262,19 @@ static void cmd_search(int argc, char *argv[]) {
     return;
 }
 
-static void cmd_list(int argc, char *argv[])   { (void)argc; (void)argv; }
+static void cmd_list(int argc, char *argv[]) {
+    (void)argc; (void)argv;
+    int count;
+    IndexEntry *entries = index_get_entries(&count);
+    if (!entries || count == 0) {
+        printf("No files indexed.\n");
+        free(entries);
+        return;
+    }
+    for (int i = 0; i < count; i++)
+        printf(ANSI_MAGENTA "[%d]" ANSI_RESET " %s\n", i + 1, entries[i].original_path);
+    free(entries);
+}
 
 static int is_valid_remove(int argc) {
     if (argc == 3) { return 1; }
