@@ -262,7 +262,69 @@ static void cmd_search(int argc, char *argv[]) {
     return;
 }
 
-static void cmd_list(int argc, char *argv[])   { (void)argc; (void)argv; }
+static void render_list(IndexEntry *entries, int count, int selected) {
+    printf(ANSI_CLEAR ANSI_RESET);
+    printf("Instructions: Use arrow keys to navigate, Enter to select, Esc to cancel.\n\n");
+    for (int i = 0; i < count; i++) {
+        if (i == selected)
+            printf(ANSI_SEL "[%d] %s" ANSI_RESET "\n", i + 1, entries[i].original_path);
+        else
+            printf(ANSI_DIM "[%d] %s" ANSI_RESET "\n", i + 1, entries[i].original_path);
+    }
+    fflush(stdout);
+}
+
+static int run_list_picker(IndexEntry *entries, int count) {
+    int selected = 0;
+    int done = 0;
+    printf(ANSI_CURSOR_HIDE);
+    render_list(entries, count, selected);
+    while (!done) {
+        int key = read_key();
+        switch (key) {
+        case KEY_UP:    if (selected > 0)         selected--; break;
+        case KEY_DOWN:  if (selected < count - 1) selected++; break;
+        case KEY_ENTER: done = 1;                             break;
+        case KEY_ESC:   selected = -1; done = 1;             break;
+        default: break;
+        }
+        if (!done) render_list(entries, count, selected);
+    }
+    printf(ANSI_CURSOR_SHOW);
+    fflush(stdout);
+    return selected;
+}
+
+static void handle_list_enter(IndexEntry *entries, int selected) {
+    const char *file_path = entries[selected].original_path;
+    const char *repo_path = (strcmp(entries[selected].repository, "none") != 0)
+                            ? entries[selected].repository : NULL;
+    const char *ide_name = get_ide();
+    char launch[32 + 4096 + 4096 + 32];
+    if (repo_path && (strcmp(ide_name, "code") == 0 || strcmp(ide_name, "cursor") == 0))
+        snprintf(launch, sizeof(launch), "%s \"%s\" --goto \"%s\"", ide_name, repo_path, file_path);
+    else if (repo_path && strcmp(ide_name, "idea") == 0)
+        snprintf(launch, sizeof(launch), "%s \"%s\" \"%s\"", ide_name, repo_path, file_path);
+    else
+        snprintf(launch, sizeof(launch), "%s \"%s\"", ide_name, file_path);
+    system(launch);
+}
+
+static void cmd_list(int argc, char *argv[]) {
+    (void)argc; (void)argv;
+    int count;
+    IndexEntry *entries = index_get_entries(&count);
+    if (!entries || count == 0) {
+        printf("No files indexed.\n");
+        free(entries);
+        return;
+    }
+    int chosen = run_list_picker(entries, count);
+    printf(ANSI_CLEAR ANSI_RESET);
+    if (chosen != -1)
+        handle_list_enter(entries, chosen);
+    free(entries);
+}
 
 static int is_valid_remove(int argc) {
     if (argc == 3) { return 1; }
