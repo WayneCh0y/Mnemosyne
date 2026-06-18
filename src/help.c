@@ -17,10 +17,11 @@ void print_help(void) {
     printf("  " CYAN "search" RESET " <query>      Search indexed files\n");
     printf("  " CYAN "list" RESET "                List all indexed files\n");
     printf("  " CYAN "remove" RESET " <file>       Remove a file from the index\n");
-    printf("  " CYAN "config ide" RESET " <name>   Set the IDE to open files in\n\n");
+    printf("  " CYAN "config ide" RESET " [name]   Set the IDE to open files in (no arg opens a picker)\n\n");
 
     printf(BOLD "EXAMPLES\n" RESET);
     printf("  mnemosyne " CYAN "add" RESET " notes.txt\n");
     printf("  mnemosyne " CYAN "search" RESET " \"simplex algorithm\"\n");
+    printf("  mnemosyne " CYAN "config" RESET " ide\n");
     printf("  mnemosyne " CYAN "config" RESET " ide code\n");
 }

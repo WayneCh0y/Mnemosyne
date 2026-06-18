@@ -20,6 +20,7 @@
 
 #include "init.h"
 #include "config.h"
+#include "picker.h"
 
 #define BOLD    "\033[1m"
 #define CYAN    "\033[36m"
@@ -87,7 +88,6 @@ static int first_time_setup(void) {
     const char *home = get_home();
     char default_path[1024];
     char chosen_path[1024];
-    char chosen_ide[32];
 
     snprintf(default_path, sizeof(default_path), "%s/.mnemosyne", home);
 
@@ -123,24 +123,17 @@ static int first_time_setup(void) {
         fprintf(stderr, "Please enter a valid path.\n\n");
     }
 
-    printf("\nWhich IDE do you want to set as your default?\n");
+    printf("\nWhich IDE do you want to set as your default?\n\n");
 
-    const char *default_ide = "code";
-
-    while (1) {
-        printf(CYAN "[default: %s]: " RESET, default_ide);
-        fflush(stdout);
-
-        read_with_default(chosen_ide, sizeof(chosen_ide), default_ide);
-
-        if (set_ide(chosen_ide) != 0) {
-            fprintf(stderr, "\n");
-            continue;
-        }
-
-        printf("\nUsing %s as your default IDE.\n\n", chosen_ide);
-        break;
-    }
+    size_t ide_count;
+    const char **ide_list = get_ide_list(&ide_count);
+    int chosen;
+    do {
+        chosen = run_ide_picker(ide_list, (int)ide_count);
+    } while (chosen == -1);
+    set_ide(ide_list[chosen]);
+    printf(ANSI_CLEAR ANSI_RESET);
+    printf("Using %s as your default IDE.\n\n", ide_list[chosen]);
 
     printf(BOLD "Setup complete.\n\n" RESET);
     return 0;

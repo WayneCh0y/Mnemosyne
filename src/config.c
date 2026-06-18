@@ -102,3 +102,10 @@ const char *get_data_path(void) {
 const char *get_ide(void) {
     return ide;
 }
+
+const char **get_ide_list(size_t *count) {
+    if (count) {
+        *count = sizeof(ide_list) / sizeof(ide_list[0]);
+    }
+    return ide_list;
+}
