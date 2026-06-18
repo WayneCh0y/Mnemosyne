@@ -13,9 +13,6 @@
 #include "remove.h"
 #include "picker.h"
 
-#define ANSI_MAGENTA "\033[35m"
-#define ANSI_BLUE    "\033[34m"
-
 static int is_valid_add(int argc) {
     if (argc == 3) {
         return 1;
@@ -68,57 +65,6 @@ static char* build_query(int argc, char *argv[]) {
     return query;
 }
 
-static void print_context(const SearchResult *r, int dimmed) {
-    const char *reset  = dimmed ? "\033[0;2m"  : ANSI_RESET;
-    const char *color1 = dimmed ? "\033[2;35m" : ANSI_MAGENTA;
-    const char *color2 = dimmed ? "\033[2;34m" : ANSI_BLUE;
-    int is_md = (strcmp(r->file_type, "md") == 0);
-    int at_line_start = 1;
-    if (dimmed) printf(ANSI_DIM);
-    printf("    ");
-    const char *p = r->context;
-    while (*p != '\0') {
-        if (is_md && at_line_start && *p == '#') {
-            while (*p == '#') p++;
-            if (*p == ' ') p++;
-            printf("%s", color1);
-            while (*p != '\0' && *p != '\n') putchar(*p++);
-            printf("%s", reset);
-            at_line_start = 0;
-        } else if (is_md && strncmp(p, "[LIST] ", 7) == 0) {
-            printf("- "); p += 7; at_line_start = 0;
-        } else if (is_md && strncmp(p, " | ", 3) == 0) {
-            printf("\n    - "); p += 3; at_line_start = 0;
-        } else if (is_md && strncmp(p, "[/LIST]", 7) == 0) {
-            p += 7;
-        } else if (is_md && strncmp(p, "[LINK]", 6) == 0) {
-            printf("%slink%s", color2, reset); p += 6; at_line_start = 0;
-        } else if (*p == '\n') {
-            printf("\n    "); p++; at_line_start = 1;
-        } else {
-            putchar(*p++); at_line_start = 0;
-        }
-    }
-    printf(ANSI_RESET "\n");
-}
-
-static void render_results(SearchResult *results, int display, int selected) {
-    printf(ANSI_CLEAR ANSI_RESET);
-    printf("Instructions: Use arrow keys to navigate, Enter to select, Esc to cancel.\n\n");
-    for (int i = 0; i < display; i++) {
-        if (i == selected) {
-            printf(ANSI_SEL "[%d] %s" ANSI_RESET "\n", i + 1, results[i].original_path);
-            print_context(&results[i], 0);
-            printf("\n");
-        } else {
-            printf(ANSI_DIM "[%d] %s" ANSI_RESET "\n", i + 1, results[i].original_path);
-            print_context(&results[i], 1);
-            printf("\n");
-        }
-    }
-    fflush(stdout);
-}
-
 static void handle_enter(SearchResult *results, int selected) {
     const char *file_path = results[selected].original_path;
     const char *repo_path = NULL;
@@ -146,27 +92,6 @@ static void handle_enter(SearchResult *results, int selected) {
     system(launch);
 }
 
-static int run_picker(SearchResult *results, int display) {
-    int selected = 0;
-    int done = 0;
-    printf(ANSI_CURSOR_HIDE);
-    render_results(results, display, selected);
-    while (!done) {
-        int key = read_key();
-        switch (key) {
-        case KEY_UP:    if (selected > 0)           selected--; break;
-        case KEY_DOWN:  if (selected < display - 1) selected++; break;
-        case KEY_ENTER: done = 1;                               break;
-        case KEY_ESC:   selected = -1; done = 1;               break;
-        default: break;
-        }
-        if (!done) render_results(results, display, selected);
-    }
-    printf(ANSI_CURSOR_SHOW);
-    fflush(stdout);
-    return selected;
-}
-
 static void cmd_search(int argc, char *argv[]) {
     /*
         We update files regardless, when a search command is triggered.
@@ -192,46 +117,13 @@ static void cmd_search(int argc, char *argv[]) {
     // We cap display lines to 5.
     int display = count < 5 ? count : 5;
 
-    int chosen = run_picker(results, display);
+    int chosen = run_search_picker(results, display);
     printf(ANSI_CLEAR ANSI_RESET);
     if (chosen != -1)
         handle_enter(results, chosen);
     free(results);
 
     return;
-}
-
-static void render_list(IndexEntry *entries, int count, int selected) {
-    printf(ANSI_CLEAR ANSI_RESET);
-    printf("Instructions: Use arrow keys to navigate, Enter to select, Esc to cancel.\n\n");
-    for (int i = 0; i < count; i++) {
-        if (i == selected)
-            printf(ANSI_SEL "[%d] %s" ANSI_RESET "\n", i + 1, entries[i].original_path);
-        else
-            printf(ANSI_DIM "[%d] %s" ANSI_RESET "\n", i + 1, entries[i].original_path);
-    }
-    fflush(stdout);
-}
-
-static int run_list_picker(IndexEntry *entries, int count) {
-    int selected = 0;
-    int done = 0;
-    printf(ANSI_CURSOR_HIDE);
-    render_list(entries, count, selected);
-    while (!done) {
-        int key = read_key();
-        switch (key) {
-        case KEY_UP:    if (selected > 0)         selected--; break;
-        case KEY_DOWN:  if (selected < count - 1) selected++; break;
-        case KEY_ENTER: done = 1;                             break;
-        case KEY_ESC:   selected = -1; done = 1;             break;
-        default: break;
-        }
-        if (!done) render_list(entries, count, selected);
-    }
-    printf(ANSI_CURSOR_SHOW);
-    fflush(stdout);
-    return selected;
 }
 
 static void handle_list_enter(IndexEntry *entries, int selected) {

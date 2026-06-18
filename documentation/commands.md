@@ -62,6 +62,20 @@ For `.md` files, the context is rendered with formatting:
 - List items appear as `- item one` / `- item two` (one per line)
 - Links appear as `link` in **blue**
 
+**Interactive controls**
+
+| Key | Action |
+|---|---|
+| `↑` / `↓` | Move selection up or down |
+| `Enter` | Open the selected file in the configured IDE |
+| `Esc` | Exit without opening anything |
+| `1`–`9` | Enter numeric jump mode — type the index number shown in brackets |
+| `0`–`9` | Append a digit (once a non-zero digit has been typed) |
+| `Backspace` | Erase the last digit; shows `-` when all digits are cleared |
+| `Enter` (numeric mode, valid index) | Jump directly to that result |
+| `Enter` (numeric mode, invalid index) | Show `no such index!` and return to arrow-key mode |
+| `Esc` / `↑` / `↓` (numeric mode) | Return to arrow-key mode |
+
 ---
 
 ## `mnemosyne list`
@@ -80,6 +94,12 @@ mnemosyne list
 | `↑` / `↓` | Move selection up or down |
 | `Enter` | Open the selected file in the configured IDE |
 | `Esc` | Exit without opening anything |
+| `1`–`9` | Enter numeric jump mode — type the index number shown in brackets |
+| `0`–`9` | Append a digit (once a non-zero digit has been typed) |
+| `Backspace` | Erase the last digit; shows `-` when all digits are cleared |
+| `Enter` (numeric mode, valid index) | Jump directly to that entry |
+| `Enter` (numeric mode, invalid index) | Show `no such index!` and return to arrow-key mode |
+| `Esc` / `↑` / `↓` (numeric mode) | Return to arrow-key mode |
 
 If no files are indexed, prints `No files indexed.` and exits.
 
@@ -117,7 +137,7 @@ mnemosyne config ide            # interactive picker
 mnemosyne config ide <name>     # set directly by name
 ```
 
-Running with no argument opens an arrow-key picker — use ↑/↓ to navigate, Enter to confirm, Esc to cancel without changing the current setting.
+Running with no argument opens an interactive picker. Use ↑/↓ to navigate, Enter to confirm, Esc to cancel without changing the current setting. You can also type a number (`1`–`9`) to jump directly to that option by index, then press Enter to confirm.
 
 **Supported IDE keys**
 
@@ -148,7 +168,7 @@ The setting is saved to `~/.mnemosyne.conf` (plain text, one value per line) and
 The first time you run any `mnemosyne` command, you are prompted for:
 
 1. **Storage location** — where to keep the index. Defaults to `~/.mnemosyne` (press Enter to accept).
-2. **Default IDE** — which editor `search` results open in. Choose from an arrow-key picker (↑/↓ to navigate, Enter to confirm).
+2. **Default IDE** — which editor `search` results open in. Choose from an interactive picker: ↑/↓ to navigate, Enter to confirm, or type a number to jump directly to an option.
 
 Both values are saved to `~/.mnemosyne.conf` and reused on every subsequent run. To re-run setup, delete `~/.mnemosyne.conf`.
 
