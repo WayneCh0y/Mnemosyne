@@ -80,12 +80,28 @@ int set_data_path(const char *path) {
     return write_config();
 }
 
+static int is_ide_installed(const char *ide) {
+    char cmd[64];
+#ifdef _WIN32
+    snprintf(cmd, sizeof(cmd), "where %s >NUL 2>&1", ide);
+#else
+    snprintf(cmd, sizeof(cmd), "command -v %s >/dev/null 2>&1", ide);
+#endif
+    return system(cmd) == 0;
+}
+
 int set_ide(const char *new_ide) {
     if (!is_valid_ide(new_ide)) {
         fprintf(stderr, "error: invalid IDE. Supported options are:\n");
         for (size_t i = 0; i < sizeof(ide_list) / sizeof(ide_list[0]); i++) {
             fprintf(stderr, "  - %s\n", ide_list[i]);
         }
+        return -1;
+    }
+
+    if (!is_ide_installed(new_ide)) {
+        fprintf(stderr, "error: IDE '%s' is not installed or not in PATH.\n", new_ide);
+        fprintf(stderr, "See the README section 'Enabling GUI IDE launchers' for setup help.\n");
         return -1;
     }
 
