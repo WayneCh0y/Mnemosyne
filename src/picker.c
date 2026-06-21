@@ -57,26 +57,36 @@ int read_key(void) {
 
 /* ── IDE config picker ─────────────────────────────────────────────────── */
 
-static void render_ide_list(const char **list, int display, int selected,
-                            int num_input, int show_error) {
+static void print_picker_header(const char *title, const char *subtitle) {
     printf(ANSI_CLEAR ANSI_RESET);
-    printf("Instructions: Use arrow keys to navigate, Enter to select, Esc to cancel.\n\n");
-    for (int i = 0; i < display; i++) {
-        if (num_input < 0 && i == selected) {
-            printf(ANSI_SEL "[%d] %s" ANSI_RESET "\n", i + 1, list[i]);
-        } else {
-            printf(ANSI_DIM "[%d] %s" ANSI_RESET "\n", i + 1, list[i]);
-        }
-    }
+    printf(ANSI_BOLD ANSI_CYAN "▶ %s" ANSI_RESET "\n", title);
+    printf(ANSI_DIM "%s" ANSI_RESET "\n\n", subtitle);
+}
+
+static void print_picker_footer(int num_input, int show_error) {
     if (show_error) {
-        printf("\n" ANSI_YELLOW "no such index!" ANSI_RESET);
+        printf("\n" ANSI_YELLOW "That index doesn't exist." ANSI_RESET);
     } else if (num_input >= 0) {
         if (num_input == 0)
-            printf("\n" ANSI_YELLOW "selected index: -" ANSI_RESET);
+            printf("\n" ANSI_YELLOW "Jump target: -" ANSI_RESET);
         else
-            printf("\n" ANSI_YELLOW "selected index: %d" ANSI_RESET, num_input);
+            printf("\n" ANSI_YELLOW "Jump target: %d" ANSI_RESET, num_input);
     }
+    printf("\n" ANSI_DIM "↑/↓ move  •  Enter select  •  Esc cancel  •  1-9 jump" ANSI_RESET);
     fflush(stdout);
+}
+
+static void render_ide_list(const char **list, int display, int selected,
+                            int num_input, int show_error) {
+    print_picker_header("Choose a default IDE", "Use the arrow keys to move, Enter to confirm, Esc to cancel.");
+    for (int i = 0; i < display; i++) {
+        if (num_input < 0 && i == selected) {
+            printf(ANSI_SEL "  ▶ [%d] %s" ANSI_RESET "\n", i + 1, list[i]);
+        } else {
+            printf(ANSI_DIM "    [%d] %s" ANSI_RESET "\n", i + 1, list[i]);
+        }
+    }
+    print_picker_footer(num_input, show_error);
 }
 
 int run_ide_picker(const char **list, int display) {
@@ -180,30 +190,27 @@ static void print_context(const SearchResult *r, int dimmed) {
     printf(ANSI_RESET "\n");
 }
 
+static void print_result_divider(int dimmed) {
+    printf(dimmed ? ANSI_DIM : ANSI_RESET);
+    printf("    ─────────────────────────────────────────\n");
+    printf(ANSI_RESET);
+}
+
 static void render_results(SearchResult *results, int display, int selected,
                            int num_input, int show_error) {
-    printf(ANSI_CLEAR ANSI_RESET);
-    printf("Instructions: Use arrow keys to navigate, Enter to select, Esc to cancel.\n\n");
+    print_picker_header("Search results", "Use the arrow keys to move, Enter to open, Esc to cancel.");
     for (int i = 0; i < display; i++) {
+        if (i > 0) print_result_divider(i != selected || num_input >= 0);
         if (num_input < 0 && i == selected) {
-            printf(ANSI_SEL "[%d] %s" ANSI_RESET "\n", i + 1, results[i].original_path);
+            printf(ANSI_SEL "  ▶ [%d] %s" ANSI_RESET "\n", i + 1, results[i].original_path);
             print_context(&results[i], 0);
-            printf("\n");
         } else {
-            printf(ANSI_DIM "[%d] %s" ANSI_RESET "\n", i + 1, results[i].original_path);
+            printf(ANSI_DIM "    [%d] %s" ANSI_RESET "\n", i + 1, results[i].original_path);
             print_context(&results[i], 1);
-            printf("\n");
         }
+        printf("\n");
     }
-    if (show_error) {
-        printf("\n" ANSI_YELLOW "no such index!" ANSI_RESET);
-    } else if (num_input >= 0) {
-        if (num_input == 0)
-            printf("\n" ANSI_YELLOW "selected index: -" ANSI_RESET);
-        else
-            printf("\n" ANSI_YELLOW "selected index: %d" ANSI_RESET, num_input);
-    }
-    fflush(stdout);
+    print_picker_footer(num_input, show_error);
 }
 
 int run_search_picker(SearchResult *results, int display) {
@@ -275,23 +282,14 @@ int run_search_picker(SearchResult *results, int display) {
 
 static void render_list(IndexEntry *entries, int count, int selected,
                         int num_input, int show_error) {
-    printf(ANSI_CLEAR ANSI_RESET);
-    printf("Instructions: Use arrow keys to navigate, Enter to select, Esc to cancel.\n\n");
+    print_picker_header("Browse indexed files", "Use the arrow keys to move, Enter to open, Esc to cancel.");
     for (int i = 0; i < count; i++) {
         if (num_input < 0 && i == selected)
-            printf(ANSI_SEL "[%d] %s" ANSI_RESET "\n", i + 1, entries[i].original_path);
+            printf(ANSI_SEL "  ▶ [%d] %s" ANSI_RESET "\n", i + 1, entries[i].original_path);
         else
-            printf(ANSI_DIM "[%d] %s" ANSI_RESET "\n", i + 1, entries[i].original_path);
+            printf(ANSI_DIM "    [%d] %s" ANSI_RESET "\n", i + 1, entries[i].original_path);
     }
-    if (show_error) {
-        printf("\n" ANSI_YELLOW "no such index!" ANSI_RESET);
-    } else if (num_input >= 0) {
-        if (num_input == 0)
-            printf("\n" ANSI_YELLOW "selected index: -" ANSI_RESET);
-        else
-            printf("\n" ANSI_YELLOW "selected index: %d" ANSI_RESET, num_input);
-    }
-    fflush(stdout);
+    print_picker_footer(num_input, show_error);
 }
 
 int run_list_picker(IndexEntry *entries, int count) {
