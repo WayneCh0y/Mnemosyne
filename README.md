@@ -11,6 +11,18 @@ Named after the Greek goddess of memory.
 
 ---
 
+## Contents
+
+- [Documentation](#documentation)
+- [Building](#building)
+- [Installation](#installation)
+  - [Linux](#linux)
+  - [macOS](#macos)
+  - [Windows](#windows)
+  - [Enabling GUI IDE launchers](#enabling-gui-ide-launchers)
+  - [Uninstalling](#uninstalling)
+- [Quick Start](#quick-start)
+
 ## Documentation
 
 - [System Architecture](documentation/structure.md) — component diagram, module descriptions, source and data layouts
@@ -27,66 +39,89 @@ make clean  # remove the binary
 
 ### Installing (so you can type `mn` from anywhere)
 
-**Linux**
+**Prerequisites** — `gcc` and `make` (usually pre-installed; otherwise install via your distro's package manager).
+
+**Build and install:**
 ```bash
 sudo make install                      # installs to /usr/local/bin
 make install PREFIX=$HOME/.local       # no-sudo alternative (~/.local/bin)
 ```
 
-**macOS**
+**Add to PATH** (no-sudo path only) — `~/.local/bin` may not be on PATH:
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc   # or ~/.zshrc
+```
+Open a new terminal afterwards.
 
-macOS doesn't ship with `gcc` or `make`. Install Apple's Command Line Tools (not the full Xcode IDE) if you haven't already:
+### macOS
+
+**Prerequisites** — Apple Command Line Tools (not the full Xcode IDE):
 ```bash
 xcode-select --install
 ```
-Then build and install:
+> `gcc` on macOS is aliased to Apple Clang — the build works as-is.
+
+**Build and install:**
 ```bash
 sudo make install                      # installs to /usr/local/bin
 make install PREFIX=$HOME/.local       # no-sudo alternative (~/.local/bin)
 ```
-> `gcc` on macOS is aliased to Apple Clang — this is fine, the build works as-is.
 
-**Windows**
-
-Windows doesn't ship with `gcc` or `make`. Follow these steps:
-
-**Step 1 — Install MSYS2**
-
-Download and run the installer from [msys2.org](https://www.msys2.org/). This gives you a MinGW toolchain with `gcc` and `make`.
-
-**Step 2 — Install the build tools**
-
-Open the **MSYS2 UCRT64** shell (from the Start menu) and run:
+**Add to PATH** (no-sudo path only) — `~/.local/bin` is not on PATH by default:
 ```bash
-pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 ```
+Open a new terminal afterwards.
 
-**Step 3 — Add MSYS2 to your Windows PATH**
+### Windows
 
-Run this once in PowerShell, then open a new terminal:
-```powershell
-[Environment]::SetEnvironmentVariable('PATH', $env:PATH+';C:\msys64\ucrt64\bin', 'User')
-```
+**Prerequisites** — MSYS2 with the MinGW toolchain (provides `gcc` and `make`):
 
-**Step 4 — Build and install**
+1. Download and run the installer from [msys2.org](https://www.msys2.org/).
+2. In the **MSYS2 UCRT64** shell, install the build tools:
+   ```bash
+   pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make
+   ```
+3. Add MSYS2 to your Windows PATH (run in PowerShell, then open a new terminal):
+   ```powershell
+   [Environment]::SetEnvironmentVariable('PATH', $env:PATH+';C:\msys64\ucrt64\bin', 'User')
+   ```
 
-From PowerShell, in the Mnemosyne project directory:
+**Build and install** (PowerShell, from the project directory):
 ```powershell
 mingw32-make
 mingw32-make install
 ```
-> On Windows, the binary installed by `pacman` is called `mingw32-make` (not `make`). Use it everywhere this README says `make`.
+> On Windows the binary is `mingw32-make`, not `make`. Use it wherever this README says `make`.
+
+This copies `mnemosyne.exe` to `%USERPROFILE%\bin\`.
 
 Copies `mn.exe` to `%USERPROFILE%\bin\`. If that folder is not yet on your PATH, run this once then open a new terminal:
 ```powershell
-[Environment]::SetEnvironmentVariable('PATH', $env:PATH+';C:\Users\<you>\bin', 'User')
+[Environment]::SetEnvironmentVariable('PATH', $env:PATH+";$env:USERPROFILE\bin", 'User')
 ```
-> **Note:** Do not use `setx` to add to PATH — it truncates paths longer than 1024 characters, which can silently break other tools.
+Open a new terminal afterwards.
+> Do not use `setx` to add to PATH — it truncates paths longer than 1024 characters, which can silently break other tools.
 
-**Uninstalling**
+### Enabling GUI IDE launchers
+
+For `mnemosyne` to open files in `code`, `cursor`, or `idea`, the matching CLI launcher must be on your PATH. Windows and Linux installers usually handle this automatically. On **macOS**, it's a manual step:
+
+| IDE key | How to enable on macOS |
+|---|---|
+| `code` | Open VS Code → `Cmd+Shift+P` → run **Shell Command: Install 'code' command in PATH** |
+| `cursor` | Open Cursor → `Cmd+Shift+P` → run **Shell Command: Install 'cursor' command in PATH** |
+| `idea` | Open IntelliJ IDEA → **Tools → Create Command-Line Launcher** (or use JetBrains Toolbox → Settings → *Generate shell scripts*) |
+
+Open a new terminal afterwards, then verify with `code --version`, `cursor --version`, or `idea --version`.
+
+`nvim`, `vim`, and `nano` are installed via package managers and are on PATH automatically.
+
+### Uninstalling
 ```bash
-make uninstall          # Windows / Linux / macOS
-sudo make uninstall     # Linux/macOS if installed to /usr/local/bin
+sudo make uninstall          # Linux/macOS if installed to /usr/local/bin
+make uninstall               # Linux/macOS no-sudo install
+mingw32-make uninstall       # Windows
 ```
 
 ## Quick Start
@@ -111,4 +146,4 @@ mn config ide nvim
 mn list
 ```
 
-Supported IDE keys: `code`, `cursor`, `nvim`, `vim`, `nano`, `idea`.
+Supported IDE keys: `code`, `cursor`, `nvim`, `vim`, `nano`, `idea`. See [Enabling GUI IDE launchers](#enabling-gui-ide-launchers) if `code`/`cursor`/`idea` aren't found on macOS.
