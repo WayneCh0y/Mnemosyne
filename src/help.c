@@ -17,7 +17,7 @@ void print_help(void) {
     printf(SILVER "╰─────────────────────────────────────────────╯" RESET "\n\n");
 
     printf(BOLD "USAGE" RESET "\n");
-    printf("  mnemosyne " CYAN "<command>" RESET " [arguments]\n\n");
+    printf("  mn " CYAN "<command>" RESET " [arguments]\n\n");
 
     printf(BOLD "COMMANDS" RESET "\n");
     printf("  " CYAN "add" RESET " <file>           Index a file (.txt .md .tex .pdf)\n");
@@ -34,8 +34,8 @@ void print_help(void) {
     printf("  " CYAN "Esc" RESET "          Cancel\n\n");
 
     printf(BOLD "EXAMPLES" RESET "\n");
-    printf("  mnemosyne " CYAN "add" RESET " notes.txt\n");
-    printf("  mnemosyne " CYAN "search" RESET " \"simplex algorithm\"\n");
-    printf("  mnemosyne " CYAN "config" RESET " ide\n");
-    printf("  mnemosyne " CYAN "config" RESET " ide code\n");
+    printf("  mn " CYAN "add" RESET " notes.txt\n");
+    printf("  mn " CYAN "search" RESET " \"simplex algorithm\"\n");
+    printf("  mn " CYAN "config" RESET " ide\n");
+    printf("  mn " CYAN "config" RESET " ide code\n");
 }

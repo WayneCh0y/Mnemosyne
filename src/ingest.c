@@ -39,7 +39,7 @@ static char* file_type_to_string(FileType filetype) {
     }
 }
 
-static int write_to_docs(const char *hash, const char *text) {
+static int write_to_docs(const char *hash, const char *abs_path, const char *text) {
     char doc_path[4096];
     snprintf(doc_path, sizeof(doc_path), "%s/index/docs/%s.txt", get_data_path(), hash);
 
@@ -48,6 +48,14 @@ static int write_to_docs(const char *hash, const char *text) {
         fprintf(stderr, "error: could not write to index: %s\n", doc_path);
         return 0;
     }
+
+    char norm_path[4096];
+    strncpy(norm_path, abs_path, sizeof(norm_path) - 1);
+    norm_path[sizeof(norm_path) - 1] = '\0';
+    for (int i = 0; norm_path[i]; i++)
+        if (norm_path[i] == '\\') norm_path[i] = '/';
+    fprintf(f, "[PATH]%s[/PATH]\n", norm_path);
+
     fwrite(text, 1, strlen(text), f);
     fclose(f);
     return 1;
@@ -100,7 +108,7 @@ void ingest_file(const char *path) {
     sha256_string(abs_path, hash);
 
     /* Step 6: Write to docs/ */
-    if (!write_to_docs(hash, text)) {
+    if (!write_to_docs(hash, abs_path, text)) {
         free(text);
         return;
     }

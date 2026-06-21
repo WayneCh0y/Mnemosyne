@@ -1,23 +1,23 @@
 # Command Reference
 
-All commands are issued through the `mnemosyne` binary.
+All commands are issued through the `mn` binary.
 
 ---
 
-## `mnemosyne add <file>`
+## `mn add <file>`
 
 Ingests a file into the local index. The file's text is extracted, stored under `~/.mnemosyne/index/docs/`, and its metadata is recorded in `manifest.json`.
 
 **Usage**
 ```
-mnemosyne add <path-to-file>
+mn add <path-to-file>
 ```
 
 **Examples**
 ```
-mnemosyne add notes.txt
-mnemosyne add ~/Documents/thesis.pdf
-mnemosyne add project/design.md
+mn add notes.txt
+mn add ~/Documents/thesis.pdf
+mn add project/design.md
 ```
 
 **Supported file types:** `.txt`, `.md`, `.tex`, `.pdf`
@@ -30,20 +30,22 @@ See [file-types.md](file-types.md) for how each format is parsed.
 
 ---
 
-## `mnemosyne search <query>`
+## `mn search <query>`
 
-Searches all indexed documents for the given keyword or phrase. The query is case-insensitive. Modified files are automatically re-indexed before searching. Up to 5 results are shown, ranked by recency then match count.
+Searches all indexed documents for the given keyword or phrase. The query is case-insensitive and matches whole words only — `"for"` will not match `"format"` or `"before"`. Modified files are automatically re-indexed before searching.
+
+Searches also match file paths using case-sensitive segment matching — `"README.md"`, `"Mnemosyne/"`, and `"C:/Users/Wayne"` each return matching files, but `"Proj"` does not match `"Projects"` and `"README"` does not match `"README.md"`. When a file is found by path, the start of the document is shown as the preview. Up to 5 results are shown, ranked by recency then match count.
 
 **Usage**
 ```
-mnemosyne search <query>
+mn search <query>
 ```
 
 **Examples**
 ```
-mnemosyne search simplex
-mnemosyne search "linear programming"
-mnemosyne search docker compose
+mn search simplex
+mn search "linear programming"
+mn search docker compose
 ```
 
 **Output format**
@@ -78,13 +80,13 @@ For `.md` files, the context is rendered with formatting:
 
 ---
 
-## `mnemosyne list`
+## `mn list`
 
 Opens an interactive picker showing all files currently in the index. Navigate with the arrow keys, press Enter to open the selected file in your configured IDE, or Esc to exit without opening anything.
 
 **Usage**
 ```
-mnemosyne list
+mn list
 ```
 
 **Interactive controls**
@@ -109,32 +111,32 @@ Identical to `search`: if the file belongs to a git repository, VS Code and Curs
 
 ---
 
-## `mnemosyne remove <file>`
+## `mn remove <file>`
 
 Removes a file from the index. Does not delete the original file.
 
 **Usage**
 ```
-mnemosyne remove <path-to-file>
+mn remove <path-to-file>
 ```
 
 **Example**
 ```
-mnemosyne remove notes.txt
+mn remove notes.txt
 ```
 
 Prints an error if the file is not currently indexed.
 
 ---
 
-## `mnemosyne config ide [name]`
+## `mn config ide [name]`
 
-Changes the IDE that `mnemosyne search` and `mnemosyne list` open files in. The initial value is set during first-time setup (see below); use this command to change it later.
+Changes the IDE that `mn search` and `mn list` open files in. The initial value is set during first-time setup (see below); use this command to change it later.
 
 **Usage**
 ```
-mnemosyne config ide            # interactive picker
-mnemosyne config ide <name>     # set directly by name
+mn config ide            # interactive picker
+mn config ide <name>     # set directly by name
 ```
 
 Running with no argument opens an interactive picker. Use ↑/↓ to navigate, Enter to confirm, Esc to cancel without changing the current setting. You can also type a number (`1`–`9`) to jump directly to that option by index, then press Enter to confirm.
@@ -152,9 +154,9 @@ Running with no argument opens an interactive picker. Use ↑/↓ to navigate, E
 
 **Examples**
 ```
-mnemosyne config ide
-mnemosyne config ide code
-mnemosyne config ide nvim
+mn config ide
+mn config ide code
+mn config ide nvim
 ```
 
 When passed a name, an invalid key prints the list of supported options and exits without changing anything.
@@ -165,7 +167,7 @@ The setting is saved to `~/.mnemosyne.conf` (plain text, one value per line) and
 
 ## First-time setup
 
-The first time you run any `mnemosyne` command, you are prompted for:
+The first time you run any `mn` command, you are prompted for:
 
 1. **Storage location** — where to keep the index. Defaults to `~/.mnemosyne` (press Enter to accept).
 2. **Default IDE** — which editor `search` results open in. Choose from an interactive picker: ↑/↓ to navigate, Enter to confirm, or type a number to jump directly to an option.

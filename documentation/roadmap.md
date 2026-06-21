@@ -11,18 +11,18 @@ Mnemosyne is designed to grow incrementally. Each version builds directly on the
 **Search strategy:** `strstr()` scan across all stored plain-text documents.
 
 **Features**
-- `mnemosyne add` — ingest `.txt`, `.md`
-- `mnemosyne search` — case-insensitive keyword search with interactive result picker
-- `mnemosyne list` — interactive picker over all indexed files
-- `mnemosyne remove` — remove a file from the index
-- `mnemosyne config ide` — configure which IDE to open files in
+- `mn add` — ingest `.txt`, `.md`
+- `mn search` — case-insensitive whole-word content search and case-sensitive path segment search, with interactive result picker
+- `mn list` — interactive picker over all indexed files
+- `mn remove` — remove a file from the index
+- `mn config ide` — configure which IDE to open files in
 - Results ranked by recency, then match count
 - 256-character context snippet centred on the first match
 
 **Limitations**
 - `.tex` and `.pdf` ingestion not yet implemented
 - Linear scan: slow at very large index sizes (thousands of large documents)
-- Exact string match only: `"run"` does not match `"running"`
+- No stemming: `"run"` does not match `"running"` or `"runs"`
 
 ---
 
@@ -35,7 +35,7 @@ Mnemosyne is designed to grow incrementally. Each version builds directly on the
 **New features**
 - Case-insensitive search by default
 - `-c` / `--case-sensitive` flag to opt back in
-- `mnemosyne reindex` command to rebuild the inverted index from stored docs
+- `mn reindex` command to rebuild the inverted index from stored docs
 - Index stored as a compact binary file (`~/.mnemosyne/index/inverted.bin`)
 
 **Breaking changes:** none — same commands, faster results.
@@ -50,7 +50,7 @@ Mnemosyne is designed to grow incrementally. Each version builds directly on the
 
 **New features**
 - Significantly better result ordering for multi-word queries
-- `mnemosyne search <query> --top N` to limit output to N results
+- `mn search <query> --top N` to limit output to N results
 - Stemming support (e.g. `"run"` matches `"running"`, `"runs"`)
 
 ---
@@ -68,11 +68,11 @@ Mnemosyne is designed to grow incrementally. Each version builds directly on the
 - At search time: embed the query, compute cosine similarity against all vectors, rank results
 
 **New commands**
-- `mnemosyne model set <model-path>` — point to a local GGML model file
-- `mnemosyne model status` — show currently loaded model
+- `mn model set <model-path>` — point to a local GGML model file
+- `mn model status` — show currently loaded model
 
 **New features**
-- `mnemosyne search "what is the fastest sorting algorithm"` finds documents about sorting even if they never use those exact words
+- `mn search "what is the fastest sorting algorithm"` finds documents about sorting even if they never use those exact words
 - `-e` / `--exact` flag to force v1-style keyword match instead
 
 **System requirements**
@@ -83,8 +83,8 @@ Mnemosyne is designed to grow incrementally. Each version builds directly on the
 
 ## Future Ideas (unscheduled)
 
-- `mnemosyne watch <dir>` — auto-index new files dropped into a folder
-- `mnemosyne export` — export the full index as JSON
+- `mn watch <dir>` — auto-index new files dropped into a folder
+- `mn export` — export the full index as JSON
 - OCR support for scanned PDFs (via Tesseract)
 - Multi-language support
-- Web UI (`mnemosyne serve`) for browser-based search
+- Web UI (`mn serve`) for browser-based search
