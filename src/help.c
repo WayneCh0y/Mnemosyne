@@ -15,8 +15,8 @@ static void print_section(const char *title) {
 
 void print_help(void) {
     printf(SILVER "╭─────────────────────────────────────────────╮" RESET "\n");
-    printf(SILVER "│" RESET "   " BOLD GOLD "Mnemosyne" RESET "                              " SILVER "│" RESET "\n");
-    printf(SILVER "│" RESET "   " DIM "personal file search & recall" RESET "          " SILVER "│" RESET "\n");
+    printf(SILVER "│" RESET "   " BOLD GOLD "Mnemosyne" RESET "                                 " SILVER "│" RESET "\n");
+    printf(SILVER "│" RESET "   " DIM "personal file search & recall" RESET "             " SILVER "│" RESET "\n");
     printf(SILVER "╰─────────────────────────────────────────────╯" RESET "\n");
     printf(DIM "Search, browse, and launch files from anywhere." RESET "\n\n");
 
