@@ -116,7 +116,7 @@ static void cmd_search(int argc, char *argv[]) {
         Nothing found :/
     */
     if (count == 0) {
-        printf("No results!\n");
+        printf("No results found.\n");
         free(results);
         return;
     }
@@ -153,7 +153,7 @@ static void cmd_list(int argc, char *argv[]) {
     int count;
     IndexEntry *entries = index_get_entries(&count);
     if (!entries || count == 0) {
-        printf("No files indexed.\n");
+        printf("No files indexed yet.\n");
         free(entries);
         return;
     }
