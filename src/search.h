@@ -9,6 +9,6 @@ typedef struct {
     long last_modified;
 } SearchResult;
 
-SearchResult *search(const char *query, int *count);
+SearchResult *search(const char *query, const char *raw_query, int *count);
 
 #endif

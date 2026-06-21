@@ -3,8 +3,8 @@
 A command-line tool to instantly find and open any of your files from anywhere — search by content or browse your full index, and jump straight to the result in your configured IDE.
 
 ```
-mnemosyne add thesis.pdf
-mnemosyne search "simplex algorithm"
+mn add thesis.pdf
+mn search "simplex algorithm"
 ```
 
 Named after the Greek goddess of memory.
@@ -25,7 +25,7 @@ make        # build the binary
 make clean  # remove the binary
 ```
 
-### Installing (so you can type `mnemosyne` from anywhere)
+### Installing (so you can type `mn` from anywhere)
 
 **Linux**
 ```bash
@@ -77,7 +77,7 @@ mingw32-make install
 ```
 > On Windows, the binary installed by `pacman` is called `mingw32-make` (not `make`). Use it everywhere this README says `make`.
 
-Copies `mnemosyne.exe` to `%USERPROFILE%\bin\`. If that folder is not yet on your PATH, run this once then open a new terminal:
+Copies `mn.exe` to `%USERPROFILE%\bin\`. If that folder is not yet on your PATH, run this once then open a new terminal:
 ```powershell
 [Environment]::SetEnvironmentVariable('PATH', $env:PATH+';C:\Users\<you>\bin', 'User')
 ```
@@ -95,20 +95,20 @@ On first run, Mnemosyne prompts you for a storage location and a default IDE. Yo
 
 ```bash
 # add some files
-mnemosyne add notes.txt
-mnemosyne add ~/Documents/thesis.md
+mn add notes.txt
+mn add ~/Documents/thesis.md
 
 # search
-mnemosyne search simplex
+mn search simplex
 
 # change your default IDE later (opens a picker)
-mnemosyne config ide
+mn config ide
 
 # or set it directly by name
-mnemosyne config ide nvim
+mn config ide nvim
 
 # browse all indexed files interactively
-mnemosyne list
+mn list
 ```
 
 Supported IDE keys: `code`, `cursor`, `nvim`, `vim`, `nano`, `idea`.

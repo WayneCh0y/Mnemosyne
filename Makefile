@@ -7,19 +7,19 @@ CFLAGS = -Wall -Wextra -std=c11 -Isrc
 ifeq ($(OS), Windows_NT)
     ifeq ($(shell echo "x"),"x")
         SHELL_KIND  := cmd
-        TARGET       = mnemosyne.exe
+        TARGET       = mn.exe
         DEL          = del /Q
         INSTALL_DIR  = $(USERPROFILE)\bin
         COPY         = copy /Y
     else
         SHELL_KIND  := sh
-        TARGET       = mnemosyne.exe
+        TARGET       = mn.exe
         DEL          = rm -f
         INSTALL_DIR  = $(subst \,/,$(USERPROFILE))/bin
         COPY         = cp -f
     endif
 else
-    TARGET      = mnemosyne
+    TARGET      = mn
     DEL         = rm -f
     PREFIX     ?= /usr/local
     INSTALL_DIR = $(PREFIX)/bin

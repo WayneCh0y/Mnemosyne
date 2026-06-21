@@ -50,13 +50,19 @@ static void update_files(void) {
     free(entries);
 }
 
-static char* build_query(int argc, char *argv[]) {
+static char* build_query(int argc, char *argv[], char *raw_out, int raw_size) {
     static char query[256];
     query[0] = '\0';
 
     for (int i = 2; i < argc; i++) {
         strncat(query, argv[i], sizeof(query) - strlen(query) - 1);
         if (i < argc - 1) strncat(query, " ", sizeof(query) - strlen(query) - 1);
+    }
+
+    if (raw_out) {
+        strncpy(raw_out, query, raw_size - 1);
+        for (int i = 0; raw_out[i]; i++)
+            if (raw_out[i] == '\\') raw_out[i] = '/';
     }
 
     for (int i = 0; query[i]; i++)
@@ -100,10 +106,11 @@ static void cmd_search(int argc, char *argv[]) {
 
     if (!is_valid_search(argc)) { print_help(); return; }
 
-    char* query = build_query(argc, argv);
-    
+    char raw_query[256] = {0};
+    char* query = build_query(argc, argv, raw_query, sizeof(raw_query));
+
     int count;
-    SearchResult* results = search(query, &count);
+    SearchResult* results = search(query, raw_query, &count);
 
     /*
         Nothing found :/

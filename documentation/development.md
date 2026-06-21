@@ -10,10 +10,10 @@ Run the build script from the project root:
 .\build.bat
 ```
 
-This produces `mnemosyne.exe` in the project root. Run it with:
+This produces `mn.exe` in the project root. Run it with:
 
 ```bat
-.\mnemosyne.exe
+.\mn.exe
 ```
 
 ### Linux / WSL
@@ -30,10 +30,10 @@ Then build with:
 make
 ```
 
-This produces `mnemosyne` in the project root. Run it with:
+This produces `mn` in the project root. Run it with:
 
 ```bash
-./mnemosyne
+./mn
 ```
 
 To delete the compiled binary and do a clean build:
@@ -51,7 +51,7 @@ Sanitizers catch memory bugs at runtime — buffer overflows, use-after-free, un
 
 ```bash
 make sanitize
-./mnemosyne
+./mn
 ```
 
 Not supported on Windows with MinGW. Use WSL to run sanitizer builds.
@@ -64,7 +64,7 @@ When you create a new module (e.g. `src/config.c`), register it in both build sy
 
 **build.bat** — add the file to the `gcc` line:
 ```bat
-gcc -Wall -Wextra -std=c11 -Isrc src/main.c src/help.c src/config.c -o mnemosyne.exe
+gcc -Wall -Wextra -std=c11 -Isrc src/main.c src/help.c src/config.c -o mn.exe
 ```
 
 **Makefile** — add it to the `SRCS` variable:
@@ -84,5 +84,5 @@ Mnemosyne/
 ├── documentation/
 ├── build.bat     # Windows build script
 ├── Makefile      # Linux/WSL build script
-└── mnemosyne.exe / mnemosyne   # compiled binary (not committed to git)
+└── mn.exe / mn                 # compiled binary (not committed to git)
 ```

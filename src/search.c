@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "search.h"
 #include "index.h"
@@ -22,11 +23,48 @@ static int cmp(const void *a, const void *b) {
     return rb->match_count - ra->match_count;
 }
 
-static void build_context_txt(const char *line, const char *query, char *context, int ctx_size) {
-    char *mp      = strstr(line, query);
+static int is_word_match(const char *buf, const char *mp, const char *query) {
+    int qlen      = (int)strlen(query);
+    int before_ok = (mp == buf) || !isalnum((unsigned char)*(mp - 1));
+    int after_ok  = !isalnum((unsigned char)*(mp + qlen));
+    return before_ok && after_ok;
+}
+
+static int is_path_match(const char *path, const char *mp, int qlen) {
+    int before_ok = (mp == path) || *(mp - 1) == '/';
+    int after_ok  = *(mp + qlen) == '\0'
+                 || *(mp + qlen) == '/'
+                 || *(mp + qlen - 1) == '/';
+    return before_ok && after_ok;
+}
+
+static void build_context_start(const char *content, char *context, int ctx_size) {
+    int len  = (int)strlen(content);
+    int show = len < ctx_size - 1 ? len : ctx_size - 4;
+    if (show < 0) show = 0;
+    memcpy(context, content, show);
+    if (show < len) { memcpy(context + show, "...", 3); show += 3; }
+    context[show] = '\0';
+}
+
+static const char *extract_path_line(const char *buf, char *path_out, int path_out_size) {
+    path_out[0] = '\0';
+    if (strncmp(buf, "[PATH]", 6) != 0) return buf;
+    const char *end = strstr(buf + 6, "[/PATH]");
+    if (end == NULL) return buf;
+    int plen = (int)(end - (buf + 6));
+    if (plen <= 0 || plen >= path_out_size) return buf;
+    memcpy(path_out, buf + 6, plen);
+    path_out[plen] = '\0';
+    const char *after = end + 7;
+    if (*after == '\n') after++;
+    return after;
+}
+
+static void build_context_txt(const char *buf, const char *mp, const char *query, char *context, int ctx_size) {
     int   qlen    = (int)strlen(query);
-    int   moff    = (int)(mp - line);
-    int   linelen = (int)strlen(line);
+    int   moff    = (int)(mp - buf);
+    int   linelen = (int)strlen(buf);
     int   after   = linelen - moff - qlen;
 
     int pre_dots = (moff  > 0) ? 3 : 0;
@@ -64,32 +102,70 @@ static char *read_file_buf(const char *path) {
     return buf;
 }
 
-static int scan_file_txt(const char *path, const char *query, char *context, int ctx_size) {
+static int scan_file_txt(const char *path, const char *query, const char *raw_query, char *context, int ctx_size) {
     char *buf = read_file_buf(path);
     if (buf == NULL) return 0;
 
+    char stored_path[4096] = {0};
+    const char *content_start = extract_path_line(buf, stored_path, sizeof(stored_path));
+
     int match_count = 0;
-    const char *p = buf;
+    int qlen = (int)strlen(query);
+    const char *p = content_start;
     while ((p = strstr(p, query)) != NULL) {
-        match_count++;
-        if (match_count == 1) build_context_txt(buf, query, context, ctx_size);
-        p += strlen(query);
+        if (is_word_match(content_start, p, query)) {
+            match_count++;
+            if (match_count == 1) build_context_txt(buf, p, query, context, ctx_size);
+        }
+        p += qlen;
+    }
+
+    if (stored_path[0] != '\0' && raw_query[0] != '\0') {
+        int rqlen = (int)strlen(raw_query);
+        const char *rp = stored_path;
+        while ((rp = strstr(rp, raw_query)) != NULL) {
+            if (is_path_match(stored_path, rp, rqlen)) {
+                if (match_count == 0) build_context_start(content_start, context, ctx_size);
+                match_count++;
+                break;
+            }
+            rp += rqlen;
+        }
     }
 
     free(buf);
     return match_count;
 }
 
-static int scan_file_md(const char *path, const char *query, char *context, int ctx_size) {
+static int scan_file_md(const char *path, const char *query, const char *raw_query, char *context, int ctx_size) {
     char *buf = read_file_buf(path);
     if (buf == NULL) return 0;
 
+    char stored_path[4096] = {0};
+    const char *content_start = extract_path_line(buf, stored_path, sizeof(stored_path));
+
     int match_count = 0;
-    const char *p = buf;
+    int qlen = (int)strlen(query);
+    const char *p = content_start;
     while ((p = strstr(p, query)) != NULL) {
-        match_count++;
-        if (match_count == 1) build_context_txt(buf, query, context, ctx_size);
-        p += strlen(query);
+        if (is_word_match(content_start, p, query)) {
+            match_count++;
+            if (match_count == 1) build_context_txt(buf, p, query, context, ctx_size);
+        }
+        p += qlen;
+    }
+
+    if (stored_path[0] != '\0' && raw_query[0] != '\0') {
+        int rqlen = (int)strlen(raw_query);
+        const char *rp = stored_path;
+        while ((rp = strstr(rp, raw_query)) != NULL) {
+            if (is_path_match(stored_path, rp, rqlen)) {
+                if (match_count == 0) build_context_start(content_start, context, ctx_size);
+                match_count++;
+                break;
+            }
+            rp += rqlen;
+        }
     }
 
     free(buf);
@@ -106,7 +182,7 @@ static int scan_file_pdf(const char *path, const char *query, char *context, int
     return 0;
 }
 
-SearchResult *search(const char *query, int *count) {
+SearchResult *search(const char *query, const char *raw_query, int *count) {
     int total;
     IndexEntry *entries = index_get_entries(&total);
     if (entries == NULL) { *count = 0; return NULL; }
@@ -124,10 +200,10 @@ SearchResult *search(const char *query, int *count) {
         char context[256] = {0};
         int  match_count;
         switch (file_type_from_string(entries[i].file_type)) {
-            case FILE_TYPE_MD:  match_count = scan_file_md(doc_path, query, context, sizeof(context));  break;
-            case FILE_TYPE_TEX: match_count = scan_file_tex(doc_path, query, context, sizeof(context)); break;
-            case FILE_TYPE_PDF: match_count = scan_file_pdf(doc_path, query, context, sizeof(context)); break;
-            default:            match_count = scan_file_txt(doc_path, query, context, sizeof(context)); break;
+            case FILE_TYPE_MD:  match_count = scan_file_md(doc_path, query, raw_query, context, sizeof(context));  break;
+            case FILE_TYPE_TEX: match_count = scan_file_tex(doc_path, query, context, sizeof(context));            break;
+            case FILE_TYPE_PDF: match_count = scan_file_pdf(doc_path, query, context, sizeof(context));            break;
+            default:            match_count = scan_file_txt(doc_path, query, raw_query, context, sizeof(context)); break;
         }
 
         if (match_count > 0) {
