@@ -25,7 +25,7 @@
 
 int read_key(void);
 int run_ide_picker(const char **list, int display);
-int run_search_picker(SearchResult *results, int display);
+int run_search_picker(SearchResult *results, int count);
 int run_list_picker(IndexEntry *entries, int count,
                     const char *title, const char *subtitle);
 int run_workspace_picker(Workspace *ws, int count);

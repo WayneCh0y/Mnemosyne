@@ -55,6 +55,30 @@ int read_key(void) {
 }
 #endif
 
+/* ── Sliding window (show at most PICKER_WINDOW rows, keep selection visible) ── */
+
+#define PICKER_WINDOW 5
+
+/* Top index of a 5-row window that keeps `selected` visible: centered, clamped to
+   the ends. e.g. count=10 → selected 0,1,2 ⇒ rows 1-5; 3 ⇒ 2-6; 4 ⇒ 3-7; 9 ⇒ 6-10. */
+static int picker_window_start(int selected, int count) {
+    if (count <= PICKER_WINDOW) return 0;
+    int start = selected - PICKER_WINDOW / 2;   /* center the selection (offset 2) */
+    if (start < 0) start = 0;
+    if (start > count - PICKER_WINDOW) start = count - PICKER_WINDOW;
+    return start;
+}
+
+static void print_more_above(int start) {
+    if (start > 0)
+        printf(ANSI_DIM "    ⋯ %d more above" ANSI_RESET "\n", start);
+}
+
+static void print_more_below(int end, int count) {
+    if (end < count)
+        printf(ANSI_DIM "    ⋯ %d more below" ANSI_RESET "\n", count - end);
+}
+
 /* ── IDE config picker ─────────────────────────────────────────────────── */
 
 static void print_picker_header(const char *title, const char *subtitle) {
@@ -196,11 +220,14 @@ static void print_result_divider(int dimmed) {
     printf(ANSI_RESET);
 }
 
-static void render_results(SearchResult *results, int display, int selected,
+static void render_results(SearchResult *results, int count, int selected,
                            int num_input, int show_error) {
     print_picker_header("Search results", "Use the arrow keys to move, Enter to open, Esc to cancel.");
-    for (int i = 0; i < display; i++) {
-        if (i > 0) print_result_divider(i != selected || num_input >= 0);
+    int start = picker_window_start(selected, count);
+    int end   = start + (count < PICKER_WINDOW ? count : PICKER_WINDOW);
+    print_more_above(start);
+    for (int i = start; i < end; i++) {
+        if (i > start) print_result_divider(i != selected || num_input >= 0);
         if (num_input < 0 && i == selected) {
             printf(ANSI_SEL "  ▶ [%d] %s" ANSI_RESET "\n", i + 1, results[i].original_path);
             print_context(&results[i], 0);
@@ -210,10 +237,11 @@ static void render_results(SearchResult *results, int display, int selected,
         }
         printf("\n");
     }
+    print_more_below(end, count);
     print_picker_footer(num_input, show_error);
 }
 
-int run_search_picker(SearchResult *results, int display) {
+int run_search_picker(SearchResult *results, int count) {
     int selected = 0;
     int prev_selected = 0;
     int num_input = -1;
@@ -221,7 +249,7 @@ int run_search_picker(SearchResult *results, int display) {
     int done = 0;
 
     printf(ANSI_CURSOR_HIDE);
-    render_results(results, display, selected, num_input, show_error);
+    render_results(results, count, selected, num_input, show_error);
 
     while (!done) {
         int key = read_key();
@@ -235,7 +263,7 @@ int run_search_picker(SearchResult *results, int display) {
             } else if (key == KEY_BACKSPACE || key == 127) {
                 if (num_input > 0) num_input /= 10;
             } else if (key == KEY_ENTER) {
-                if (num_input >= 1 && num_input <= display) {
+                if (num_input >= 1 && num_input <= count) {
                     selected = num_input - 1;
                     done = 1;
                 } else {
@@ -253,14 +281,14 @@ int run_search_picker(SearchResult *results, int display) {
             } else if (key == KEY_DOWN) {
                 num_input = -1;
                 selected = prev_selected;
-                if (selected < display - 1) selected++;
+                if (selected < count - 1) selected++;
             }
         } else {
             switch (key) {
-            case KEY_UP:    if (selected > 0)           selected--; break;
-            case KEY_DOWN:  if (selected < display - 1) selected++; break;
-            case KEY_ENTER: done = 1;                               break;
-            case KEY_ESC:   selected = -1; done = 1;               break;
+            case KEY_UP:    if (selected > 0)         selected--; break;
+            case KEY_DOWN:  if (selected < count - 1) selected++; break;
+            case KEY_ENTER: done = 1;                             break;
+            case KEY_ESC:   selected = -1; done = 1;             break;
             default:
                 if (key >= '1' && key <= '9') {
                     prev_selected = selected;
@@ -270,7 +298,7 @@ int run_search_picker(SearchResult *results, int display) {
             }
         }
 
-        if (!done) render_results(results, display, selected, num_input, show_error);
+        if (!done) render_results(results, count, selected, num_input, show_error);
     }
 
     printf(ANSI_CURSOR_SHOW);
@@ -284,12 +312,16 @@ static void render_list(IndexEntry *entries, int count, int selected,
                         int num_input, int show_error,
                         const char *title, const char *subtitle) {
     print_picker_header(title, subtitle);
-    for (int i = 0; i < count; i++) {
+    int start = picker_window_start(selected, count);
+    int end   = start + (count < PICKER_WINDOW ? count : PICKER_WINDOW);
+    print_more_above(start);
+    for (int i = start; i < end; i++) {
         if (num_input < 0 && i == selected)
             printf(ANSI_SEL "  ▶ [%d] %s" ANSI_RESET "\n", i + 1, entries[i].original_path);
         else
             printf(ANSI_DIM "    [%d] %s" ANSI_RESET "\n", i + 1, entries[i].original_path);
     }
+    print_more_below(end, count);
     print_picker_footer(num_input, show_error);
 }
 
@@ -364,7 +396,10 @@ int run_list_picker(IndexEntry *entries, int count,
 static void render_workspace_list(Workspace *ws, int count, int selected,
                                   int num_input, int show_error) {
     print_picker_header("Open a workspace", "Use the arrow keys to move, Enter to open, Esc to cancel.");
-    for (int i = 0; i < count; i++) {
+    int start = picker_window_start(selected, count);
+    int end   = start + (count < PICKER_WINDOW ? count : PICKER_WINDOW);
+    print_more_above(start);
+    for (int i = start; i < end; i++) {
         if (num_input < 0 && i == selected)
             printf(ANSI_SEL "  ▶ [%d] %s (%d app%s)" ANSI_RESET "\n",
                    i + 1, ws[i].name, ws[i].entry_count, ws[i].entry_count == 1 ? "" : "s");
@@ -382,6 +417,7 @@ static void render_workspace_list(Workspace *ws, int count, int selected,
                        j + 1, ws[i].entries[j].app);
         }
     }
+    print_more_below(end, count);
     print_picker_footer(num_input, show_error);
 }
 
@@ -458,21 +494,27 @@ int run_workspace_picker(Workspace *ws, int count) {
 static void render_path_picker(IndexEntry *entries, int count, int selected,
                                 int num_input, int show_error,
                                 int mode, const char *typed) {
+    int start = picker_window_start(selected, count);
+    int end   = start + (count < PICKER_WINDOW ? count : PICKER_WINDOW);
     if (mode == PATH_PICKER_MODE_LIST) {
         print_picker_header("Select a path",
                             "↑/↓ move  •  Enter select  •  Esc cancel  •  type to enter path");
-        for (int i = 0; i < count; i++) {
+        print_more_above(start);
+        for (int i = start; i < end; i++) {
             if (num_input < 0 && i == selected)
                 printf(ANSI_SEL "  ▶ [%d] %s" ANSI_RESET "\n", i + 1, entries[i].original_path);
             else
                 printf(ANSI_DIM "    [%d] %s" ANSI_RESET "\n", i + 1, entries[i].original_path);
         }
+        print_more_below(end, count);
         print_picker_footer(num_input, show_error);
     } else {
         print_picker_header("Select a path",
                             "Enter to confirm  •  Esc to return to list  •  Backspace to delete");
-        for (int i = 0; i < count; i++)
+        print_more_above(start);
+        for (int i = start; i < end; i++)
             printf(ANSI_DIM "    [%d] %s" ANSI_RESET "\n", i + 1, entries[i].original_path);
+        print_more_below(end, count);
         printf("\n" ANSI_CYAN "  Path: " ANSI_RESET "%s" ANSI_SEL "_" ANSI_RESET, typed);
         printf("\n" ANSI_DIM "  Backspace to delete  •  Esc to return to list" ANSI_RESET);
         fflush(stdout);

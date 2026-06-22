@@ -42,7 +42,7 @@ void print_help(void) {
 
     print_section("PICKER CONTROLS");
     printf(DIM "  (search · list · config ide)" RESET "\n");
-    printf("  " CYAN "↑ / ↓" RESET "    Navigate\n");
+    printf("  " CYAN "↑ / ↓" RESET "    Navigate (long lists scroll, 5 shown at a time)\n");
     printf("  " CYAN "1–9" RESET "      Type an index number, then Enter to jump\n");
     printf("  " CYAN "Backspace" RESET "  Erase the last digit\n");
     printf("  " CYAN "Enter" RESET "    Confirm\n");

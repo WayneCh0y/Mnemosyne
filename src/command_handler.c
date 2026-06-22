@@ -202,10 +202,7 @@ static void cmd_search(int argc, char *argv[]) {
         return;
     }
 
-    // We cap display lines to 5.
-    int display = count < 5 ? count : 5;
-
-    int chosen = run_search_picker(results, display);
+    int chosen = run_search_picker(results, count);
     printf(ANSI_CLEAR ANSI_RESET);
     if (chosen != -1)
         handle_enter(results, chosen, query);
