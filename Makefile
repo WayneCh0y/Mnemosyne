@@ -40,10 +40,17 @@ SRCS = src/main.c \
        src/index.c \
        src/search.c \
        src/remove.c \
+       src/workspace.c \
        src/cJSON.c
 
+ifeq ($(OS), Windows_NT)
+    LDFLAGS = -ladvapi32 -lshell32
+else
+    LDFLAGS =
+endif
+
 $(TARGET): $(SRCS)
-	$(CC) $(CFLAGS) $(SRCS) -o $(TARGET)
+	$(CC) $(CFLAGS) $(SRCS) -o $(TARGET) $(LDFLAGS)
 
 # Debug build with sanitizers — Linux/macOS only (not supported by MinGW on Windows)
 sanitize: $(SRCS)

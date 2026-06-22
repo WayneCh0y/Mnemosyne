@@ -111,21 +111,95 @@ Identical to `search`: if the file belongs to a git repository, VS Code and Curs
 
 ---
 
-## `mn remove <file>`
+## `mn remove [file]`
 
-Removes a file from the index. Does not delete the original file.
+Removes a file from the index. Does not delete the original file — re-add it any time with `mn add`.
 
 **Usage**
 ```
-mn remove <path-to-file>
+mn remove                 # interactive picker over all indexed files
+mn remove <path-to-file>  # remove a specific file directly
 ```
+
+`mn remove` (no arguments) opens the same picker UI as `mn list` (titled "Remove a file"); arrow keys or `1`–`9` to select, **Enter to remove**, `Esc` to cancel. Removing drops both the index entry and the cached text copy.
 
 **Example**
 ```
 mn remove notes.txt
 ```
 
-Prints an error if the file is not currently indexed.
+The picker removes by the stored path, so files that have been **deleted from disk** can still be selected and removed (they're also auto-pruned from the index on the next `mn search`). The direct `mn remove <file>` form prints an error if the path can't be resolved or isn't indexed.
+
+---
+
+## `mn open`
+
+Manages workspaces — named collections of apps, URLs, and paths to launch all at once.
+
+**Subcommands**
+
+```
+mn open                          # interactive picker to choose and launch a workspace
+mn open create <name>            # create a new empty workspace
+mn open add <name>               # interactively add an app to a workspace
+mn open list                     # interactive picker to choose and launch a workspace
+mn open remove <name>            # remove a workspace entirely
+mn open remove <name> <N>        # remove entry at index N from a workspace
+```
+
+**Creating and populating a workspace**
+
+```
+mn open create work
+mn open add work
+```
+
+`mn open add` is interactive (same picker UI as the rest of the app; press `Esc` at any step to cancel) and collects:
+1. **App** — a menu of `code`, `cursor`, or **Full path to an executable…**. The last option lets you type the full path to any app (e.g. `C:\Users\you\AppData\Local\Discord\app-1.0\Discord.exe`, `/Applications/Discord.app`, `/usr/bin/foo`); if that path doesn't exist on this machine you'll get a non-blocking warning.
+2. **URL or path** — opened as an argument to the app (press Enter to skip for standalone apps). For `code` / `cursor` you instead pick a path from your indexed files.
+
+**Listing workspaces**
+
+`mn open list` is an alias for `mn open` — it opens the interactive picker so you can choose a workspace to launch. Both show each workspace with its app count and use the same UI as `mn search` / `mn list`.
+
+**Removing**
+
+```
+mn open remove work        # deletes the 'work' workspace
+mn open remove work 2      # removes entry 2 from the 'work' workspace
+```
+
+Entry indices are 1-based in the order entries were added.
+
+**Opening a workspace**
+
+`mn open` (with no arguments) shows an interactive picker listing all workspaces with their app count. Selecting one launches all its entries in sequence.
+
+**Interactive controls**
+
+| Key | Action |
+|---|---|
+| `↑` / `↓` | Move selection up or down |
+| `Enter` | Open the selected workspace |
+| `Esc` | Exit without opening anything |
+| `1`–`9` | Enter numeric jump mode |
+| `Backspace` | Erase last digit |
+
+**Launch behaviour**
+
+`code` / `cursor` are launched by name (they are on `PATH` via their installer). Every other app is the **full executable path** you provided when adding it:
+
+| Platform | `code` / `cursor` | All other apps |
+|---|---|---|
+| **Windows** | hidden `cmd.exe /c <name> --new-window` (in PATH) | full path launched directly via `ShellExecuteEx` |
+| **macOS** | bare name + `--new-window` (CLI in PATH) | `open -a "<full path>"` (returns immediately) |
+| **Linux** | bare name + `--new-window` | full path run directly, backgrounded with `&` |
+
+If a launch fails (e.g. the stored path no longer exists), an `error: failed to launch '<app>'` message is printed instead of failing silently.
+
+**Auto-close** — once something is actually opened, `mn` closes the terminal window it was launched from (by terminating the parent shell), leaving just the opened apps. This applies to `mn search` → open, `mn list` → open, and `mn open` / `mn open list` → launch. Cancelling the picker with `Esc` opens nothing and leaves the terminal open. The auto-close is skipped when input isn't an interactive terminal (pipes, scripts), so it won't disrupt non-interactive usage.
+
+Workspaces are stored in `~/.mnemosyne/workspaces.json`.
 
 ---
 

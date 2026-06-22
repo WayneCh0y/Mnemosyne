@@ -33,6 +33,7 @@ Mnemosyne is designed to grow incrementally. Each version builds directly on the
 **Search strategy:** Pre-built inverted index: `word → [doc_id, ...]`. Lookup is O(1) per term instead of O(n × file_size).
 
 **New features**
+- `mn open` — workspaces: named sets of apps/files/URLs launched together, managed and opened via interactive pickers
 - Case-insensitive search by default
 - `-c` / `--case-sensitive` flag to opt back in
 - `mn reindex` command to rebuild the inverted index from stored docs

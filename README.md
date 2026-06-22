@@ -1,10 +1,11 @@
 # Mnemosyne
 
-A command-line tool to instantly find and open any of your files from anywhere — search by content or browse your full index, and jump straight to the result in your configured IDE.
+A command-line tool to instantly find and open any of your files from anywhere — search by content or browse your full index, and jump straight to the result in your configured IDE. It also manages **workspaces**: named sets of apps, files, and URLs you can launch all at once.
 
 ```
 mn add thesis.pdf
 mn search "simplex algorithm"
+mn open                       # pick a workspace and launch everything in it
 ```
 
 Named after the Greek goddess of memory.
@@ -144,6 +145,15 @@ mn config ide nvim
 
 # browse all indexed files interactively
 mn list
+
+# create a workspace, then add apps to it (code/cursor, or a full path to any .exe/app)
+mn open create work
+mn open add work
+
+# launch everything in a workspace (interactive picker)
+mn open
 ```
 
 Supported IDE keys: `code`, `cursor`, `nvim`, `vim`, `nano`, `idea`. See [Enabling GUI IDE launchers](#enabling-gui-ide-launchers) if `code`/`cursor`/`idea` aren't found on macOS.
+
+> After you open a file (`mn search` / `mn list`) or launch a workspace (`mn open`), Mnemosyne closes the terminal window it was launched from, leaving just the opened apps. Cancelling a picker with `Esc` opens nothing and leaves the terminal open. See the [Command Reference](documentation/commands.md) for full details.
