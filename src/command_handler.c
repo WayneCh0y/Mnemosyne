@@ -24,6 +24,7 @@
 #include "remove.h"
 #include "picker.h"
 #include "workspace.h"
+#include "app_resolve.h"
 
 static int is_valid_add(int argc) {
     if (argc == 3) {
@@ -311,9 +312,25 @@ static int is_new_window_app(const char *app) {
 #ifdef _WIN32
 /* Launches an app + optional target.
    code/cursor are .cmd launchers on PATH, so they go through a hidden cmd.exe.
-   Every other app is a full executable path supplied by the user, launched
-   directly via ShellExecuteEx. Reports an error if the launch fails. */
+   UWP / Microsoft Store apps (shell:AppsFolder\<AUMID>) are launched via
+   explorer.exe. Every other app is a full executable path supplied by the
+   user, launched directly via ShellExecuteEx. */
 static void win_launch(const char *app, const char *target) {
+    if (is_uwp_app(app)) {
+        char params[WORKSPACE_APP_MAX + 4];
+        snprintf(params, sizeof(params), "\"%s\"", app);
+        SHELLEXECUTEINFOA sei = {0};
+        sei.cbSize       = sizeof(sei);
+        sei.lpVerb       = "open";
+        sei.lpFile       = "explorer.exe";
+        sei.lpParameters = params;
+        sei.nShow        = SW_SHOWNORMAL;
+        if (!ShellExecuteExA(&sei))
+            fprintf(stderr, "error: failed to launch '%s'\n", app);
+        (void)target;
+        return;
+    }
+
     if (is_new_window_app(app)) {
         /* IDE launcher (.cmd) — run via hidden cmd.exe so no console flashes. */
         char cmd_params[WORKSPACE_APP_MAX + WORKSPACE_TARGET_MAX + 64];
@@ -447,6 +464,14 @@ static void cmd_open_add(const char *ws_name) {
         return;
     }
 
+    if (!is_new_window_app(app)) {
+        char resolved[WORKSPACE_APP_MAX];
+        if (app_resolve(app, resolved, sizeof(resolved))) {
+            strncpy(app, resolved, sizeof(app) - 1);
+            app[sizeof(app) - 1] = '\0';
+        }
+    }
+
     if (is_new_window_app(app)) {
         int entry_count;
         IndexEntry *entries = index_get_entries(&entry_count);
@@ -464,13 +489,10 @@ static void cmd_open_add(const char *ws_name) {
             if (!ok) { printf("Cancelled.\n"); return; }
         }
     } else {
-        /* Non-IDE app: 'app' is a full executable path. Warn (don't block) if it
-           doesn't exist — the user may be on a different machine when they run it. */
-#ifdef _WIN32
-        int exists = (GetFileAttributesA(app) != INVALID_FILE_ATTRIBUTES);
-#else
-        int exists = (access(app, F_OK) == 0);
-#endif
+        /* Non-IDE app: warn (don't block) if the value won't launch on this
+           machine — the user may be on a different machine when they run it.
+           UWP markers and macOS bundle names are trusted without a fs check. */
+        int exists = app_value_exists(app);
         const char *subtitle = exists
             ? "Opened as an argument to the app (a URL or file). Enter to skip."
             : "\033[33mwarning: not found on this machine — it will still be saved.\033[0m";

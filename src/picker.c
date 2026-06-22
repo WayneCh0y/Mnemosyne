@@ -640,7 +640,7 @@ int run_path_picker(IndexEntry *entries, int count, char *path_out, size_t path_
 #define APP_PICKER_OPT_PATH 2   /* index of the "Full path…" menu item */
 
 static const char *const APP_PICKER_ITEMS[] = {
-    "code", "cursor", "Full path to an executable\xe2\x80\xa6"
+    "code", "cursor", "Program name or full path\xe2\x80\xa6"
 };
 #define APP_PICKER_COUNT 3
 
@@ -648,7 +648,7 @@ static void render_app_picker(int selected, int num_input, int show_error,
                               int mode, const char *typed) {
     if (mode == PATH_PICKER_MODE_LIST) {
         print_picker_header("Add an app",
-                            "Choose an app or enter a full path to an executable.");
+                            "Choose an app, type a program name (e.g. chrome), or a full path.");
         for (int i = 0; i < APP_PICKER_COUNT; i++) {
             if (num_input < 0 && i == selected)
                 printf(ANSI_SEL "  ▶ [%d] %s" ANSI_RESET "\n", i + 1, APP_PICKER_ITEMS[i]);
@@ -657,7 +657,8 @@ static void render_app_picker(int selected, int num_input, int show_error,
         }
         print_picker_footer(num_input, show_error);
     } else {
-        print_picker_header("Add an app", "Type the full path to an executable.");
+        print_picker_header("Add an app",
+                            "Type a program name (e.g. chrome) or a full path.");
         printf("\n" ANSI_CYAN "  Path: " ANSI_RESET "%s" ANSI_SEL "_" ANSI_RESET, typed);
         printf("\n\n" ANSI_DIM "Enter confirm  •  Backspace delete  •  Esc back" ANSI_RESET);
         fflush(stdout);

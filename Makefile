@@ -41,6 +41,7 @@ SRCS = src/main.c \
        src/search.c \
        src/remove.c \
        src/workspace.c \
+       src/app_resolve.c \
        src/cJSON.c
 
 ifeq ($(OS), Windows_NT)
