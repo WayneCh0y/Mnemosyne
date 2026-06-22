@@ -239,22 +239,42 @@ static void cmd_list(int argc, char *argv[]) {
         free(entries);
         return;
     }
-    int chosen = run_list_picker(entries, count);
+    int chosen = run_list_picker(entries, count, "Browse indexed files",
+                                 "Use the arrow keys to move, Enter to open, Esc to cancel.");
     printf(ANSI_CLEAR ANSI_RESET);
     if (chosen != -1)
         handle_list_enter(entries, chosen);
     free(entries);
 }
 
-static int is_valid_remove(int argc) {
-    if (argc == 3) { return 1; }
-    return 0;
-}
-
 static void cmd_remove(int argc, char *argv[]) {
-    if (!is_valid_remove(argc)) { print_help() ; return; }
-    
-    remove_file(argv[2]);
+    /* Direct form: remove by path (scriptable, backward compatible). */
+    if (argc == 3) { remove_file(argv[2]); return; }
+    if (argc != 2) { print_help(); return; }
+
+    /* Interactive form: pick a file from the index to remove. */
+    int count;
+    IndexEntry *entries = index_get_entries(&count);
+    if (!entries || count == 0) {
+        printf("No files indexed yet.\n");
+        free(entries);
+        return;
+    }
+
+    int chosen = run_list_picker(entries, count, "Remove a file",
+                                 "Use the arrow keys to move, Enter to remove, Esc to cancel.");
+    printf(ANSI_CLEAR ANSI_RESET);
+    if (chosen != -1) {
+        /* Remove by stored absolute path (no realpath), so it works even if the
+           underlying file has been deleted from disk. */
+        int rc = remove_entry_by_abs_path(entries[chosen].original_path);
+        if (rc == 1)
+            printf("Removed '%s' from the index.\n", entries[chosen].original_path);
+        else if (rc == 0)
+            fprintf(stderr, "warning: '%s' was not indexed\n", entries[chosen].original_path);
+        /* rc == -1: index_remove already printed the error */
+    }
+    free(entries);
 }
 
 static int is_valid_config(int argc, char *argv[]) {

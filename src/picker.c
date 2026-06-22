@@ -281,8 +281,9 @@ int run_search_picker(SearchResult *results, int display) {
 /* ── Index list picker ─────────────────────────────────────────────────── */
 
 static void render_list(IndexEntry *entries, int count, int selected,
-                        int num_input, int show_error) {
-    print_picker_header("Browse indexed files", "Use the arrow keys to move, Enter to open, Esc to cancel.");
+                        int num_input, int show_error,
+                        const char *title, const char *subtitle) {
+    print_picker_header(title, subtitle);
     for (int i = 0; i < count; i++) {
         if (num_input < 0 && i == selected)
             printf(ANSI_SEL "  ▶ [%d] %s" ANSI_RESET "\n", i + 1, entries[i].original_path);
@@ -292,7 +293,8 @@ static void render_list(IndexEntry *entries, int count, int selected,
     print_picker_footer(num_input, show_error);
 }
 
-int run_list_picker(IndexEntry *entries, int count) {
+int run_list_picker(IndexEntry *entries, int count,
+                    const char *title, const char *subtitle) {
     int selected = 0;
     int prev_selected = 0;
     int num_input = -1;
@@ -300,7 +302,7 @@ int run_list_picker(IndexEntry *entries, int count) {
     int done = 0;
 
     printf(ANSI_CURSOR_HIDE);
-    render_list(entries, count, selected, num_input, show_error);
+    render_list(entries, count, selected, num_input, show_error, title, subtitle);
 
     while (!done) {
         int key = read_key();
@@ -349,7 +351,7 @@ int run_list_picker(IndexEntry *entries, int count) {
             }
         }
 
-        if (!done) render_list(entries, count, selected, num_input, show_error);
+        if (!done) render_list(entries, count, selected, num_input, show_error, title, subtitle);
     }
 
     printf(ANSI_CURSOR_SHOW);

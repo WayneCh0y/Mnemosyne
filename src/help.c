@@ -27,7 +27,7 @@ void print_help(void) {
     printf("  " CYAN "add" RESET "        Index a file (.txt .md .tex .pdf)\n");
     printf("  " CYAN "search" RESET "     Search indexed files\n");
     printf("  " CYAN "list" RESET "       Browse all indexed files\n");
-    printf("  " CYAN "remove" RESET "     Remove a file from the index\n");
+    printf("  " CYAN "remove" RESET "     Remove a file from the index (picker)\n");
     printf("  " CYAN "open" RESET "       Open a workspace (launch apps)\n");
     printf("  " CYAN "config ide" RESET " Set the default IDE\n\n");
 

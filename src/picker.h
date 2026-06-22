@@ -26,7 +26,8 @@
 int read_key(void);
 int run_ide_picker(const char **list, int display);
 int run_search_picker(SearchResult *results, int display);
-int run_list_picker(IndexEntry *entries, int count);
+int run_list_picker(IndexEntry *entries, int count,
+                    const char *title, const char *subtitle);
 int run_workspace_picker(Workspace *ws, int count);
 /* Returns 1 with path_out filled (selected from list or typed), 0 if cancelled. */
 int run_path_picker(IndexEntry *entries, int count, char *path_out, size_t path_out_size);

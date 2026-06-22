@@ -111,21 +111,24 @@ Identical to `search`: if the file belongs to a git repository, VS Code and Curs
 
 ---
 
-## `mn remove <file>`
+## `mn remove [file]`
 
-Removes a file from the index. Does not delete the original file.
+Removes a file from the index. Does not delete the original file — re-add it any time with `mn add`.
 
 **Usage**
 ```
-mn remove <path-to-file>
+mn remove                 # interactive picker over all indexed files
+mn remove <path-to-file>  # remove a specific file directly
 ```
+
+`mn remove` (no arguments) opens the same picker UI as `mn list` (titled "Remove a file"); arrow keys or `1`–`9` to select, **Enter to remove**, `Esc` to cancel. Removing drops both the index entry and the cached text copy.
 
 **Example**
 ```
 mn remove notes.txt
 ```
 
-Prints an error if the file is not currently indexed.
+The picker removes by the stored path, so files that have been **deleted from disk** can still be selected and removed (they're also auto-pruned from the index on the next `mn search`). The direct `mn remove <file>` form prints an error if the path can't be resolved or isn't indexed.
 
 ---
 
