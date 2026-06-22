@@ -25,6 +25,7 @@
 #include "picker.h"
 #include "workspace.h"
 #include "app_resolve.h"
+#include "app_launch.h"
 
 static int is_valid_add(int argc) {
     if (argc == 3) {
@@ -327,7 +328,7 @@ static void cmd_config(int argc, char *argv[]) {
 }
 
 static int is_new_window_app(const char *app) {
-    return strcmp(app, "code") == 0 || strcmp(app, "cursor") == 0;
+    return strcmp(app, "code") == 0;
 }
 
 #ifdef _WIN32
@@ -506,6 +507,7 @@ static void launch_workspace(const Workspace *ws) {
             system(cmd);
         }
 #endif
+        app_launch(ws->entries[i].app, ws->entries[i].target);
     }
 #endif
     close_terminal();
@@ -581,7 +583,7 @@ static void cmd_open_add(const char *ws_name) {
            UWP markers and macOS bundle names are trusted without a fs check. */
         int exists = app_value_exists(app);
         const char *subtitle = exists
-            ? "Opened as an argument to the app (a URL or file). Enter to skip."
+            ? "URL, app link (e.g. spotify:playlist:...), or file path. Enter to skip."
             : "\033[33mwarning: not found on this machine — it will still be saved.\033[0m";
 
         int ok = run_text_input("Add an app", subtitle, "URL or path",

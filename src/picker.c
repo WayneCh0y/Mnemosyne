@@ -637,18 +637,18 @@ int run_path_picker(IndexEntry *entries, int count, char *path_out, size_t path_
 
 /* ── App chooser (menu + inline type mode) ─────────────────────────────── */
 
-#define APP_PICKER_OPT_PATH 2   /* index of the "Full path…" menu item */
+#define APP_PICKER_OPT_PATH 1   /* "Program name or full path…" */
 
 static const char *const APP_PICKER_ITEMS[] = {
-    "code", "cursor", "Program name or full path\xe2\x80\xa6"
+    "code", "Program name or full path\xe2\x80\xa6"
 };
-#define APP_PICKER_COUNT 3
+#define APP_PICKER_COUNT 2
 
 static void render_app_picker(int selected, int num_input, int show_error,
                               int mode, const char *typed) {
     if (mode == PATH_PICKER_MODE_LIST) {
         print_picker_header("Add an app",
-                            "Choose an app, type a program name (e.g. chrome), or a full path.");
+                            "Choose an app, type a program name, or a full path.");
         for (int i = 0; i < APP_PICKER_COUNT; i++) {
             if (num_input < 0 && i == selected)
                 printf(ANSI_SEL "  ▶ [%d] %s" ANSI_RESET "\n", i + 1, APP_PICKER_ITEMS[i]);
