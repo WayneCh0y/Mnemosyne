@@ -3,6 +3,12 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <shellapi.h>
+/* windows.h defines FILE_TYPE_UNKNOWN as 0x0000, which conflicts with our enum */
+#undef FILE_TYPE_UNKNOWN
+#endif
 
 #include "command_handler.h"
 #include "help.h"
@@ -12,6 +18,7 @@
 #include "config.h"
 #include "remove.h"
 #include "picker.h"
+#include "workspace.h"
 
 static int is_valid_add(int argc) {
     if (argc == 3) {
@@ -241,6 +248,284 @@ static void cmd_config(int argc, char *argv[]) {
     }
 }
 
+static int is_new_window_app(const char *app) {
+    return strcmp(app, "code") == 0 || strcmp(app, "cursor") == 0;
+}
+
+#ifdef _WIN32
+/* Looks up <app>.exe in the Windows App Paths registry (HKCU then HKLM).
+   Writes the full executable path into out on success. Returns 1 if found. */
+static int resolve_app_path_win(const char *app, char *out, size_t out_size) {
+    char key[512];
+    snprintf(key, sizeof(key),
+             "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\%s.exe", app);
+    HKEY roots[2] = { HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE };
+    for (int i = 0; i < 2; i++) {
+        HKEY hkey;
+        if (RegOpenKeyExA(roots[i], key, 0, KEY_READ, &hkey) == ERROR_SUCCESS) {
+            DWORD size = (DWORD)out_size;
+            DWORD type;
+            LONG rc = RegQueryValueExA(hkey, NULL, NULL, &type, (LPBYTE)out, &size);
+            RegCloseKey(hkey);
+            if (rc == ERROR_SUCCESS && type == REG_SZ) {
+                int len = (int)strlen(out);
+                if (len >= 2 && out[0] == '"' && out[len - 1] == '"') {
+                    memmove(out, out + 1, len - 2);
+                    out[len - 2] = '\0';
+                }
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/* Launches app+target via ShellExecuteEx so no cmd.exe window appears.
+   If the app resolves to a full .exe path, it is called directly.
+   Otherwise a hidden cmd.exe /c is used as a fallback (handles .cmd scripts). */
+static void win_launch(const char *app, const char *target) {
+    const char *new_win = is_new_window_app(app) ? "--new-window" : "";
+    char params[WORKSPACE_TARGET_MAX + 32];
+    params[0] = '\0';
+
+    if (new_win[0] && target[0])
+        snprintf(params, sizeof(params), "%s \"%s\"", new_win, target);
+    else if (new_win[0])
+        strncpy(params, new_win, sizeof(params) - 1);
+    else if (target[0])
+        snprintf(params, sizeof(params), "\"%s\"", target);
+
+    char resolved[4096];
+    if (resolve_app_path_win(app, resolved, sizeof(resolved))) {
+        SHELLEXECUTEINFOA sei = {0};
+        sei.cbSize       = sizeof(sei);
+        sei.lpVerb       = "open";
+        sei.lpFile       = resolved;
+        sei.lpParameters = params[0] ? params : NULL;
+        sei.nShow        = SW_SHOWNORMAL;
+        ShellExecuteExA(&sei);
+    } else {
+        /* Not in App Paths — wrap in a hidden cmd.exe (handles .cmd scripts) */
+        char cmd_params[WORKSPACE_APP_MAX + WORKSPACE_TARGET_MAX + 64];
+        if (params[0])
+            snprintf(cmd_params, sizeof(cmd_params), "/c %s %s", app, params);
+        else
+            snprintf(cmd_params, sizeof(cmd_params), "/c %s", app);
+
+        SHELLEXECUTEINFOA sei = {0};
+        sei.cbSize       = sizeof(sei);
+        sei.lpVerb       = "open";
+        sei.lpFile       = "cmd.exe";
+        sei.lpParameters = cmd_params;
+        sei.nShow        = SW_HIDE;
+        ShellExecuteExA(&sei);
+    }
+}
+#endif
+
+static void launch_workspace(const Workspace *ws) {
+    printf("Opening '%s' (%d app%s)...\n",
+           ws->name, ws->entry_count, ws->entry_count == 1 ? "" : "s");
+    for (int i = 0; i < ws->entry_count; i++) {
+        /* Skip duplicate (app, target) pairs — same combo already launched. */
+        int duplicate = 0;
+        for (int j = 0; j < i; j++) {
+            if (strcmp(ws->entries[j].app,    ws->entries[i].app)    == 0 &&
+                strcmp(ws->entries[j].target, ws->entries[i].target) == 0) {
+                duplicate = 1;
+                break;
+            }
+        }
+        if (duplicate) continue;
+
+        const char *app    = ws->entries[i].app;
+        const char *target = ws->entries[i].target;
+#ifdef _WIN32
+        win_launch(app, target);
+#elif defined(__APPLE__)
+        {
+            const char *new_win = is_new_window_app(app) ? " --new-window" : "";
+            char cmd[WORKSPACE_APP_MAX + WORKSPACE_TARGET_MAX + 64];
+            /* 'open -a <app>' resolves GUI apps by bundle name (case-insensitive).
+               code/cursor are in PATH via their installer — use bare name. */
+            if (!is_new_window_app(app)) {
+                if (target[0] != '\0')
+                    snprintf(cmd, sizeof(cmd), "open -a \"%s\" \"%s\"", app, target);
+                else
+                    snprintf(cmd, sizeof(cmd), "open -a \"%s\"", app);
+            } else {
+                if (target[0] != '\0')
+                    snprintf(cmd, sizeof(cmd), "%s%s \"%s\"", app, new_win, target);
+                else
+                    snprintf(cmd, sizeof(cmd), "%s%s", app, new_win);
+            }
+            system(cmd);
+        }
+#else
+        {
+            const char *new_win = is_new_window_app(app) ? " --new-window" : "";
+            char cmd[WORKSPACE_APP_MAX + WORKSPACE_TARGET_MAX + 32];
+            if (target[0] != '\0')
+                snprintf(cmd, sizeof(cmd), "%s%s \"%s\"", app, new_win, target);
+            else
+                snprintf(cmd, sizeof(cmd), "%s%s", app, new_win);
+            system(cmd);
+        }
+#endif
+    }
+}
+
+static void cmd_open_run(void) {
+    int count;
+    Workspace *ws = workspace_load_all(&count);
+    if (!ws || count == 0) {
+        printf("No workspaces yet. Create one with: mn open create <name>\n");
+        free(ws);
+        return;
+    }
+    int chosen = run_workspace_picker(ws, count);
+    printf(ANSI_CLEAR ANSI_RESET);
+    if (chosen != -1)
+        launch_workspace(&ws[chosen]);
+    free(ws);
+}
+
+static void cmd_open_create(const char *name) {
+    int rc = workspace_create(name);
+    if (rc == 0)
+        printf("Workspace '%s' created.\n", name);
+    else if (rc == -1)
+        fprintf(stderr, "error: workspace '%s' already exists\n", name);
+    else
+        fprintf(stderr, "error: failed to create workspace\n");
+}
+
+static void cmd_open_add(const char *ws_name) {
+    Workspace tmp;
+    if (workspace_get(ws_name, &tmp) != 0) {
+        fprintf(stderr, "error: workspace '%s' not found\n", ws_name);
+        return;
+    }
+
+    char app[WORKSPACE_APP_MAX];
+    char target[WORKSPACE_TARGET_MAX];
+
+    printf("App name (e.g. msedge, code, outlook): ");
+    fflush(stdout);
+    if (fgets(app, sizeof(app), stdin) == NULL) return;
+    app[strcspn(app, "\n")] = '\0';
+    if (app[0] == '\0') { printf("No app name entered.\n"); return; }
+
+    if (is_new_window_app(app)) {
+        int entry_count;
+        IndexEntry *entries = index_get_entries(&entry_count);
+        if (!entries || entry_count == 0) {
+            free(entries);
+            printf("No files indexed yet.\n");
+            printf("Path: ");
+            fflush(stdout);
+            if (fgets(target, sizeof(target), stdin) == NULL) return;
+            target[strcspn(target, "\n")] = '\0';
+        } else {
+            int ok = run_path_picker(entries, entry_count, target, sizeof(target));
+            printf(ANSI_CLEAR ANSI_RESET);
+            free(entries);
+            if (!ok) { printf("Cancelled.\n"); return; }
+        }
+    } else {
+        printf("URL or path (press Enter to skip): ");
+        fflush(stdout);
+        if (fgets(target, sizeof(target), stdin) == NULL) return;
+        target[strcspn(target, "\n")] = '\0';
+    }
+
+    int rc = workspace_add_entry(ws_name, app, target);
+    if (rc == 0) {
+        if (target[0] != '\0')
+            printf("Added to '%s': %s \xe2\x86\x92 %s\n", ws_name, app, target);
+        else
+            printf("Added to '%s': %s\n", ws_name, app);
+    } else if (rc == -1) {
+        fprintf(stderr, "error: workspace '%s' not found\n", ws_name);
+    } else if (rc == -2) {
+        fprintf(stderr, "error: workspace '%s' is full (max %d entries)\n",
+                ws_name, WORKSPACE_ENTRIES_MAX);
+    } else {
+        fprintf(stderr, "error: failed to save workspace\n");
+    }
+}
+
+static void cmd_open_list(void) {
+    int count;
+    Workspace *ws = workspace_load_all(&count);
+    if (!ws || count == 0) {
+        printf("No workspaces yet. Create one with: mn open create <name>\n");
+        free(ws);
+        return;
+    }
+    for (int i = 0; i < count; i++) {
+        printf("[%d] %s (%d app%s)\n",
+               i + 1, ws[i].name, ws[i].entry_count,
+               ws[i].entry_count == 1 ? "" : "s");
+        for (int j = 0; j < ws[i].entry_count; j++) {
+            if (ws[i].entries[j].target[0] != '\0')
+                printf("    [%d] %s \xe2\x86\x92 %s\n",
+                       j + 1, ws[i].entries[j].app, ws[i].entries[j].target);
+            else
+                printf("    [%d] %s\n", j + 1, ws[i].entries[j].app);
+        }
+    }
+    free(ws);
+}
+
+static void cmd_open_remove(int argc, char *argv[]) {
+    const char *name = argv[3];
+
+    if (argc == 4) {
+        int rc = workspace_remove(name);
+        if (rc == 0)
+            printf("Workspace '%s' removed.\n", name);
+        else if (rc == -1)
+            fprintf(stderr, "error: workspace '%s' not found\n", name);
+        else
+            fprintf(stderr, "error: failed to remove workspace\n");
+        return;
+    }
+
+    /* argc == 5: remove entry by 1-based index */
+    int n = atoi(argv[4]);
+    if (n <= 0) {
+        fprintf(stderr, "error: entry index must be a positive number\n");
+        return;
+    }
+    int rc = workspace_remove_entry(name, n - 1);
+    if (rc == 0)
+        printf("Entry %d removed from workspace '%s'.\n", n, name);
+    else if (rc == -1)
+        fprintf(stderr, "error: workspace '%s' not found\n", name);
+    else if (rc == -2)
+        fprintf(stderr, "error: no entry at index %d (run 'mn open list' to see indices)\n", n);
+    else
+        fprintf(stderr, "error: failed to save workspace\n");
+}
+
+static void cmd_open(int argc, char *argv[]) {
+    if (argc == 2)                                                    { cmd_open_run();             return; }
+    if (argc == 3 && strcmp(argv[2], "list")   == 0)                  { cmd_open_list();            return; }
+    if (argc == 4 && strcmp(argv[2], "create") == 0)                  { cmd_open_create(argv[3]);   return; }
+    if (argc == 4 && strcmp(argv[2], "add")    == 0)                  { cmd_open_add(argv[3]);      return; }
+    if ((argc == 4 || argc == 5) && strcmp(argv[2], "remove") == 0)   { cmd_open_remove(argc, argv); return; }
+    if (argc == 3 && strcmp(argv[2], "add")    == 0) {
+        fprintf(stderr, "usage: mn open add <workspace-name>\n");
+        return;
+    }
+    if (argc == 3 && strcmp(argv[2], "remove") == 0) {
+        fprintf(stderr, "usage: mn open remove <workspace-name> [entry-index]\n");
+        return;
+    }
+    print_help();
+}
+
 void handle_command(int argc, char *argv[]) {
     const char *cmd = argv[1];
 
@@ -248,6 +533,7 @@ void handle_command(int argc, char *argv[]) {
     if (strcmp(cmd, "search") == 0)      { cmd_search(argc, argv); return; }
     if (strcmp(cmd, "list") == 0)        { cmd_list(argc, argv);   return; }
     if (strcmp(cmd, "remove") == 0)      { cmd_remove(argc, argv); return; }
+    if (strcmp(cmd, "open") == 0)        { cmd_open(argc, argv);   return; }
     if (strcmp(cmd, "config") == 0)      { cmd_config(argc, argv); return; }
     if (strcmp(cmd, "help") == 0)        { print_help();           return; }
 

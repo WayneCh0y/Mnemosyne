@@ -68,6 +68,14 @@ static int create_dirs(const char *base) {
         fclose(f);
     }
 
+    snprintf(path, sizeof(path), "%s/workspaces.json", base);
+    if (access(path, F_OK) != 0) {
+        FILE *f = fopen(path, "w");
+        if (f == NULL) return -1;
+        fprintf(f, "[]\n");
+        fclose(f);
+    }
+
     return 0;
 }
 
@@ -145,6 +153,12 @@ void check_init(void) {
         snprintf(manifest, sizeof(manifest), "%s/index/manifest.json", get_data_path());
         if (access(manifest, F_OK) != 0) {
             FILE *f = fopen(manifest, "w");
+            if (f != NULL) { fprintf(f, "[]\n"); fclose(f); }
+        }
+        char ws_file[2048];
+        snprintf(ws_file, sizeof(ws_file), "%s/workspaces.json", get_data_path());
+        if (access(ws_file, F_OK) != 0) {
+            FILE *f = fopen(ws_file, "w");
             if (f != NULL) { fprintf(f, "[]\n"); fclose(f); }
         }
         return;

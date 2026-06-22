@@ -129,6 +129,86 @@ Prints an error if the file is not currently indexed.
 
 ---
 
+## `mn open`
+
+Manages workspaces — named collections of apps, URLs, and paths to launch all at once.
+
+**Subcommands**
+
+```
+mn open                          # interactive picker to choose and launch a workspace
+mn open create <name>            # create a new empty workspace
+mn open add <name>               # interactively add an app to a workspace
+mn open list                     # show all workspaces and their entries
+mn open remove <name>            # remove a workspace entirely
+mn open remove <name> <N>        # remove entry at index N from a workspace
+```
+
+**Creating and populating a workspace**
+
+```
+mn open create work
+mn open add work
+```
+
+`mn open add` prompts for:
+1. **App name** — the command to run (e.g. `msedge`, `code`, `discord`, `outlook`)
+2. **URL or path** — opened as an argument to the app (press Enter to skip for standalone apps)
+
+**Listing workspaces**
+
+`mn open list` shows all workspaces with numbered entries:
+
+```
+[1] work (3 apps)
+    [1] discord
+    [2] msedge → https://github.com
+    [3] code → C:/repos/my-project
+```
+
+**Removing**
+
+```
+mn open remove work        # deletes the 'work' workspace
+mn open remove work 2      # removes entry 2 (msedge → https://github.com)
+```
+
+Use `mn open list` to confirm entry indices before removing.
+
+**Opening a workspace**
+
+`mn open` (with no arguments) shows an interactive picker listing all workspaces with their app count. Selecting one launches all its entries in sequence.
+
+**Interactive controls**
+
+| Key | Action |
+|---|---|
+| `↑` / `↓` | Move selection up or down |
+| `Enter` | Open the selected workspace |
+| `Esc` | Exit without opening anything |
+| `1`–`9` | Enter numeric jump mode |
+| `Backspace` | Erase last digit |
+
+**Launch behaviour**
+
+Each entry is launched with `system()`. The resolution strategy depends on the platform:
+
+| Platform | `code` / `cursor` | All other apps |
+|---|---|---|
+| **Windows** | bare name + `--new-window` (in PATH) | full path via App Paths registry; falls back to bare name |
+| **macOS** | bare name + `--new-window` (CLI in PATH) | `open -a "<app>"` — resolves by bundle name, case-insensitive |
+| **Linux** | bare name + `--new-window` | bare name (must be in PATH) |
+
+**Windows** — apps like `discord` and `outlook` that are not in `PATH` are automatically resolved to their full executable path via the `App Paths` registry (`HKCU` then `HKLM`). No manual path entry needed for any app that has an installer.
+
+**macOS** — use the application's display name as the app identifier. `open -a` matches against `.app` bundle names case-insensitively, so `discord` finds `Discord.app`, `microsoft edge` finds `Microsoft Edge.app`, and so on.
+
+**Linux** — the app name must be a command accessible in `PATH`. Apps installed via package manager (`apt`, `dnf`, `snap`, etc.) are typically available this way.
+
+Workspaces are stored in `~/.mnemosyne/workspaces.json`.
+
+---
+
 ## `mn config ide [name]`
 
 Changes the IDE that `mn search` and `mn list` open files in. The initial value is set during first-time setup (see below); use this command to change it later.

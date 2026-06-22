@@ -356,3 +356,227 @@ int run_list_picker(IndexEntry *entries, int count) {
     fflush(stdout);
     return selected;
 }
+
+/* ── Workspace picker ──────────────────────────────────────────────────── */
+
+static void render_workspace_list(Workspace *ws, int count, int selected,
+                                  int num_input, int show_error) {
+    print_picker_header("Open a workspace", "Use the arrow keys to move, Enter to open, Esc to cancel.");
+    for (int i = 0; i < count; i++) {
+        if (num_input < 0 && i == selected)
+            printf(ANSI_SEL "  ▶ [%d] %s" ANSI_RESET ANSI_DIM " (%d app%s)" ANSI_RESET "\n",
+                   i + 1, ws[i].name, ws[i].entry_count, ws[i].entry_count == 1 ? "" : "s");
+        else
+            printf(ANSI_DIM "    [%d] %s (%d app%s)" ANSI_RESET "\n",
+                   i + 1, ws[i].name, ws[i].entry_count, ws[i].entry_count == 1 ? "" : "s");
+    }
+    print_picker_footer(num_input, show_error);
+}
+
+int run_workspace_picker(Workspace *ws, int count) {
+    int selected = 0;
+    int prev_selected = 0;
+    int num_input = -1;
+    int show_error = 0;
+    int done = 0;
+
+    printf(ANSI_CURSOR_HIDE);
+    render_workspace_list(ws, count, selected, num_input, show_error);
+
+    while (!done) {
+        int key = read_key();
+        show_error = 0;
+
+        if (num_input >= 0) {
+            if (key >= '1' && key <= '9') {
+                num_input = num_input * 10 + (key - '0');
+            } else if (key == '0') {
+                if (num_input > 0) num_input = num_input * 10;
+            } else if (key == KEY_BACKSPACE || key == 127) {
+                if (num_input > 0) num_input /= 10;
+            } else if (key == KEY_ENTER) {
+                if (num_input >= 1 && num_input <= count) {
+                    selected = num_input - 1;
+                    done = 1;
+                } else {
+                    show_error = 1;
+                    selected = prev_selected;
+                    num_input = -1;
+                }
+            } else if (key == KEY_ESC) {
+                selected = prev_selected;
+                num_input = -1;
+            } else if (key == KEY_UP) {
+                num_input = -1;
+                selected = prev_selected;
+                if (selected > 0) selected--;
+            } else if (key == KEY_DOWN) {
+                num_input = -1;
+                selected = prev_selected;
+                if (selected < count - 1) selected++;
+            }
+        } else {
+            switch (key) {
+            case KEY_UP:    if (selected > 0)         selected--; break;
+            case KEY_DOWN:  if (selected < count - 1) selected++; break;
+            case KEY_ENTER: done = 1;                             break;
+            case KEY_ESC:   selected = -1; done = 1;             break;
+            default:
+                if (key >= '1' && key <= '9') {
+                    prev_selected = selected;
+                    num_input = key - '0';
+                }
+                break;
+            }
+        }
+
+        if (!done) render_workspace_list(ws, count, selected, num_input, show_error);
+    }
+
+    printf(ANSI_CURSOR_SHOW);
+    fflush(stdout);
+    return selected;
+}
+
+/* ── Path picker (list + inline type mode) ─────────────────────────────── */
+
+#define PATH_PICKER_MODE_LIST 0
+#define PATH_PICKER_MODE_TYPE 1
+
+static void render_path_picker(IndexEntry *entries, int count, int selected,
+                                int num_input, int show_error,
+                                int mode, const char *typed) {
+    if (mode == PATH_PICKER_MODE_LIST) {
+        print_picker_header("Select a path",
+                            "↑/↓ move  •  Enter select  •  Esc cancel  •  type to enter path");
+        for (int i = 0; i < count; i++) {
+            if (num_input < 0 && i == selected)
+                printf(ANSI_SEL "  ▶ [%d] %s" ANSI_RESET "\n", i + 1, entries[i].original_path);
+            else
+                printf(ANSI_DIM "    [%d] %s" ANSI_RESET "\n", i + 1, entries[i].original_path);
+        }
+        print_picker_footer(num_input, show_error);
+    } else {
+        print_picker_header("Select a path",
+                            "Enter to confirm  •  Esc to return to list  •  Backspace to delete");
+        for (int i = 0; i < count; i++)
+            printf(ANSI_DIM "    [%d] %s" ANSI_RESET "\n", i + 1, entries[i].original_path);
+        printf("\n" ANSI_CYAN "  Path: " ANSI_RESET "%s" ANSI_SEL "_" ANSI_RESET, typed);
+        printf("\n" ANSI_DIM "  Backspace to delete  •  Esc to return to list" ANSI_RESET);
+        fflush(stdout);
+    }
+}
+
+int run_path_picker(IndexEntry *entries, int count, char *path_out, size_t path_out_size) {
+    int selected     = 0;
+    int prev_selected = 0;
+    int num_input    = -1;
+    int show_error   = 0;
+    int mode         = PATH_PICKER_MODE_LIST;
+    char typed[4096] = {0};
+    int  typed_len   = 0;
+    int  done        = 0;
+    int  cancelled   = 0;
+
+    printf(ANSI_CURSOR_HIDE);
+    render_path_picker(entries, count, selected, num_input, show_error, mode, typed);
+
+    while (!done) {
+        int key = read_key();
+        show_error = 0;
+
+        if (mode == PATH_PICKER_MODE_TYPE) {
+            if (key == KEY_ENTER) {
+                if (typed_len > 0) {
+                    strncpy(path_out, typed, path_out_size - 1);
+                    path_out[path_out_size - 1] = '\0';
+                    done = 1;
+                }
+            } else if (key == KEY_ESC) {
+                typed_len = 0; typed[0] = '\0';
+                mode = PATH_PICKER_MODE_LIST;
+            } else if (key == KEY_BACKSPACE || key == 127) {
+                if (typed_len > 0)
+                    typed[--typed_len] = '\0';
+                else
+                    mode = PATH_PICKER_MODE_LIST;
+            } else if (key >= 32 && key < 127) {
+                if (typed_len < (int)sizeof(typed) - 1) {
+                    typed[typed_len++] = (char)key;
+                    typed[typed_len]   = '\0';
+                }
+            }
+        } else {
+            /* LIST mode */
+            if (num_input >= 0) {
+                if (key >= '1' && key <= '9') {
+                    num_input = num_input * 10 + (key - '0');
+                } else if (key == '0') {
+                    if (num_input > 0) num_input = num_input * 10;
+                } else if (key == KEY_BACKSPACE || key == 127) {
+                    if (num_input > 0) num_input /= 10;
+                } else if (key == KEY_ENTER) {
+                    if (num_input >= 1 && num_input <= count) {
+                        selected = num_input - 1;
+                        const char *res = strcmp(entries[selected].repository, "none") != 0
+                                          ? entries[selected].repository
+                                          : entries[selected].original_path;
+                        strncpy(path_out, res, path_out_size - 1);
+                        path_out[path_out_size - 1] = '\0';
+                        done = 1;
+                    } else {
+                        show_error = 1;
+                        selected   = prev_selected;
+                        num_input  = -1;
+                    }
+                } else if (key == KEY_ESC) {
+                    selected  = prev_selected;
+                    num_input = -1;
+                } else if (key == KEY_UP) {
+                    num_input = -1; selected = prev_selected;
+                    if (selected > 0) selected--;
+                } else if (key == KEY_DOWN) {
+                    num_input = -1; selected = prev_selected;
+                    if (selected < count - 1) selected++;
+                }
+            } else {
+                switch (key) {
+                case KEY_UP:    if (selected > 0)         selected--; break;
+                case KEY_DOWN:  if (selected < count - 1) selected++; break;
+                case KEY_ENTER:
+                    {
+                        const char *res = strcmp(entries[selected].repository, "none") != 0
+                                          ? entries[selected].repository
+                                          : entries[selected].original_path;
+                        strncpy(path_out, res, path_out_size - 1);
+                        path_out[path_out_size - 1] = '\0';
+                        done = 1;
+                    }
+                    break;
+                case KEY_ESC:
+                    cancelled = 1; done = 1;
+                    break;
+                default:
+                    if (key >= '1' && key <= '9') {
+                        prev_selected = selected;
+                        num_input     = key - '0';
+                    } else if (key >= 32 && key < 127) {
+                        /* Any other printable char → switch to type mode */
+                        mode          = PATH_PICKER_MODE_TYPE;
+                        typed[0]      = (char)key;
+                        typed[1]      = '\0';
+                        typed_len     = 1;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (!done)
+            render_path_picker(entries, count, selected, num_input, show_error, mode, typed);
+    }
+
+    printf(ANSI_CURSOR_SHOW);
+    fflush(stdout);
+    return cancelled ? 0 : 1;
+}
