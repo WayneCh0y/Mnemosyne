@@ -139,7 +139,7 @@ Manages workspaces — named collections of apps, URLs, and paths to launch all 
 mn open                          # interactive picker to choose and launch a workspace
 mn open create <name>            # create a new empty workspace
 mn open add <name>               # interactively add an app to a workspace
-mn open list                     # show all workspaces and their entries
+mn open list                     # interactive picker to choose and launch a workspace
 mn open remove <name>            # remove a workspace entirely
 mn open remove <name> <N>        # remove entry at index N from a workspace
 ```
@@ -151,29 +151,22 @@ mn open create work
 mn open add work
 ```
 
-`mn open add` prompts for:
-1. **App name** — the command to run (e.g. `msedge`, `code`, `discord`, `outlook`)
-2. **URL or path** — opened as an argument to the app (press Enter to skip for standalone apps)
+`mn open add` is interactive (same picker UI as the rest of the app; press `Esc` at any step to cancel) and collects:
+1. **App** — a menu of `code`, `cursor`, or **Full path to an executable…**. The last option lets you type the full path to any app (e.g. `C:\Users\you\AppData\Local\Discord\app-1.0\Discord.exe`, `/Applications/Discord.app`, `/usr/bin/foo`); if that path doesn't exist on this machine you'll get a non-blocking warning.
+2. **URL or path** — opened as an argument to the app (press Enter to skip for standalone apps). For `code` / `cursor` you instead pick a path from your indexed files.
 
 **Listing workspaces**
 
-`mn open list` shows all workspaces with numbered entries:
-
-```
-[1] work (3 apps)
-    [1] discord
-    [2] msedge → https://github.com
-    [3] code → C:/repos/my-project
-```
+`mn open list` is an alias for `mn open` — it opens the interactive picker so you can choose a workspace to launch. Both show each workspace with its app count and use the same UI as `mn search` / `mn list`.
 
 **Removing**
 
 ```
 mn open remove work        # deletes the 'work' workspace
-mn open remove work 2      # removes entry 2 (msedge → https://github.com)
+mn open remove work 2      # removes entry 2 from the 'work' workspace
 ```
 
-Use `mn open list` to confirm entry indices before removing.
+Entry indices are 1-based in the order entries were added.
 
 **Opening a workspace**
 
@@ -191,19 +184,17 @@ Use `mn open list` to confirm entry indices before removing.
 
 **Launch behaviour**
 
-Each entry is launched with `system()`. The resolution strategy depends on the platform:
+`code` / `cursor` are launched by name (they are on `PATH` via their installer). Every other app is the **full executable path** you provided when adding it:
 
 | Platform | `code` / `cursor` | All other apps |
 |---|---|---|
-| **Windows** | bare name + `--new-window` (in PATH) | full path via App Paths registry; falls back to bare name |
-| **macOS** | bare name + `--new-window` (CLI in PATH) | `open -a "<app>"` — resolves by bundle name, case-insensitive |
-| **Linux** | bare name + `--new-window` | bare name (must be in PATH) |
+| **Windows** | hidden `cmd.exe /c <name> --new-window` (in PATH) | full path launched directly via `ShellExecuteEx` |
+| **macOS** | bare name + `--new-window` (CLI in PATH) | `open -a "<full path>"` (returns immediately) |
+| **Linux** | bare name + `--new-window` | full path run directly, backgrounded with `&` |
 
-**Windows** — apps like `discord` and `outlook` that are not in `PATH` are automatically resolved to their full executable path via the `App Paths` registry (`HKCU` then `HKLM`). No manual path entry needed for any app that has an installer.
+If a launch fails (e.g. the stored path no longer exists), an `error: failed to launch '<app>'` message is printed instead of failing silently.
 
-**macOS** — use the application's display name as the app identifier. `open -a` matches against `.app` bundle names case-insensitively, so `discord` finds `Discord.app`, `microsoft edge` finds `Microsoft Edge.app`, and so on.
-
-**Linux** — the app name must be a command accessible in `PATH`. Apps installed via package manager (`apt`, `dnf`, `snap`, etc.) are typically available this way.
+**Auto-close** — once something is actually opened, `mn` closes the terminal window it was launched from (by terminating the parent shell), leaving just the opened apps. This applies to `mn search` → open, `mn list` → open, and `mn open` / `mn open list` → launch. Cancelling the picker with `Esc` opens nothing and leaves the terminal open. The auto-close is skipped when input isn't an interactive terminal (pipes, scripts), so it won't disrupt non-interactive usage.
 
 Workspaces are stored in `~/.mnemosyne/workspaces.json`.
 

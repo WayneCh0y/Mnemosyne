@@ -4,7 +4,7 @@
 #include <stddef.h>
 
 #define WORKSPACE_NAME_MAX    128
-#define WORKSPACE_APP_MAX     256
+#define WORKSPACE_APP_MAX     4096
 #define WORKSPACE_TARGET_MAX  4096
 #define WORKSPACE_ENTRIES_MAX 64
 

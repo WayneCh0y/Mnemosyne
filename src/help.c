@@ -36,7 +36,7 @@ void print_help(void) {
     printf("  mn " CYAN "open" RESET "                         Interactive picker\n");
     printf("  mn " CYAN "open create" RESET " <name>          Create a workspace\n");
     printf("  mn " CYAN "open add" RESET " <name>             Add an app to a workspace\n");
-    printf("  mn " CYAN "open list" RESET "                   Show all workspaces\n");
+    printf("  mn " CYAN "open list" RESET "                   Pick a workspace to open\n");
     printf("  mn " CYAN "open remove" RESET " <name>          Remove a workspace\n");
     printf("  mn " CYAN "open remove" RESET " <name> <N>      Remove entry N from a workspace\n\n");
 

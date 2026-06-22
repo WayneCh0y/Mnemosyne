@@ -2,7 +2,7 @@
 
 ## Overview
 
-Mnemosyne is a local-first, command-line file search tool. It ingests plain and document files into a local index, then lets you search across all of them or browse the full list, and open results directly in your preferred IDE.
+Mnemosyne is a local-first, command-line file search tool. It ingests plain and document files into a local index, then lets you search across all of them or browse the full list, and open results directly in your preferred IDE. It also manages workspaces — named sets of apps, files, and URLs that `mn open` launches together.
 
 ---
 
@@ -26,6 +26,7 @@ graph TD
         MANIFEST[manifest.json\nfile registry]
         DOCS[docs/\nhashed plain-text copies]
         CONF[~/.mnemosyne.conf\nuser settings]
+        WS[workspaces.json\nsaved workspaces]
     end
 
     subgraph Search ["Search Engine"]
@@ -53,6 +54,11 @@ graph TD
 
     User -- "mn config ide name" --> CMD
     CMD --> CONF
+
+    User -- "mn open" --> CMD
+    CMD -- reads --> WS
+    CMD -- "user picks workspace" --> CMD
+    CMD -- launches apps --> User
 ```
 
 ---
@@ -68,13 +74,20 @@ Routes `argv[1]` to the correct handler and implements all interactive UI logic:
 | Subcommand | Handler |
 |---|---|
 | `add` | `ingest_file()` |
-| `search` | `cmd_search()` → `run_picker()` → `handle_enter()` |
+| `search` | `cmd_search()` → `run_search_picker()` → `handle_enter()` |
 | `list` | `cmd_list()` → `run_list_picker()` → `handle_list_enter()` |
+| `open` | `cmd_open()` → `run_workspace_picker()` → `launch_workspace()` |
 | `config` | `cmd_config()` → `set_ide()` |
 | `remove` | `cmd_remove()` → `remove_file()` |
 | `help` | `print_help()` |
 
-Also contains the interactive terminal picker (ANSI rendering, arrow-key input, IDE launch) used by both `search` and `list`.
+It also implements the per-platform app/IDE launch logic and `close_terminal()`, which terminates the parent shell after a successful open/launch so the launcher window closes (skipped when stdin isn't a TTY).
+
+### `picker.c` — Interactive Terminal Pickers
+The interactive pickers (ANSI rendering, raw-mode arrow-key input, `1`–`9` numeric jump) shared across the app: `run_search_picker`, `run_list_picker`, `run_workspace_picker`, `run_ide_picker`, and `run_path_picker`.
+
+### `workspace.c` — Workspace Store
+Reads and writes `workspaces.json` (via `cJSON`). A workspace is a named list of entries, each an `app` (either `code`/`cursor`, or a full path to an executable) plus an optional `target` (a URL or file path). Functions: `workspace_create()`, `workspace_add_entry()`, `workspace_remove()`, `workspace_remove_entry()`, `workspace_load_all()`, `workspace_get()`.
 
 ### `ingest.c` — Ingestor
 Detects file extension, delegates to the correct parser, then writes the resulting plain text into `~/.mnemosyne/index/docs/<sha256>.txt` and updates `manifest.json`.
@@ -142,6 +155,10 @@ Mnemosyne/
 │   ├── init.h
 │   ├── help.c
 │   ├── help.h
+│   ├── picker.c
+│   ├── picker.h
+│   ├── workspace.c
+│   ├── workspace.h
 │   ├── types.h
 │   ├── sha256.c
 │   ├── sha256.h
@@ -174,6 +191,7 @@ Mnemosyne/
 ~/.mnemosyne.conf          ← IDE key and data directory path (plain text)
 
 ~/.mnemosyne/              ← default data directory (configurable)
+├── workspaces.json        ← saved workspaces (apps, targets)
 └── index/
     ├── manifest.json
     └── docs/
@@ -185,3 +203,4 @@ Mnemosyne/
 - Each `docs/<hash>.txt` contains the extracted plain-text of one document.
 - The hash is SHA-256 of the original file's absolute path (not its content), so re-indexing the same path overwrites the same slot.
 - `manifest.json` is the only file that maps hashes back to original paths and metadata.
+- `workspaces.json` holds the named workspaces managed by `mn open`.

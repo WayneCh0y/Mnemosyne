@@ -6,8 +6,13 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
+#include <tlhelp32.h>
+#include <io.h>
 /* windows.h defines FILE_TYPE_UNKNOWN as 0x0000, which conflicts with our enum */
 #undef FILE_TYPE_UNKNOWN
+#else
+#include <unistd.h>
+#include <signal.h>
 #endif
 
 #include "command_handler.h"
@@ -108,6 +113,38 @@ static int find_line_in_original(const char *path, const char *query) {
     return 1;
 }
 
+/* Closes the terminal mn is launched from by terminating its parent shell.
+   Called after a successful open/launch so the launcher window disappears,
+   leaving only the opened apps (which are detached and unaffected).
+   Skipped when stdin isn't a TTY (pipes, scripts, CI) to avoid killing a
+   parent in non-interactive runs. */
+static void close_terminal(void) {
+#ifdef _WIN32
+    if (!_isatty(_fileno(stdin))) return;
+
+    DWORD pid  = GetCurrentProcessId();
+    DWORD ppid = 0;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32 pe = { .dwSize = sizeof(pe) };
+        if (Process32First(snap, &pe)) {
+            do {
+                if (pe.th32ProcessID == pid) { ppid = pe.th32ParentProcessID; break; }
+            } while (Process32Next(snap, &pe));
+        }
+        CloseHandle(snap);
+    }
+    if (ppid != 0) {
+        HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, ppid);
+        if (h) { TerminateProcess(h, 0); CloseHandle(h); }
+    }
+#else
+    if (!isatty(STDIN_FILENO)) return;
+    pid_t ppid = getppid();
+    if (ppid > 1) kill(ppid, SIGKILL);  /* interactive shells ignore SIGTERM */
+#endif
+}
+
 static void handle_enter(SearchResult *results, int selected, const char *query) {
     const char *file_path = results[selected].original_path;
     const char *repo_path = NULL;
@@ -139,6 +176,7 @@ static void handle_enter(SearchResult *results, int selected, const char *query)
     }
     free(entries);
     system(launch);
+    close_terminal();
 }
 
 static void cmd_search(int argc, char *argv[]) {
@@ -189,6 +227,7 @@ static void handle_list_enter(IndexEntry *entries, int selected) {
     else
         snprintf(launch, sizeof(launch), "%s \"%s\"", ide_name, file_path);
     system(launch);
+    close_terminal();
 }
 
 static void cmd_list(int argc, char *argv[]) {
@@ -253,64 +292,19 @@ static int is_new_window_app(const char *app) {
 }
 
 #ifdef _WIN32
-/* Looks up <app>.exe in the Windows App Paths registry (HKCU then HKLM).
-   Writes the full executable path into out on success. Returns 1 if found. */
-static int resolve_app_path_win(const char *app, char *out, size_t out_size) {
-    char key[512];
-    snprintf(key, sizeof(key),
-             "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\%s.exe", app);
-    HKEY roots[2] = { HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE };
-    for (int i = 0; i < 2; i++) {
-        HKEY hkey;
-        if (RegOpenKeyExA(roots[i], key, 0, KEY_READ, &hkey) == ERROR_SUCCESS) {
-            DWORD size = (DWORD)out_size;
-            DWORD type;
-            LONG rc = RegQueryValueExA(hkey, NULL, NULL, &type, (LPBYTE)out, &size);
-            RegCloseKey(hkey);
-            if (rc == ERROR_SUCCESS && type == REG_SZ) {
-                int len = (int)strlen(out);
-                if (len >= 2 && out[0] == '"' && out[len - 1] == '"') {
-                    memmove(out, out + 1, len - 2);
-                    out[len - 2] = '\0';
-                }
-                return 1;
-            }
-        }
-    }
-    return 0;
-}
-
-/* Launches app+target via ShellExecuteEx so no cmd.exe window appears.
-   If the app resolves to a full .exe path, it is called directly.
-   Otherwise a hidden cmd.exe /c is used as a fallback (handles .cmd scripts). */
+/* Launches an app + optional target.
+   code/cursor are .cmd launchers on PATH, so they go through a hidden cmd.exe.
+   Every other app is a full executable path supplied by the user, launched
+   directly via ShellExecuteEx. Reports an error if the launch fails. */
 static void win_launch(const char *app, const char *target) {
-    const char *new_win = is_new_window_app(app) ? "--new-window" : "";
-    char params[WORKSPACE_TARGET_MAX + 32];
-    params[0] = '\0';
-
-    if (new_win[0] && target[0])
-        snprintf(params, sizeof(params), "%s \"%s\"", new_win, target);
-    else if (new_win[0])
-        strncpy(params, new_win, sizeof(params) - 1);
-    else if (target[0])
-        snprintf(params, sizeof(params), "\"%s\"", target);
-
-    char resolved[4096];
-    if (resolve_app_path_win(app, resolved, sizeof(resolved))) {
-        SHELLEXECUTEINFOA sei = {0};
-        sei.cbSize       = sizeof(sei);
-        sei.lpVerb       = "open";
-        sei.lpFile       = resolved;
-        sei.lpParameters = params[0] ? params : NULL;
-        sei.nShow        = SW_SHOWNORMAL;
-        ShellExecuteExA(&sei);
-    } else {
-        /* Not in App Paths — wrap in a hidden cmd.exe (handles .cmd scripts) */
+    if (is_new_window_app(app)) {
+        /* IDE launcher (.cmd) — run via hidden cmd.exe so no console flashes. */
         char cmd_params[WORKSPACE_APP_MAX + WORKSPACE_TARGET_MAX + 64];
-        if (params[0])
-            snprintf(cmd_params, sizeof(cmd_params), "/c %s %s", app, params);
+        if (target[0])
+            snprintf(cmd_params, sizeof(cmd_params),
+                     "/c %s --new-window \"%s\"", app, target);
         else
-            snprintf(cmd_params, sizeof(cmd_params), "/c %s", app);
+            snprintf(cmd_params, sizeof(cmd_params), "/c %s --new-window", app);
 
         SHELLEXECUTEINFOA sei = {0};
         sei.cbSize       = sizeof(sei);
@@ -318,8 +312,25 @@ static void win_launch(const char *app, const char *target) {
         sei.lpFile       = "cmd.exe";
         sei.lpParameters = cmd_params;
         sei.nShow        = SW_HIDE;
-        ShellExecuteExA(&sei);
+        if (!ShellExecuteExA(&sei))
+            fprintf(stderr, "error: failed to launch '%s'\n", app);
+        return;
     }
+
+    /* Full executable path — launch directly. */
+    char params[WORKSPACE_TARGET_MAX + 4];
+    params[0] = '\0';
+    if (target[0])
+        snprintf(params, sizeof(params), "\"%s\"", target);
+
+    SHELLEXECUTEINFOA sei = {0};
+    sei.cbSize       = sizeof(sei);
+    sei.lpVerb       = "open";
+    sei.lpFile       = app;
+    sei.lpParameters = params[0] ? params : NULL;
+    sei.nShow        = SW_SHOWNORMAL;
+    if (!ShellExecuteExA(&sei))
+        fprintf(stderr, "error: failed to launch '%s'\n", app);
 }
 #endif
 
@@ -363,16 +374,20 @@ static void launch_workspace(const Workspace *ws) {
         }
 #else
         {
+            /* code/cursor return immediately; a user-supplied executable path is a
+               GUI app that would otherwise block, so background it with '&'. */
             const char *new_win = is_new_window_app(app) ? " --new-window" : "";
+            const char *bg      = is_new_window_app(app) ? "" : " &";
             char cmd[WORKSPACE_APP_MAX + WORKSPACE_TARGET_MAX + 32];
             if (target[0] != '\0')
-                snprintf(cmd, sizeof(cmd), "%s%s \"%s\"", app, new_win, target);
+                snprintf(cmd, sizeof(cmd), "\"%s\"%s \"%s\"%s", app, new_win, target, bg);
             else
-                snprintf(cmd, sizeof(cmd), "%s%s", app, new_win);
+                snprintf(cmd, sizeof(cmd), "\"%s\"%s%s", app, new_win, bg);
             system(cmd);
         }
 #endif
     }
+    close_terminal();
 }
 
 static void cmd_open_run(void) {
@@ -408,24 +423,23 @@ static void cmd_open_add(const char *ws_name) {
     }
 
     char app[WORKSPACE_APP_MAX];
-    char target[WORKSPACE_TARGET_MAX];
+    char target[WORKSPACE_TARGET_MAX] = {0};
 
-    printf("App name (e.g. msedge, code, outlook): ");
-    fflush(stdout);
-    if (fgets(app, sizeof(app), stdin) == NULL) return;
-    app[strcspn(app, "\n")] = '\0';
-    if (app[0] == '\0') { printf("No app name entered.\n"); return; }
+    if (!run_app_picker(app, sizeof(app))) {
+        printf(ANSI_CLEAR ANSI_RESET "Cancelled.\n");
+        return;
+    }
 
     if (is_new_window_app(app)) {
         int entry_count;
         IndexEntry *entries = index_get_entries(&entry_count);
         if (!entries || entry_count == 0) {
             free(entries);
-            printf("No files indexed yet.\n");
-            printf("Path: ");
-            fflush(stdout);
-            if (fgets(target, sizeof(target), stdin) == NULL) return;
-            target[strcspn(target, "\n")] = '\0';
+            int ok = run_text_input("Add an app",
+                                    "Path to open in the IDE (Enter to skip).",
+                                    "Path", target, sizeof(target), 1);
+            printf(ANSI_CLEAR ANSI_RESET);
+            if (!ok) { printf("Cancelled.\n"); return; }
         } else {
             int ok = run_path_picker(entries, entry_count, target, sizeof(target));
             printf(ANSI_CLEAR ANSI_RESET);
@@ -433,10 +447,21 @@ static void cmd_open_add(const char *ws_name) {
             if (!ok) { printf("Cancelled.\n"); return; }
         }
     } else {
-        printf("URL or path (press Enter to skip): ");
-        fflush(stdout);
-        if (fgets(target, sizeof(target), stdin) == NULL) return;
-        target[strcspn(target, "\n")] = '\0';
+        /* Non-IDE app: 'app' is a full executable path. Warn (don't block) if it
+           doesn't exist — the user may be on a different machine when they run it. */
+#ifdef _WIN32
+        int exists = (GetFileAttributesA(app) != INVALID_FILE_ATTRIBUTES);
+#else
+        int exists = (access(app, F_OK) == 0);
+#endif
+        const char *subtitle = exists
+            ? "Opened as an argument to the app (a URL or file). Enter to skip."
+            : "\033[33mwarning: not found on this machine — it will still be saved.\033[0m";
+
+        int ok = run_text_input("Add an app", subtitle, "URL or path",
+                                target, sizeof(target), 1);
+        printf(ANSI_CLEAR ANSI_RESET);
+        if (!ok) { printf("Cancelled.\n"); return; }
     }
 
     int rc = workspace_add_entry(ws_name, app, target);
@@ -453,29 +478,6 @@ static void cmd_open_add(const char *ws_name) {
     } else {
         fprintf(stderr, "error: failed to save workspace\n");
     }
-}
-
-static void cmd_open_list(void) {
-    int count;
-    Workspace *ws = workspace_load_all(&count);
-    if (!ws || count == 0) {
-        printf("No workspaces yet. Create one with: mn open create <name>\n");
-        free(ws);
-        return;
-    }
-    for (int i = 0; i < count; i++) {
-        printf("[%d] %s (%d app%s)\n",
-               i + 1, ws[i].name, ws[i].entry_count,
-               ws[i].entry_count == 1 ? "" : "s");
-        for (int j = 0; j < ws[i].entry_count; j++) {
-            if (ws[i].entries[j].target[0] != '\0')
-                printf("    [%d] %s \xe2\x86\x92 %s\n",
-                       j + 1, ws[i].entries[j].app, ws[i].entries[j].target);
-            else
-                printf("    [%d] %s\n", j + 1, ws[i].entries[j].app);
-        }
-    }
-    free(ws);
 }
 
 static void cmd_open_remove(int argc, char *argv[]) {
@@ -511,7 +513,7 @@ static void cmd_open_remove(int argc, char *argv[]) {
 
 static void cmd_open(int argc, char *argv[]) {
     if (argc == 2)                                                    { cmd_open_run();             return; }
-    if (argc == 3 && strcmp(argv[2], "list")   == 0)                  { cmd_open_list();            return; }
+    if (argc == 3 && strcmp(argv[2], "list")   == 0)                  { cmd_open_run();             return; }
     if (argc == 4 && strcmp(argv[2], "create") == 0)                  { cmd_open_create(argv[3]);   return; }
     if (argc == 4 && strcmp(argv[2], "add")    == 0)                  { cmd_open_add(argv[3]);      return; }
     if ((argc == 4 || argc == 5) && strcmp(argv[2], "remove") == 0)   { cmd_open_remove(argc, argv); return; }

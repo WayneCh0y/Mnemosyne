@@ -30,5 +30,12 @@ int run_list_picker(IndexEntry *entries, int count);
 int run_workspace_picker(Workspace *ws, int count);
 /* Returns 1 with path_out filled (selected from list or typed), 0 if cancelled. */
 int run_path_picker(IndexEntry *entries, int count, char *path_out, size_t path_out_size);
+/* App chooser: menu of code / cursor / full-path-typed. Returns 1 with app_out
+   filled, 0 if cancelled (Esc). */
+int run_app_picker(char *app_out, size_t app_out_size);
+/* Single styled text input box. Returns 1 with out filled, 0 if cancelled (Esc).
+   When allow_empty is set, Enter on an empty value confirms (used as "skip"). */
+int run_text_input(const char *title, const char *subtitle, const char *label,
+                   char *out, size_t out_size, int allow_empty);
 
 #endif
