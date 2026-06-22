@@ -23,7 +23,7 @@ static int cmp(const void *a, const void *b) {
     return rb->match_count - ra->match_count;
 }
 
-static int is_word_match(const char *buf, const char *mp, const char *query) {
+int is_word_match(const char *buf, const char *mp, const char *query) {
     int qlen      = (int)strlen(query);
     int before_ok = (mp == buf) || !isalnum((unsigned char)*(mp - 1));
     int after_ok  = !isalnum((unsigned char)*(mp + qlen));

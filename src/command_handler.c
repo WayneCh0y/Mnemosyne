@@ -71,7 +71,37 @@ static char* build_query(int argc, char *argv[], char *raw_out, int raw_size) {
     return query;
 }
 
-static void handle_enter(SearchResult *results, int selected) {
+/* Returns the line number of the first occurrence of the query in the
+   original file. */
+static int find_line_in_original(const char *path, const char *query) {
+    FILE *f = fopen(path, "r");
+    if (f == NULL) return 1;
+
+    int qlen = (int)strlen(query);
+    char line[4096];
+    int line_num = 0;
+
+    while (fgets(line, sizeof(line), f) != NULL) {
+        line_num++;
+
+        for (int i = 0; line[i] != '\0'; i++)
+            line[i] = (char)tolower((unsigned char)line[i]);
+
+        const char *p = line;
+        while ((p = strstr(p, query)) != NULL) {
+            if (is_word_match(line, p, query)) {
+                fclose(f);
+                return line_num;
+            }
+            p += qlen;
+        }
+    }
+
+    fclose(f);
+    return 1;
+}
+
+static void handle_enter(SearchResult *results, int selected, const char *query) {
     const char *file_path = results[selected].original_path;
     const char *repo_path = NULL;
     int entry_count;
@@ -86,13 +116,19 @@ static void handle_enter(SearchResult *results, int selected) {
         }
     }
     const char *ide_name = get_ide();
-    char launch[32 + 4096 + 4096 + 32];
+    int line = find_line_in_original(file_path, query);
+    char launch[32 + 4096 + 4096 + 64];
+
     if (repo_path && (strcmp(ide_name, "code") == 0 || strcmp(ide_name, "cursor") == 0)) {
-        snprintf(launch, sizeof(launch), "%s \"%s\" --goto \"%s\"", ide_name, repo_path, file_path);
+        snprintf(launch, sizeof(launch), "%s \"%s\" --goto \"%s:%d\"", ide_name, repo_path, file_path, line);
+    } else if (strcmp(ide_name, "code") == 0 || strcmp(ide_name, "cursor") == 0) {
+        snprintf(launch, sizeof(launch), "%s --goto \"%s:%d\"", ide_name, file_path, line);
     } else if (repo_path && strcmp(ide_name, "idea") == 0) {
-        snprintf(launch, sizeof(launch), "%s \"%s\" \"%s\"", ide_name, repo_path, file_path);
+        snprintf(launch, sizeof(launch), "%s --line %d \"%s\" \"%s\"", ide_name, line, repo_path, file_path);
+    } else if (strcmp(ide_name, "idea") == 0) {
+        snprintf(launch, sizeof(launch), "%s --line %d \"%s\"", ide_name, line, file_path);
     } else {
-        snprintf(launch, sizeof(launch), "%s \"%s\"", ide_name, file_path);
+        snprintf(launch, sizeof(launch), "%s +%d \"%s\"", ide_name, line, file_path);
     }
     free(entries);
     system(launch);
@@ -127,7 +163,7 @@ static void cmd_search(int argc, char *argv[]) {
     int chosen = run_search_picker(results, display);
     printf(ANSI_CLEAR ANSI_RESET);
     if (chosen != -1)
-        handle_enter(results, chosen);
+        handle_enter(results, chosen, query);
     free(results);
 
     return;
