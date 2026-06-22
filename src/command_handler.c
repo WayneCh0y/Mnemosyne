@@ -139,6 +139,27 @@ static void close_terminal(void) {
         HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, ppid);
         if (h) { TerminateProcess(h, 0); CloseHandle(h); }
     }
+#elif defined(__APPLE__)
+    if (!isatty(STDIN_FILENO)) return;
+    const char *tty = ttyname(STDIN_FILENO);
+    if (tty) {
+        /* Ask Terminal.app to close the window hosting this tty via AppleScript.
+           This works regardless of the "close if shell exited cleanly" preference,
+           which would otherwise keep the window open after a SIGKILL. */
+        char script[512];
+        snprintf(script, sizeof(script),
+            "osascript"
+            " -e 'tell application \"Terminal\"'"
+            " -e 'repeat with w in windows'"
+            " -e 'if tty of front tab of w is \"%s\" then close w'"
+            " -e 'end repeat'"
+            " -e 'end tell'"
+            " 2>/dev/null",
+            tty);
+        system(script);
+    }
+    pid_t ppid = getppid();
+    if (ppid > 1) kill(ppid, SIGKILL);
 #else
     if (!isatty(STDIN_FILENO)) return;
     pid_t ppid = getppid();
@@ -366,11 +387,78 @@ static void win_launch(const char *app, const char *target) {
     if (!ShellExecuteExA(&sei))
         fprintf(stderr, "error: failed to launch '%s'\n", app);
 }
+
+/* Batch-launches a regular executable (e.g. a browser) with all its targets in
+   one invocation.  Browsers open each quoted URL argument as a separate tab,
+   avoiding the spurious blank tab that appears when each URL triggers its own
+   process launch. */
+static void win_launch_batch(const char *app, const char **targets, int count) {
+    size_t total = 1;
+    for (int i = 0; i < count; i++) total += strlen(targets[i]) + 4;
+    char *params = malloc(total);
+    if (!params) return;
+    int pos = 0;
+    params[0] = '\0';
+    for (int i = 0; i < count; i++) {
+        if (!targets[i][0]) continue;
+        if (pos > 0) params[pos++] = ' ';
+        params[pos++] = '"';
+        size_t len = strlen(targets[i]);
+        memcpy(params + pos, targets[i], len);
+        pos += (int)len;
+        params[pos++] = '"';
+        params[pos] = '\0';
+    }
+    SHELLEXECUTEINFOA sei = {0};
+    sei.cbSize       = sizeof(sei);
+    sei.lpVerb       = "open";
+    sei.lpFile       = app;
+    sei.lpParameters = pos > 0 ? params : NULL;
+    sei.nShow        = SW_SHOWNORMAL;
+    if (!ShellExecuteExA(&sei))
+        fprintf(stderr, "error: failed to launch '%s'\n", app);
+    free(params);
+}
 #endif
 
 static void launch_workspace(const Workspace *ws) {
     printf("Opening '%s' (%d app%s)...\n",
            ws->name, ws->entry_count, ws->entry_count == 1 ? "" : "s");
+#ifdef _WIN32
+    /* Group regular-executable entries by app so all their targets are passed in
+       one invocation (prevents browsers opening a spurious blank tab).
+       UWP and IDE apps keep per-entry launches since batching doesn't apply. */
+    int handled[WORKSPACE_ENTRIES_MAX] = {0};
+    for (int i = 0; i < ws->entry_count; i++) {
+        if (handled[i]) continue;
+        handled[i] = 1;
+        const char *app    = ws->entries[i].app;
+        const char *target = ws->entries[i].target;
+
+        if (is_uwp_app(app) || is_new_window_app(app)) {
+            int dup = 0;
+            for (int j = 0; j < i; j++) {
+                if (strcmp(ws->entries[j].app,    app)    == 0 &&
+                    strcmp(ws->entries[j].target, target) == 0) { dup = 1; break; }
+            }
+            if (!dup) win_launch(app, target);
+        } else {
+            const char *targets[WORKSPACE_ENTRIES_MAX];
+            int tc = 0;
+            targets[tc++] = target;
+            for (int j = i + 1; j < ws->entry_count; j++) {
+                if (strcmp(ws->entries[j].app, app) != 0) continue;
+                handled[j] = 1;
+                int dup = 0;
+                for (int k = 0; k < tc; k++) {
+                    if (strcmp(targets[k], ws->entries[j].target) == 0) { dup = 1; break; }
+                }
+                if (!dup) targets[tc++] = ws->entries[j].target;
+            }
+            win_launch_batch(app, targets, tc);
+        }
+    }
+#else
     for (int i = 0; i < ws->entry_count; i++) {
         /* Skip duplicate (app, target) pairs — same combo already launched. */
         int duplicate = 0;
@@ -385,9 +473,7 @@ static void launch_workspace(const Workspace *ws) {
 
         const char *app    = ws->entries[i].app;
         const char *target = ws->entries[i].target;
-#ifdef _WIN32
-        win_launch(app, target);
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
         {
             const char *new_win = is_new_window_app(app) ? " --new-window" : "";
             char cmd[WORKSPACE_APP_MAX + WORKSPACE_TARGET_MAX + 64];
@@ -421,6 +507,7 @@ static void launch_workspace(const Workspace *ws) {
         }
 #endif
     }
+#endif
     close_terminal();
 }
 

@@ -17,8 +17,9 @@ int app_resolve(const char *name, char *out, size_t out_size);
 int is_uwp_app(const char *app);
 
 /* Returns 1 if `app` should be considered valid for the current machine.
-   Filesystem paths are checked with stat/GetFileAttributes; UWP markers
-   and bare bundle names (macOS) are trusted without filesystem checks. */
+   Filesystem paths are checked with access/GetFileAttributes; UWP markers
+   are trusted; macOS bundle names are verified via osascript when the name
+   contains only safe characters, and trusted otherwise. */
 int app_value_exists(const char *app);
 
 #endif

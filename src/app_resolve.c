@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "app_resolve.h"
+#include "workspace.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -236,10 +237,23 @@ int app_resolve(const char *name, char *out, size_t out_size) {
 }
 
 int app_value_exists(const char *app) {
-    /* No path separator → treat as a macOS bundle name (or unresolved name
-       on Linux) and trust it rather than blocking the user. */
-    if (strchr(app, '/') == NULL) return 1;
-    return access(app, F_OK) == 0;
+    if (strchr(app, '/') != NULL)
+        return access(app, F_OK) == 0;
+
+    /* Bundle name (no path separator): verify via osascript.
+       Only attempt for names composed of safe characters to avoid shell
+       injection — names with unusual chars are trusted rather than blocked. */
+    for (const char *p = app; *p; p++) {
+        char c = *p;
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == ' ' || c == '-' ||
+              c == '.' || c == '(' || c == ')' || c == '&'))
+            return 1;
+    }
+    char cmd[WORKSPACE_APP_MAX + 64];
+    snprintf(cmd, sizeof(cmd),
+             "osascript -e 'id of application \"%s\"' >/dev/null 2>&1", app);
+    return system(cmd) == 0;
 }
 
 #endif
