@@ -327,10 +327,6 @@ static void cmd_config(int argc, char *argv[]) {
     }
 }
 
-static int is_new_window_app(const char *app) {
-    return strcmp(app, "code") == 0;
-}
-
 #ifdef _WIN32
 /* Launches an app + optional target.
    code/cursor are .cmd launchers on PATH, so they go through a hidden cmd.exe.

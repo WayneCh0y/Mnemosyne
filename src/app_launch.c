@@ -12,7 +12,7 @@
 #endif
 
 int is_new_window_app(const char *app) {
-    return strcmp(app, "code") == 0 || strcmp(app, "cursor") == 0;
+    return strcmp(app, "code") == 0;
 }
 
 int is_url(const char *value) {
