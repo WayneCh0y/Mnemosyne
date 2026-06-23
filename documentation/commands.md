@@ -141,6 +141,7 @@ Manages workspaces — named collections of apps, URLs, and paths to launch all 
 ```
 mn open                          # interactive picker to choose and launch a workspace
 mn open create <name>            # create a new empty workspace
+mn open snap                     # snapshot the apps you have open into a new workspace
 mn open add                      # interactive picker to add an app to a workspace
 mn open remove                   # interactive picker to remove a workspace or an app
 ```
@@ -158,6 +159,29 @@ mn open add
 3. **URL or path** — opened as an argument to the app (press Enter to skip for standalone apps). For `code` / `cursor` you instead pick a path from your indexed files.
 
 When typing an app/path, `Backspace` only deletes characters — it no longer jumps back a step; use `Esc` for that.
+
+**Snapshotting running apps**
+
+```
+mn open snap
+```
+
+`mn open snap` builds a workspace from the applications you currently have open, so you don't have to add them one by one. The flow is interactive (`Esc` steps back, cancels at the first step):
+1. **Review** — a checklist of the detected apps, all pre-ticked. `↑`/`↓` move, `Space` toggles a row, `Enter` confirms. Deselect anything you don't want (e.g. the terminal, file-explorer windows).
+2. **Name** — type a name for the new workspace. If the name already exists you're asked for another.
+
+Snapshots capture **apps only**, not document/tab state — each entry is saved with no target:
+
+- **Browsers** (Edge/Chrome/…) are saved as the browser itself. Relaunching via `mn open` reopens the browser, which restores its own previous session if it's configured to "continue where you left off". Individual tab URLs are *not* captured (there's no reliable way to read them); add specific URLs by hand with `mn open add` if you need them pinned.
+- The terminal that launched `mn` is excluded automatically.
+
+Platform notes:
+
+| Platform | How running apps are detected |
+|---|---|
+| **Windows** | Visible top-level windows → their process's full `.exe` path |
+| **macOS** | Foreground (non-background) GUI apps by name (launched later with `open -a`) |
+| **Linux** | `wmctrl -lp` → each window's process → `/proc/<pid>/exe`. Requires `wmctrl` (install via your package manager); otherwise `mn open snap` reports that it's missing. |
 
 **Removing**
 

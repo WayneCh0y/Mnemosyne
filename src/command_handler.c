@@ -26,6 +26,7 @@
 #include "workspace.h"
 #include "app_resolve.h"
 #include "app_launch.h"
+#include "app_enum.h"
 
 static int is_valid_add(int argc) {
     if (argc == 3) {
@@ -697,11 +698,83 @@ static void cmd_open_remove(void) {
     }
 }
 
+static void cmd_open_snap(void) {
+    RunningApp apps[WORKSPACE_ENTRIES_MAX];
+    int n = app_enum_running(apps, WORKSPACE_ENTRIES_MAX);
+    if (n < 0) {
+#ifdef __linux__
+        fprintf(stderr, "error: snapshot needs 'wmctrl' — install it via your package manager\n");
+#else
+        fprintf(stderr, "error: failed to read running apps on this platform\n");
+#endif
+        return;
+    }
+    if (n == 0) {
+        printf("No running apps detected.\n");
+        return;
+    }
+
+    const char *labels[WORKSPACE_ENTRIES_MAX];
+    int selected[WORKSPACE_ENTRIES_MAX];
+    for (int i = 0; i < n; i++) { labels[i] = apps[i].display; selected[i] = 1; }
+
+    char name[WORKSPACE_NAME_MAX] = {0};
+    int name_taken = 0;
+
+    /* Two-step flow; Esc steps back (and cancels at the review step). */
+    enum { SNAP_REVIEW, SNAP_NAME } state = SNAP_REVIEW;
+    for (;;) {
+        if (state == SNAP_REVIEW) {
+            if (!run_multiselect_picker("Snapshot running apps",
+                                        "Space toggle  •  Enter confirm  •  Esc cancel",
+                                        labels, n, selected)) {
+                printf(ANSI_CLEAR ANSI_RESET "Cancelled.\n");
+                return;
+            }
+            int any = 0;
+            for (int i = 0; i < n; i++) any += selected[i];
+            if (!any) {
+                printf(ANSI_CLEAR ANSI_RESET "Nothing selected.\n");
+                return;
+            }
+            state = SNAP_NAME;
+        } else { /* SNAP_NAME */
+            const char *subtitle = name_taken
+                ? "\033[33mthat name already exists — pick another.\033[0m"
+                : "Name for the new workspace.";
+            if (!run_text_input("Snapshot workspace", subtitle, "Name",
+                                name, sizeof(name), 0)) {
+                state = SNAP_REVIEW;   /* Esc → back to the checklist */
+                name_taken = 0;
+                continue;
+            }
+            int rc = workspace_create(name);
+            if (rc == -1) { name_taken = 1; continue; }   /* exists → re-prompt */
+            if (rc != 0) {
+                printf(ANSI_CLEAR ANSI_RESET);
+                fprintf(stderr, "error: failed to create workspace\n");
+                return;
+            }
+            break;
+        }
+    }
+
+    int added = 0;
+    for (int i = 0; i < n; i++) {
+        if (!selected[i]) continue;
+        if (workspace_add_entry(name, apps[i].app, "") == 0) added++;
+    }
+    printf(ANSI_CLEAR ANSI_RESET);
+    printf("Created workspace '%s' with %d app%s.\n",
+           name, added, added == 1 ? "" : "s");
+}
+
 static void cmd_open(int argc, char *argv[]) {
     if (argc == 2)                                       { cmd_open_run();           return; }
     if (argc == 4 && strcmp(argv[2], "create") == 0)     { cmd_open_create(argv[3]); return; }
     if (argc == 3 && strcmp(argv[2], "add")    == 0)     { cmd_open_add();           return; }
     if (argc == 3 && strcmp(argv[2], "remove") == 0)     { cmd_open_remove();        return; }
+    if (argc == 3 && strcmp(argv[2], "snap")   == 0)     { cmd_open_snap();          return; }
     print_help();
 }
 

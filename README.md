@@ -150,6 +150,9 @@ mn list
 mn open create work
 mn open add
 
+# or snapshot the apps you already have open into a new workspace
+mn open snap
+
 # launch everything in a workspace (interactive picker)
 mn open
 ```

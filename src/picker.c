@@ -187,6 +187,55 @@ int run_ide_picker(const char **list, int display) {
                            list, display);
 }
 
+/* ── Multi-select checklist picker ─────────────────────────────────────── */
+
+static void render_multiselect(const char *title, const char *subtitle,
+                               const char **labels, int count,
+                               const int *selected, int cursor) {
+    print_picker_header(title, subtitle);
+    int start = picker_window_start(cursor, count);
+    int end   = start + (count < PICKER_WINDOW ? count : PICKER_WINDOW);
+    print_more_above(start);
+    for (int i = start; i < end; i++) {
+        const char *box = selected[i] ? "[x]" : "[ ]";
+        if (i == cursor)
+            printf(ANSI_SEL "  ▶ %s %s" ANSI_RESET "\n", box, labels[i]);
+        else
+            printf(ANSI_DIM "    %s %s" ANSI_RESET "\n", box, labels[i]);
+    }
+    print_more_below(end, count);
+    printf("\n" ANSI_DIM "↑/↓ move  •  Space toggle  •  Enter confirm  •  Esc cancel" ANSI_RESET);
+    fflush(stdout);
+}
+
+int run_multiselect_picker(const char *title, const char *subtitle,
+                           const char **labels, int count, int *selected) {
+    int cursor    = 0;
+    int done      = 0;
+    int cancelled = 0;
+
+    printf(ANSI_CURSOR_HIDE);
+    render_multiselect(title, subtitle, labels, count, selected, cursor);
+
+    while (!done) {
+        int key = read_key();
+        switch (key) {
+        case KEY_UP:    if (cursor > 0)         cursor--; break;
+        case KEY_DOWN:  if (cursor < count - 1) cursor++; break;
+        case ' ':       selected[cursor] = !selected[cursor]; break;
+        case KEY_ENTER: done = 1; break;
+        case KEY_ESC:   cancelled = 1; done = 1; break;
+        default: break;
+        }
+        if (!done)
+            render_multiselect(title, subtitle, labels, count, selected, cursor);
+    }
+
+    printf(ANSI_CURSOR_SHOW);
+    fflush(stdout);
+    return cancelled ? 0 : 1;
+}
+
 /* ── Search results picker ─────────────────────────────────────────────── */
 
 static void print_context(const SearchResult *r, int dimmed) {

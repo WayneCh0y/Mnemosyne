@@ -29,6 +29,11 @@ int read_key(void);
 int run_menu_picker(const char *title, const char *subtitle,
                     const char **list, int display);
 int run_ide_picker(const char **list, int display);
+/* Multi-select checklist. selected[] (length count) is in/out: 1 = ticked.
+   Space toggles the highlighted row, Enter confirms, Esc cancels.
+   Returns 1 if confirmed, 0 if cancelled. */
+int run_multiselect_picker(const char *title, const char *subtitle,
+                           const char **labels, int count, int *selected);
 int run_search_picker(SearchResult *results, int count);
 int run_list_picker(IndexEntry *entries, int count,
                     const char *title, const char *subtitle);
