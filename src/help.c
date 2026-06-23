@@ -35,10 +35,8 @@ void print_help(void) {
     printf(DIM "  Named sets of apps / URLs to launch together." RESET "\n");
     printf("  mn " CYAN "open" RESET "                         Interactive picker\n");
     printf("  mn " CYAN "open create" RESET " <name>          Create a workspace\n");
-    printf("  mn " CYAN "open add" RESET " <name>             Add an app to a workspace\n");
-    printf("  mn " CYAN "open list" RESET "                   Pick a workspace to open\n");
-    printf("  mn " CYAN "open remove" RESET " <name>          Remove a workspace\n");
-    printf("  mn " CYAN "open remove" RESET " <name> <N>      Remove entry N from a workspace\n\n");
+    printf("  mn " CYAN "open add" RESET "                    Add an app to a workspace (picker)\n");
+    printf("  mn " CYAN "open remove" RESET "                 Remove a workspace or app (picker)\n\n");
 
     print_section("PICKER CONTROLS");
     printf(DIM "  (search · list · config ide)" RESET "\n");
@@ -52,9 +50,8 @@ void print_help(void) {
     printf("  mn " CYAN "add" RESET " notes.txt\n");
     printf("  mn " CYAN "search" RESET " \"simplex algorithm\"\n");
     printf("  mn " CYAN "open create" RESET " work\n");
-    printf("  mn " CYAN "open add" RESET " work\n");
-    printf("  mn " CYAN "open remove" RESET " work\n");
-    printf("  mn " CYAN "open remove" RESET " work 2\n");
+    printf("  mn " CYAN "open add" RESET "\n");
+    printf("  mn " CYAN "open remove" RESET "\n");
     printf("  mn " CYAN "open\n" RESET);
     printf("  mn " CYAN "config" RESET " ide\n");
 }

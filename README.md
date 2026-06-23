@@ -148,7 +148,7 @@ mn list
 
 # create a workspace, then add apps to it (code/cursor, or a full path to any .exe/app)
 mn open create work
-mn open add work
+mn open add
 
 # launch everything in a workspace (interactive picker)
 mn open

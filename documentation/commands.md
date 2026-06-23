@@ -141,39 +141,40 @@ Manages workspaces — named collections of apps, URLs, and paths to launch all 
 ```
 mn open                          # interactive picker to choose and launch a workspace
 mn open create <name>            # create a new empty workspace
-mn open add <name>               # interactively add an app to a workspace
-mn open list                     # interactive picker to choose and launch a workspace
-mn open remove <name>            # remove a workspace entirely
-mn open remove <name> <N>        # remove entry at index N from a workspace
+mn open add                      # interactive picker to add an app to a workspace
+mn open remove                   # interactive picker to remove a workspace or an app
 ```
 
 **Creating and populating a workspace**
 
 ```
 mn open create work
-mn open add work
+mn open add
 ```
 
-`mn open add` is interactive (same picker UI as the rest of the app; press `Esc` at any step to cancel) and collects:
-1. **App** — a menu of `code`, `cursor`, or **Full path to an executable…**. The last option lets you type the full path to any app (e.g. `C:\Users\you\AppData\Local\Discord\app-1.0\Discord.exe`, `/Applications/Discord.app`, `/usr/bin/foo`); if that path doesn't exist on this machine you'll get a non-blocking warning.
-2. **URL or path** — opened as an argument to the app (press Enter to skip for standalone apps). For `code` / `cursor` you instead pick a path from your indexed files.
+`mn open add` is fully interactive (same picker UI as the rest of the app). It walks through three steps; pressing `Esc` steps **back** one step (and cancels at the first step):
+1. **Workspace** — pick which workspace to add to.
+2. **App** — a menu of `code`, or **Program name or full path…**. The last option lets you type a program name (e.g. `chrome`) or the full path to any app (e.g. `C:\Users\you\AppData\Local\Discord\app-1.0\Discord.exe`, `/Applications/Discord.app`, `/usr/bin/foo`); if that value doesn't exist on this machine you'll get a non-blocking warning.
+3. **URL or path** — opened as an argument to the app (press Enter to skip for standalone apps). For `code` / `cursor` you instead pick a path from your indexed files.
 
-**Listing workspaces**
-
-`mn open list` is an alias for `mn open` — it opens the interactive picker so you can choose a workspace to launch. Both show each workspace with its app count and use the same UI as `mn search` / `mn list`.
+When typing an app/path, `Backspace` only deletes characters — it no longer jumps back a step; use `Esc` for that.
 
 **Removing**
 
 ```
-mn open remove work        # deletes the 'work' workspace
-mn open remove work 2      # removes entry 2 from the 'work' workspace
+mn open remove
 ```
 
-Entry indices are 1-based in the order entries were added.
+`mn open remove` is fully interactive. A menu first asks whether you want to remove **a whole workspace** or **an app from a workspace**:
+
+- *A whole workspace* → pick the workspace; it is removed immediately.
+- *An app from a workspace* → pick the workspace, then pick the app; it is removed immediately.
+
+As with `mn open add`, `Esc` steps back one level (app picker → workspace picker → menu), cancelling only at the first menu.
 
 **Opening a workspace**
 
-`mn open` (with no arguments) shows an interactive picker listing all workspaces with their app count. Selecting one launches all its entries in sequence.
+`mn open` (with no arguments) shows an interactive picker listing all workspaces with their app count. The **currently highlighted** workspace expands to show its apps in a framed list (long URLs/paths are shown in full, never truncated); other workspaces stay collapsed. Selecting one launches all its entries in sequence.
 
 **Interactive controls**
 
@@ -197,7 +198,7 @@ Entry indices are 1-based in the order entries were added.
 
 If a launch fails (e.g. the stored path no longer exists), an `error: failed to launch '<app>'` message is printed instead of failing silently.
 
-**Auto-close** — once something is actually opened, `mn` closes the terminal window it was launched from (by terminating the parent shell), leaving just the opened apps. This applies to `mn search` → open, `mn list` → open, and `mn open` / `mn open list` → launch. Cancelling the picker with `Esc` opens nothing and leaves the terminal open. The auto-close is skipped when input isn't an interactive terminal (pipes, scripts), so it won't disrupt non-interactive usage.
+**Auto-close** — once something is actually opened, `mn` closes the terminal window it was launched from (by terminating the parent shell), leaving just the opened apps. This applies to `mn search` → open, `mn list` → open, and `mn open` → launch. Cancelling the picker with `Esc` opens nothing and leaves the terminal open. The auto-close is skipped when input isn't an interactive terminal (pipes, scripts), so it won't disrupt non-interactive usage.
 
 Workspaces are stored in `~/.mnemosyne/workspaces.json`.
 
