@@ -22,13 +22,22 @@
 #define ANSI_MAGENTA     "\033[35m"
 #define ANSI_BLUE        "\033[34m"
 #define ANSI_YELLOW      "\033[33m"
+#define ANSI_DIM_YELLOW  "\033[2;33m"
 
 int read_key(void);
+/* Generic numbered string-list picker. Returns the chosen index, or -1 (Esc). */
+int run_menu_picker(const char *title, const char *subtitle,
+                    const char **list, int display);
 int run_ide_picker(const char **list, int display);
 int run_search_picker(SearchResult *results, int count);
 int run_list_picker(IndexEntry *entries, int count,
                     const char *title, const char *subtitle);
-int run_workspace_picker(Workspace *ws, int count);
+/* Workspace picker: lists workspaces, expanding the selected one's apps in a
+   left-rail frame. Returns the chosen index, or -1 (Esc). */
+int run_workspace_picker(Workspace *ws, int count,
+                         const char *title, const char *subtitle);
+/* Picks one entry from a workspace. Returns the entry index, or -1 (Esc). */
+int run_entry_picker(const Workspace *ws, const char *title, const char *subtitle);
 /* Returns 1 with path_out filled (selected from list or typed), 0 if cancelled. */
 int run_path_picker(IndexEntry *entries, int count, char *path_out, size_t path_out_size);
 /* App chooser: menu of code / cursor / full-path-typed. Returns 1 with app_out

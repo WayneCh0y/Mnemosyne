@@ -79,7 +79,7 @@ static void print_more_below(int end, int count) {
         printf(ANSI_DIM "    ⋯ %d more below" ANSI_RESET "\n", count - end);
 }
 
-/* ── IDE config picker ─────────────────────────────────────────────────── */
+/* ── Generic menu picker ───────────────────────────────────────────────── */
 
 static void print_picker_header(const char *title, const char *subtitle) {
     printf(ANSI_CLEAR ANSI_RESET);
@@ -100,9 +100,10 @@ static void print_picker_footer(int num_input, int show_error) {
     fflush(stdout);
 }
 
-static void render_ide_list(const char **list, int display, int selected,
-                            int num_input, int show_error) {
-    print_picker_header("Choose a default IDE", "Use the arrow keys to move, Enter to confirm, Esc to cancel.");
+static void render_menu_list(const char *title, const char *subtitle,
+                             const char **list, int display, int selected,
+                             int num_input, int show_error) {
+    print_picker_header(title, subtitle);
     for (int i = 0; i < display; i++) {
         if (num_input < 0 && i == selected) {
             printf(ANSI_SEL "  ▶ [%d] %s" ANSI_RESET "\n", i + 1, list[i]);
@@ -113,7 +114,8 @@ static void render_ide_list(const char **list, int display, int selected,
     print_picker_footer(num_input, show_error);
 }
 
-int run_ide_picker(const char **list, int display) {
+int run_menu_picker(const char *title, const char *subtitle,
+                    const char **list, int display) {
     int selected = 0;
     int prev_selected = 0;
     int num_input = -1;
@@ -121,7 +123,7 @@ int run_ide_picker(const char **list, int display) {
     int done = 0;
 
     printf(ANSI_CURSOR_HIDE);
-    render_ide_list(list, display, selected, num_input, show_error);
+    render_menu_list(title, subtitle, list, display, selected, num_input, show_error);
 
     while (!done) {
         int key = read_key();
@@ -170,12 +172,19 @@ int run_ide_picker(const char **list, int display) {
             }
         }
 
-        if (!done) render_ide_list(list, display, selected, num_input, show_error);
+        if (!done)
+            render_menu_list(title, subtitle, list, display, selected, num_input, show_error);
     }
 
     printf(ANSI_CURSOR_SHOW);
     fflush(stdout);
     return selected;
+}
+
+int run_ide_picker(const char **list, int display) {
+    return run_menu_picker("Choose a default IDE",
+                           "Use the arrow keys to move, Enter to confirm, Esc to cancel.",
+                           list, display);
 }
 
 /* ── Search results picker ─────────────────────────────────────────────── */
@@ -393,35 +402,53 @@ int run_list_picker(IndexEntry *entries, int count,
 
 /* ── Workspace picker ──────────────────────────────────────────────────── */
 
+/* Most entries to show under the selected workspace before collapsing the rest
+   into a "⋯ K more" line, so a large workspace can't overflow. */
+#define WS_FRAME_MAX_ENTRIES 8
+
+/* Render the selected workspace's entries along a left rail (a dimmed-yellow
+   vertical bar per line, no right border so long paths/URLs are never
+   truncated). */
+static void render_workspace_frame(const Workspace *w) {
+    if (w->entry_count == 0) return;
+    int shown = w->entry_count < WS_FRAME_MAX_ENTRIES
+                ? w->entry_count : WS_FRAME_MAX_ENTRIES;
+    for (int j = 0; j < shown; j++) {
+        if (w->entries[j].target[0] != '\0')
+            printf(ANSI_DIM_YELLOW "    │ - %s \xe2\x86\x92 %s" ANSI_RESET "\n",
+                   w->entries[j].app, w->entries[j].target);
+        else
+            printf(ANSI_DIM_YELLOW "    │ - %s" ANSI_RESET "\n",
+                   w->entries[j].app);
+    }
+    if (w->entry_count > shown)
+        printf(ANSI_DIM_YELLOW "    │ ⋯ %d more" ANSI_RESET "\n", w->entry_count - shown);
+}
+
 static void render_workspace_list(Workspace *ws, int count, int selected,
-                                  int num_input, int show_error) {
-    print_picker_header("Open a workspace", "Use the arrow keys to move, Enter to open, Esc to cancel.");
+                                  int num_input, int show_error,
+                                  const char *title, const char *subtitle) {
+    print_picker_header(title, subtitle);
     int start = picker_window_start(selected, count);
     int end   = start + (count < PICKER_WINDOW ? count : PICKER_WINDOW);
     print_more_above(start);
     for (int i = start; i < end; i++) {
-        if (num_input < 0 && i == selected)
+        if (num_input < 0 && i == selected) {
             printf(ANSI_SEL "  ▶ [%d] %s (%d app%s)" ANSI_RESET "\n",
                    i + 1, ws[i].name, ws[i].entry_count, ws[i].entry_count == 1 ? "" : "s");
-        else
+            /* Expand the apps of the selected workspace only. */
+            render_workspace_frame(&ws[i]);
+        } else {
             printf(ANSI_DIM "    [%d] %s (%d app%s)" ANSI_RESET "\n",
                    i + 1, ws[i].name, ws[i].entry_count, ws[i].entry_count == 1 ? "" : "s");
-
-        /* List each entry (app, and its target if any) indented underneath. */
-        for (int j = 0; j < ws[i].entry_count; j++) {
-            if (ws[i].entries[j].target[0] != '\0')
-                printf(ANSI_DIM "        [%d] %s \xe2\x86\x92 %s" ANSI_RESET "\n",
-                       j + 1, ws[i].entries[j].app, ws[i].entries[j].target);
-            else
-                printf(ANSI_DIM "        [%d] %s" ANSI_RESET "\n",
-                       j + 1, ws[i].entries[j].app);
         }
     }
     print_more_below(end, count);
     print_picker_footer(num_input, show_error);
 }
 
-int run_workspace_picker(Workspace *ws, int count) {
+int run_workspace_picker(Workspace *ws, int count,
+                         const char *title, const char *subtitle) {
     int selected = 0;
     int prev_selected = 0;
     int num_input = -1;
@@ -429,7 +456,7 @@ int run_workspace_picker(Workspace *ws, int count) {
     int done = 0;
 
     printf(ANSI_CURSOR_HIDE);
-    render_workspace_list(ws, count, selected, num_input, show_error);
+    render_workspace_list(ws, count, selected, num_input, show_error, title, subtitle);
 
     while (!done) {
         int key = read_key();
@@ -478,7 +505,106 @@ int run_workspace_picker(Workspace *ws, int count) {
             }
         }
 
-        if (!done) render_workspace_list(ws, count, selected, num_input, show_error);
+        if (!done)
+            render_workspace_list(ws, count, selected, num_input, show_error, title, subtitle);
+    }
+
+    printf(ANSI_CURSOR_SHOW);
+    fflush(stdout);
+    return selected;
+}
+
+/* ── Entry picker (choose one app within a workspace) ───────────────────── */
+
+static void render_entry_list(const Workspace *w, int selected,
+                              int num_input, int show_error,
+                              const char *title, const char *subtitle) {
+    print_picker_header(title, subtitle);
+    if (w->entry_count == 0) {
+        printf(ANSI_DIM "    No apps in this workspace." ANSI_RESET "\n");
+        printf("\n" ANSI_DIM "Esc to go back" ANSI_RESET);
+        fflush(stdout);
+        return;
+    }
+    int start = picker_window_start(selected, w->entry_count);
+    int end   = start + (w->entry_count < PICKER_WINDOW ? w->entry_count : PICKER_WINDOW);
+    print_more_above(start);
+    for (int i = start; i < end; i++) {
+        const char *fmt_sel = w->entries[i].target[0] != '\0'
+            ? ANSI_SEL "  ▶ [%d] %s \xe2\x86\x92 %s" ANSI_RESET "\n"
+            : ANSI_SEL "  ▶ [%d] %s" ANSI_RESET "\n";
+        const char *fmt_dim = w->entries[i].target[0] != '\0'
+            ? ANSI_DIM "    [%d] %s \xe2\x86\x92 %s" ANSI_RESET "\n"
+            : ANSI_DIM "    [%d] %s" ANSI_RESET "\n";
+        const char *fmt = (num_input < 0 && i == selected) ? fmt_sel : fmt_dim;
+        printf(fmt, i + 1, w->entries[i].app, w->entries[i].target);
+    }
+    print_more_below(end, w->entry_count);
+    print_picker_footer(num_input, show_error);
+}
+
+int run_entry_picker(const Workspace *ws, const char *title, const char *subtitle) {
+    int count         = ws->entry_count;
+    int selected      = 0;
+    int prev_selected = 0;
+    int num_input     = -1;
+    int show_error    = 0;
+    int done          = 0;
+
+    printf(ANSI_CURSOR_HIDE);
+    render_entry_list(ws, selected, num_input, show_error, title, subtitle);
+
+    while (!done) {
+        int key = read_key();
+        show_error = 0;
+
+        if (count == 0) {
+            if (key == KEY_ESC || key == KEY_ENTER) { selected = -1; done = 1; }
+        } else if (num_input >= 0) {
+            if (key >= '1' && key <= '9') {
+                num_input = num_input * 10 + (key - '0');
+            } else if (key == '0') {
+                if (num_input > 0) num_input = num_input * 10;
+            } else if (key == KEY_BACKSPACE || key == 127) {
+                if (num_input > 0) num_input /= 10;
+            } else if (key == KEY_ENTER) {
+                if (num_input >= 1 && num_input <= count) {
+                    selected = num_input - 1;
+                    done = 1;
+                } else {
+                    show_error = 1;
+                    selected = prev_selected;
+                    num_input = -1;
+                }
+            } else if (key == KEY_ESC) {
+                selected = prev_selected;
+                num_input = -1;
+            } else if (key == KEY_UP) {
+                num_input = -1;
+                selected = prev_selected;
+                if (selected > 0) selected--;
+            } else if (key == KEY_DOWN) {
+                num_input = -1;
+                selected = prev_selected;
+                if (selected < count - 1) selected++;
+            }
+        } else {
+            switch (key) {
+            case KEY_UP:    if (selected > 0)         selected--; break;
+            case KEY_DOWN:  if (selected < count - 1) selected++; break;
+            case KEY_ENTER: done = 1;                             break;
+            case KEY_ESC:   selected = -1; done = 1;              break;
+            default:
+                if (key >= '1' && key <= '9') {
+                    prev_selected = selected;
+                    num_input = key - '0';
+                }
+                break;
+            }
+        }
+
+        if (!done)
+            render_entry_list(ws, selected, num_input, show_error, title, subtitle);
     }
 
     printf(ANSI_CURSOR_SHOW);
@@ -552,8 +678,7 @@ int run_path_picker(IndexEntry *entries, int count, char *path_out, size_t path_
             } else if (key == KEY_BACKSPACE || key == 127) {
                 if (typed_len > 0)
                     typed[--typed_len] = '\0';
-                else
-                    mode = PATH_PICKER_MODE_LIST;
+                /* Backspace on an empty buffer is a no-op; use Esc to go back. */
             } else if (key >= 32 && key < 127) {
                 if (typed_len < (int)sizeof(typed) - 1) {
                     typed[typed_len++] = (char)key;
@@ -695,7 +820,7 @@ int run_app_picker(char *app_out, size_t app_out_size) {
                 mode = PATH_PICKER_MODE_LIST;
             } else if (key == KEY_BACKSPACE || key == 127) {
                 if (typed_len > 0) typed[--typed_len] = '\0';
-                else mode = PATH_PICKER_MODE_LIST;
+                /* Backspace on an empty buffer is a no-op; use Esc to go back. */
             } else if (key >= 32 && key < 127) {
                 if (typed_len < (int)sizeof(typed) - 1) {
                     typed[typed_len++] = (char)key;

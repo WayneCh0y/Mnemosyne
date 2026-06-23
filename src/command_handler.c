@@ -517,7 +517,8 @@ static void cmd_open_run(void) {
         free(ws);
         return;
     }
-    int chosen = run_workspace_picker(ws, count);
+    int chosen = run_workspace_picker(ws, count, "Open a workspace",
+                                      "Use the arrow keys to move, Enter to open, Esc to cancel.");
     printf(ANSI_CLEAR ANSI_RESET);
     if (chosen != -1)
         launch_workspace(&ws[chosen]);
@@ -534,60 +535,83 @@ static void cmd_open_create(const char *name) {
         fprintf(stderr, "error: failed to create workspace\n");
 }
 
-static void cmd_open_add(const char *ws_name) {
-    Workspace tmp;
-    if (workspace_get(ws_name, &tmp) != 0) {
-        fprintf(stderr, "error: workspace '%s' not found\n", ws_name);
+static void cmd_open_add(void) {
+    int count;
+    Workspace *ws = workspace_load_all(&count);
+    if (!ws || count == 0) {
+        printf("No workspaces yet. Create one with: mn open create <name>\n");
+        free(ws);
         return;
     }
 
+    /* Three-step flow; Esc steps back one state (and exits at the first). */
+    enum { ADD_PICK_WS, ADD_PICK_APP, ADD_PICK_TARGET } state = ADD_PICK_WS;
+    int  ws_idx = -1;
     char app[WORKSPACE_APP_MAX];
     char target[WORKSPACE_TARGET_MAX] = {0};
+    int  done = 0;
 
-    if (!run_app_picker(app, sizeof(app))) {
-        printf(ANSI_CLEAR ANSI_RESET "Cancelled.\n");
-        return;
-    }
-
-    if (!is_new_window_app(app)) {
-        char resolved[WORKSPACE_APP_MAX];
-        if (app_resolve(app, resolved, sizeof(resolved))) {
-            strncpy(app, resolved, sizeof(app) - 1);
-            app[sizeof(app) - 1] = '\0';
+    while (!done) {
+        if (state == ADD_PICK_WS) {
+            int chosen = run_workspace_picker(ws, count, "Add to which workspace?",
+                                              "↑/↓ move  •  Enter choose  •  Esc cancel");
+            if (chosen == -1) {
+                printf(ANSI_CLEAR ANSI_RESET "Cancelled.\n");
+                free(ws);
+                return;
+            }
+            ws_idx = chosen;
+            state  = ADD_PICK_APP;
+        } else if (state == ADD_PICK_APP) {
+            if (!run_app_picker(app, sizeof(app))) {
+                state = ADD_PICK_WS;   /* Esc → back to workspace pick */
+                continue;
+            }
+            if (!is_new_window_app(app)) {
+                char resolved[WORKSPACE_APP_MAX];
+                if (app_resolve(app, resolved, sizeof(resolved))) {
+                    strncpy(app, resolved, sizeof(app) - 1);
+                    app[sizeof(app) - 1] = '\0';
+                }
+            }
+            state = ADD_PICK_TARGET;
+        } else { /* ADD_PICK_TARGET */
+            target[0] = '\0';
+            int ok;
+            if (is_new_window_app(app)) {
+                int entry_count;
+                IndexEntry *entries = index_get_entries(&entry_count);
+                if (!entries || entry_count == 0) {
+                    free(entries);
+                    ok = run_text_input("Add an app",
+                                        "Path to open in the IDE (Enter to skip).",
+                                        "Path", target, sizeof(target), 1);
+                } else {
+                    ok = run_path_picker(entries, entry_count, target, sizeof(target));
+                    free(entries);
+                }
+            } else {
+                /* Non-IDE app: warn (don't block) if the value won't launch on
+                   this machine — the user may be on a different machine when they
+                   run it. UWP markers and macOS bundle names are trusted without
+                   a fs check. */
+                int exists = app_value_exists(app);
+                const char *subtitle = exists
+                    ? "URL, app link (e.g. spotify:playlist:...), or file path. Enter to skip."
+                    : "\033[33mwarning: not found on this machine — it will still be saved.\033[0m";
+                ok = run_text_input("Add an app", subtitle, "URL or path",
+                                    target, sizeof(target), 1);
+            }
+            if (!ok) {
+                state = ADD_PICK_APP;   /* Esc → back to app pick */
+                continue;
+            }
+            done = 1;
         }
     }
 
-    if (is_new_window_app(app)) {
-        int entry_count;
-        IndexEntry *entries = index_get_entries(&entry_count);
-        if (!entries || entry_count == 0) {
-            free(entries);
-            int ok = run_text_input("Add an app",
-                                    "Path to open in the IDE (Enter to skip).",
-                                    "Path", target, sizeof(target), 1);
-            printf(ANSI_CLEAR ANSI_RESET);
-            if (!ok) { printf("Cancelled.\n"); return; }
-        } else {
-            int ok = run_path_picker(entries, entry_count, target, sizeof(target));
-            printf(ANSI_CLEAR ANSI_RESET);
-            free(entries);
-            if (!ok) { printf("Cancelled.\n"); return; }
-        }
-    } else {
-        /* Non-IDE app: warn (don't block) if the value won't launch on this
-           machine — the user may be on a different machine when they run it.
-           UWP markers and macOS bundle names are trusted without a fs check. */
-        int exists = app_value_exists(app);
-        const char *subtitle = exists
-            ? "URL, app link (e.g. spotify:playlist:...), or file path. Enter to skip."
-            : "\033[33mwarning: not found on this machine — it will still be saved.\033[0m";
-
-        int ok = run_text_input("Add an app", subtitle, "URL or path",
-                                target, sizeof(target), 1);
-        printf(ANSI_CLEAR ANSI_RESET);
-        if (!ok) { printf("Cancelled.\n"); return; }
-    }
-
+    printf(ANSI_CLEAR ANSI_RESET);
+    const char *ws_name = ws[ws_idx].name;
     int rc = workspace_add_entry(ws_name, app, target);
     if (rc == 0) {
         if (target[0] != '\0')
@@ -602,53 +626,82 @@ static void cmd_open_add(const char *ws_name) {
     } else {
         fprintf(stderr, "error: failed to save workspace\n");
     }
+    free(ws);
 }
 
-static void cmd_open_remove(int argc, char *argv[]) {
-    const char *name = argv[3];
+static void cmd_open_remove(void) {
+    static const char *RM_MENU_ITEMS[] = {
+        "A whole workspace", "An app from a workspace"
+    };
 
-    if (argc == 4) {
-        int rc = workspace_remove(name);
-        if (rc == 0)
-            printf("Workspace '%s' removed.\n", name);
-        else if (rc == -1)
-            fprintf(stderr, "error: workspace '%s' not found\n", name);
-        else
-            fprintf(stderr, "error: failed to remove workspace\n");
-        return;
-    }
+    /* Interactive flow; Esc steps back one state (and exits at the menu). */
+    enum { RM_MENU, RM_PICK_WS_DELETE, RM_PICK_WS_FORAPP, RM_PICK_APP } state = RM_MENU;
+    Workspace *ws = NULL;
+    int count = 0;
+    int ws_idx = -1;
 
-    /* argc == 5: remove entry by 1-based index */
-    int n = atoi(argv[4]);
-    if (n <= 0) {
-        fprintf(stderr, "error: entry index must be a positive number\n");
-        return;
+    for (;;) {
+        if (state == RM_MENU) {
+            int choice = run_menu_picker("Remove from a workspace",
+                                         "What do you want to remove?",
+                                         RM_MENU_ITEMS, 2);
+            if (choice == -1) { printf(ANSI_CLEAR ANSI_RESET "Cancelled.\n"); free(ws); return; }
+
+            free(ws);
+            ws = workspace_load_all(&count);
+            if (!ws || count == 0) {
+                printf(ANSI_CLEAR ANSI_RESET "No workspaces yet.\n");
+                free(ws);
+                return;
+            }
+            state = (choice == 0) ? RM_PICK_WS_DELETE : RM_PICK_WS_FORAPP;
+        } else if (state == RM_PICK_WS_DELETE) {
+            int chosen = run_workspace_picker(ws, count, "Remove a workspace",
+                                              "↑/↓ move  •  Enter remove  •  Esc back");
+            if (chosen == -1) { state = RM_MENU; continue; }
+            printf(ANSI_CLEAR ANSI_RESET);
+            const char *name = ws[chosen].name;
+            int rc = workspace_remove(name);
+            if (rc == 0)
+                printf("Workspace '%s' removed.\n", name);
+            else if (rc == -1)
+                fprintf(stderr, "error: workspace '%s' not found\n", name);
+            else
+                fprintf(stderr, "error: failed to remove workspace\n");
+            free(ws);
+            return;
+        } else if (state == RM_PICK_WS_FORAPP) {
+            int chosen = run_workspace_picker(ws, count, "Choose a workspace",
+                                              "↑/↓ move  •  Enter choose  •  Esc back");
+            if (chosen == -1) { state = RM_MENU; continue; }
+            ws_idx = chosen;
+            state  = RM_PICK_APP;
+        } else { /* RM_PICK_APP */
+            int chosen = run_entry_picker(&ws[ws_idx], "Remove an app",
+                                          "↑/↓ move  •  Enter remove  •  Esc back");
+            if (chosen == -1) { state = RM_PICK_WS_FORAPP; continue; }
+            printf(ANSI_CLEAR ANSI_RESET);
+            const char *name = ws[ws_idx].name;
+            int rc = workspace_remove_entry(name, chosen);
+            if (rc == 0)
+                printf("Entry %d removed from workspace '%s'.\n", chosen + 1, name);
+            else if (rc == -1)
+                fprintf(stderr, "error: workspace '%s' not found\n", name);
+            else if (rc == -2)
+                fprintf(stderr, "error: no entry at index %d\n", chosen + 1);
+            else
+                fprintf(stderr, "error: failed to save workspace\n");
+            free(ws);
+            return;
+        }
     }
-    int rc = workspace_remove_entry(name, n - 1);
-    if (rc == 0)
-        printf("Entry %d removed from workspace '%s'.\n", n, name);
-    else if (rc == -1)
-        fprintf(stderr, "error: workspace '%s' not found\n", name);
-    else if (rc == -2)
-        fprintf(stderr, "error: no entry at index %d (run 'mn open list' to see indices)\n", n);
-    else
-        fprintf(stderr, "error: failed to save workspace\n");
 }
 
 static void cmd_open(int argc, char *argv[]) {
-    if (argc == 2)                                                    { cmd_open_run();             return; }
-    if (argc == 3 && strcmp(argv[2], "list")   == 0)                  { cmd_open_run();             return; }
-    if (argc == 4 && strcmp(argv[2], "create") == 0)                  { cmd_open_create(argv[3]);   return; }
-    if (argc == 4 && strcmp(argv[2], "add")    == 0)                  { cmd_open_add(argv[3]);      return; }
-    if ((argc == 4 || argc == 5) && strcmp(argv[2], "remove") == 0)   { cmd_open_remove(argc, argv); return; }
-    if (argc == 3 && strcmp(argv[2], "add")    == 0) {
-        fprintf(stderr, "usage: mn open add <workspace-name>\n");
-        return;
-    }
-    if (argc == 3 && strcmp(argv[2], "remove") == 0) {
-        fprintf(stderr, "usage: mn open remove <workspace-name> [entry-index]\n");
-        return;
-    }
+    if (argc == 2)                                       { cmd_open_run();           return; }
+    if (argc == 4 && strcmp(argv[2], "create") == 0)     { cmd_open_create(argv[3]); return; }
+    if (argc == 3 && strcmp(argv[2], "add")    == 0)     { cmd_open_add();           return; }
+    if (argc == 3 && strcmp(argv[2], "remove") == 0)     { cmd_open_remove();        return; }
     print_help();
 }
 
