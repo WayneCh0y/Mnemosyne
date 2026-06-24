@@ -167,10 +167,11 @@ mn open snap
 ```
 
 `mn open snap` builds a workspace from the applications you currently have open, so you don't have to add them one by one. The flow is interactive (`Esc` steps back, cancels at the first step):
-1. **Review** — a checklist of the detected apps, all pre-ticked. `↑`/`↓` move, `Space` toggles a row, `Enter` confirms. Deselect anything you don't want (e.g. the terminal, file-explorer windows).
+1. **Review** — a list of the detected apps, all pre-selected (shown in **green**; the cursor row is marked with a white `▶`). `↑`/`↓` move, `Space` toggles a row between selected (green) and deselected (dim), `Enter` confirms. Deselect anything you don't want (e.g. the terminal, file-explorer windows).
+   - **Add links/targets** — with the cursor on a **selected (green)** app, press any printable key to start typing inline: an `Add link for <app>:` field appears at the bottom of the list (seeded with the key you pressed), where you can type a URL, app link, repository, or file path. `Enter` adds it, `Esc` cancels the edit, `Backspace` deletes. You can repeat to add **several links to the same app** (up to 8); each one is shown on its own dim-yellow `→ link` line beneath the app, the same way the `mn open` workspace view displays entries. Deselected (dim) apps don't accept links. Each link becomes a separate launch entry, so the app opens once per link; remove an individual link later with `mn open remove`.
 2. **Name** — type a name for the new workspace. If the name already exists you're asked for another.
 
-Snapshots capture **apps only**, not document/tab state — each entry is saved with no target:
+Apart from any links you set manually, snapshots capture **apps only**, not document/tab state — each remaining entry is saved with no target:
 
 - **Browsers** (Edge/Chrome/…) are saved as the browser itself. Relaunching via `mn open` reopens the browser, which restores its own previous session if it's configured to "continue where you left off". Individual tab URLs are *not* captured (there's no reliable way to read them); add specific URLs by hand with `mn open add` if you need them pinned.
 - The terminal that launched `mn` is excluded automatically.

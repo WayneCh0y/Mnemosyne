@@ -23,17 +23,30 @@
 #define ANSI_BLUE        "\033[34m"
 #define ANSI_YELLOW      "\033[33m"
 #define ANSI_DIM_YELLOW  "\033[2;33m"
+#define ANSI_GREEN       "\033[32m"
+#define ANSI_WHITE       "\033[37m"
 
 int read_key(void);
 /* Generic numbered string-list picker. Returns the chosen index, or -1 (Esc). */
 int run_menu_picker(const char *title, const char *subtitle,
                     const char **list, int display);
 int run_ide_picker(const char **list, int display);
+/* Per-app list of links/targets collected in the multiselect picker. */
+#define SNAP_LINKS_MAX 8
+typedef struct {
+    char items[SNAP_LINKS_MAX][WORKSPACE_TARGET_MAX];
+    int  count;
+} AppLinks;
+
 /* Multi-select checklist. selected[] (length count) is in/out: 1 = ticked.
    Space toggles the highlighted row, Enter confirms, Esc cancels.
+   If links is non-NULL (length count), pressing any printable key on a selected
+   row opens an inline field to add a link to that row; links are appended (up to
+   SNAP_LINKS_MAX) and shown as "→ link" lines beneath the app.
    Returns 1 if confirmed, 0 if cancelled. */
 int run_multiselect_picker(const char *title, const char *subtitle,
-                           const char **labels, int count, int *selected);
+                           const char **labels, int count, int *selected,
+                           AppLinks *links);
 int run_search_picker(SearchResult *results, int count);
 int run_list_picker(IndexEntry *entries, int count,
                     const char *title, const char *subtitle);

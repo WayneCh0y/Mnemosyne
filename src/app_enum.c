@@ -35,10 +35,33 @@ static int path_ieq(const char *a, const char *b) {
 static int path_eq(const char *a, const char *b) { return strcmp(a, b) == 0; }
 #endif
 
+/* If `display` (the captured basename / process name, with an optional trailing
+   .exe) is a known launcher, return the canonical name `mn open add` would store
+   so snapshots launch identically. Otherwise NULL. */
+static const char *canonical_launcher(const char *display) {
+    const char *b = base_name(display);
+    size_t n = strlen(b);
+    if (n >= 4) {                      /* strip a trailing ".exe", case-insensitive */
+        const char *ext = b + n - 4;
+        if (ext[0] == '.' &&
+            (ext[1] == 'e' || ext[1] == 'E') &&
+            (ext[2] == 'x' || ext[2] == 'X') &&
+            (ext[3] == 'e' || ext[3] == 'E'))
+            n -= 4;
+    }
+    if (n == 4 &&
+        (b[0] == 'c' || b[0] == 'C') && (b[1] == 'o' || b[1] == 'O') &&
+        (b[2] == 'd' || b[2] == 'D') && (b[3] == 'e' || b[3] == 'E'))
+        return "code";
+    return NULL;
+}
+
 /* Append app/display to out unless app is already present. */
 static void add_unique(RunningApp *out, int *count, int max,
                        const char *app, const char *display) {
     if (*count >= max) return;
+    const char *launch = canonical_launcher(display);
+    if (launch) app = launch;
     for (int i = 0; i < *count; i++) {
 #ifdef _WIN32
         if (path_ieq(out[i].app, app)) return;

@@ -716,6 +716,11 @@ static void cmd_open_snap(void) {
 
     const char *labels[WORKSPACE_ENTRIES_MAX];
     int selected[WORKSPACE_ENTRIES_MAX];
+    AppLinks *links = calloc(n, sizeof(AppLinks));
+    if (links == NULL) {
+        fprintf(stderr, "error: out of memory\n");
+        return;
+    }
     for (int i = 0; i < n; i++) { labels[i] = apps[i].display; selected[i] = 1; }
 
     char name[WORKSPACE_NAME_MAX] = {0};
@@ -726,15 +731,17 @@ static void cmd_open_snap(void) {
     for (;;) {
         if (state == SNAP_REVIEW) {
             if (!run_multiselect_picker("Snapshot running apps",
-                                        "Space toggle  •  Enter confirm  •  Esc cancel",
-                                        labels, n, selected)) {
+                                        "Pick apps; press any key on a green app to add a link.",
+                                        labels, n, selected, links)) {
                 printf(ANSI_CLEAR ANSI_RESET "Cancelled.\n");
+                free(links);
                 return;
             }
             int any = 0;
             for (int i = 0; i < n; i++) any += selected[i];
             if (!any) {
                 printf(ANSI_CLEAR ANSI_RESET "Nothing selected.\n");
+                free(links);
                 return;
             }
             state = SNAP_NAME;
@@ -753,6 +760,7 @@ static void cmd_open_snap(void) {
             if (rc != 0) {
                 printf(ANSI_CLEAR ANSI_RESET);
                 fprintf(stderr, "error: failed to create workspace\n");
+                free(links);
                 return;
             }
             break;
@@ -762,8 +770,17 @@ static void cmd_open_snap(void) {
     int added = 0;
     for (int i = 0; i < n; i++) {
         if (!selected[i]) continue;
-        if (workspace_add_entry(name, apps[i].app, "") == 0) added++;
+        int any = 0;
+        if (links[i].count == 0) {
+            any = (workspace_add_entry(name, apps[i].app, "") == 0);
+        } else {
+            for (int k = 0; k < links[i].count; k++)
+                if (workspace_add_entry(name, apps[i].app, links[i].items[k]) == 0)
+                    any = 1;
+        }
+        if (any) added++;
     }
+    free(links);
     printf(ANSI_CLEAR ANSI_RESET);
     printf("Created workspace '%s' with %d app%s.\n",
            name, added, added == 1 ? "" : "s");

@@ -189,46 +189,97 @@ int run_ide_picker(const char **list, int display) {
 
 /* ── Multi-select checklist picker ─────────────────────────────────────── */
 
+#define MS_MODE_LIST 0
+#define MS_MODE_TYPE 1
+
 static void render_multiselect(const char *title, const char *subtitle,
                                const char **labels, int count,
-                               const int *selected, int cursor) {
+                               const int *selected, const AppLinks *links,
+                               int cursor, int mode, const char *typed) {
     print_picker_header(title, subtitle);
     int start = picker_window_start(cursor, count);
     int end   = start + (count < PICKER_WINDOW ? count : PICKER_WINDOW);
     print_more_above(start);
     for (int i = start; i < end; i++) {
-        const char *box = selected[i] ? "[x]" : "[ ]";
-        if (i == cursor)
-            printf(ANSI_SEL "  ▶ %s %s" ANSI_RESET "\n", box, labels[i]);
-        else
-            printf(ANSI_DIM "    %s %s" ANSI_RESET "\n", box, labels[i]);
+        const char *arrow = (i == cursor) ? ANSI_WHITE "▶" ANSI_RESET : " ";
+        const char *color = selected[i] ? ANSI_GREEN : ANSI_DIM;
+        printf("  %s %s%s" ANSI_RESET "\n", arrow, color, labels[i]);
+        if (links && selected[i])
+            for (int k = 0; k < links[i].count; k++)
+                printf(ANSI_DIM_YELLOW "        \xe2\x86\x92 %s" ANSI_RESET "\n",
+                       links[i].items[k]);
     }
     print_more_below(end, count);
-    printf("\n" ANSI_DIM "↑/↓ move  •  Space toggle  •  Enter confirm  •  Esc cancel" ANSI_RESET);
+    if (mode == MS_MODE_TYPE) {
+        printf("\n" ANSI_CYAN "  Add link for %s: " ANSI_RESET "%s" ANSI_SEL "_" ANSI_RESET,
+               labels[cursor], typed);
+        printf("\n" ANSI_DIM "  Enter add  •  Esc cancel  •  Backspace delete" ANSI_RESET);
+    } else if (links) {
+        printf("\n" ANSI_DIM "↑/↓ move  •  Space toggle  •  type to add link  •  Enter confirm  •  Esc cancel" ANSI_RESET);
+    } else {
+        printf("\n" ANSI_DIM "↑/↓ move  •  Space toggle  •  Enter confirm  •  Esc cancel" ANSI_RESET);
+    }
     fflush(stdout);
 }
 
 int run_multiselect_picker(const char *title, const char *subtitle,
-                           const char **labels, int count, int *selected) {
-    int cursor    = 0;
-    int done      = 0;
-    int cancelled = 0;
+                           const char **labels, int count, int *selected,
+                           AppLinks *links) {
+    int  cursor    = 0;
+    int  done      = 0;
+    int  cancelled = 0;
+    int  mode      = MS_MODE_LIST;
+    char typed[WORKSPACE_TARGET_MAX] = {0};
+    int  typed_len = 0;
 
     printf(ANSI_CURSOR_HIDE);
-    render_multiselect(title, subtitle, labels, count, selected, cursor);
+    render_multiselect(title, subtitle, labels, count, selected, links, cursor, mode, typed);
 
     while (!done) {
         int key = read_key();
-        switch (key) {
-        case KEY_UP:    if (cursor > 0)         cursor--; break;
-        case KEY_DOWN:  if (cursor < count - 1) cursor++; break;
-        case ' ':       selected[cursor] = !selected[cursor]; break;
-        case KEY_ENTER: done = 1; break;
-        case KEY_ESC:   cancelled = 1; done = 1; break;
-        default: break;
+
+        if (mode == MS_MODE_TYPE) {
+            if (key == KEY_ENTER) {
+                if (typed_len > 0 && links[cursor].count < SNAP_LINKS_MAX) {
+                    int k = links[cursor].count;
+                    strncpy(links[cursor].items[k], typed, WORKSPACE_TARGET_MAX - 1);
+                    links[cursor].items[k][WORKSPACE_TARGET_MAX - 1] = '\0';
+                    links[cursor].count++;
+                }
+                mode = MS_MODE_LIST; typed[0] = '\0'; typed_len = 0;
+            } else if (key == KEY_ESC) {
+                mode = MS_MODE_LIST; typed[0] = '\0'; typed_len = 0;
+            } else if (key == KEY_BACKSPACE || key == 127) {
+                if (typed_len > 0) typed[--typed_len] = '\0';
+            } else if (key >= 32 && key < 127) {
+                if (typed_len < (int)sizeof(typed) - 1) {
+                    typed[typed_len++] = (char)key;
+                    typed[typed_len]   = '\0';
+                }
+            }
+        } else {
+            switch (key) {
+            case KEY_UP:    if (cursor > 0)         cursor--; break;
+            case KEY_DOWN:  if (cursor < count - 1) cursor++; break;
+            case ' ':       selected[cursor] = !selected[cursor]; break;
+            case KEY_ENTER: done = 1; break;
+            case KEY_ESC:   cancelled = 1; done = 1; break;
+            default:
+                /* Any printable key (not Space) on a selected row → start adding a
+                   link inline, seeded with that first character. */
+                if (links && selected[cursor] && key >= 33 && key < 127
+                    && links[cursor].count < SNAP_LINKS_MAX) {
+                    mode      = MS_MODE_TYPE;
+                    typed[0]  = (char)key;
+                    typed[1]  = '\0';
+                    typed_len = 1;
+                }
+                break;
+            }
         }
+
         if (!done)
-            render_multiselect(title, subtitle, labels, count, selected, cursor);
+            render_multiselect(title, subtitle, labels, count, selected, links, cursor, mode, typed);
     }
 
     printf(ANSI_CURSOR_SHOW);
