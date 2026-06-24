@@ -178,8 +178,7 @@ static int scan_file_tex(const char *path, const char *query, char *context, int
 }
 
 static int scan_file_pdf(const char *path, const char *query, char *context, int ctx_size) {
-    (void)path; (void)query; (void)context; (void)ctx_size;
-    return 0;
+    return scan_file_txt(path, query, query, context, ctx_size);
 }
 
 SearchResult *search(const char *query, const char *raw_query, int *count) {

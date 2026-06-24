@@ -35,6 +35,7 @@ SRCS = src/main.c \
        src/sha256.c \
        src/parser/txt.c \
        src/parser/md.c \
+	   src/parser/pdf.c \
        src/parser/parser.c \
        src/ingest.c \
        src/index.c \
@@ -51,6 +52,12 @@ else
     LDFLAGS =
 endif
 
+# Vendored poppler-windows release (Windows only). Override the version with:
+#   make fetch-poppler POPPLER_VERSION=25.07.0-0
+POPPLER_VERSION ?= 24.08.0-0
+POPPLER_URL      = https://github.com/oschwartz10612/poppler-windows/releases/download/v$(POPPLER_VERSION)/Release-$(POPPLER_VERSION).zip
+POPPLER_DIR      = vendor/poppler-windows
+
 $(TARGET): $(SRCS)
 	$(CC) $(CFLAGS) $(SRCS) -o $(TARGET) $(LDFLAGS)
 
@@ -62,6 +69,11 @@ install: $(TARGET)
 ifeq ($(SHELL_KIND),cmd)
 	@if not exist "$(INSTALL_DIR)" mkdir "$(INSTALL_DIR)"
 	$(COPY) "$(TARGET)" "$(INSTALL_DIR)\$(TARGET)"
+	@if exist "$(POPPLER_DIR)\bin\pdftotext.exe" ( \
+		if not exist "$(INSTALL_DIR)\poppler\bin" mkdir "$(INSTALL_DIR)\poppler\bin" && \
+		xcopy /Y /E /I /Q "$(POPPLER_DIR)\bin" "$(INSTALL_DIR)\poppler\bin" >nul && \
+		echo Bundled poppler installed to $(INSTALL_DIR)\poppler\bin \
+	)
 	@powershell -NoProfile -Command " \
 		$$cur = [Environment]::GetEnvironmentVariable('PATH','User'); \
 		if ($$cur -notlike '*$(INSTALL_DIR)*') { \
@@ -75,6 +87,11 @@ ifeq ($(SHELL_KIND),cmd)
 else ifeq ($(SHELL_KIND),sh)
 	@mkdir -p "$(INSTALL_DIR)"
 	$(COPY) "$(TARGET)" "$(INSTALL_DIR)/$(TARGET)"
+	@if [ -f "$(POPPLER_DIR)/bin/pdftotext.exe" ]; then \
+		mkdir -p "$(INSTALL_DIR)/poppler"; \
+		cp -rf "$(POPPLER_DIR)/bin" "$(INSTALL_DIR)/poppler/"; \
+		echo "Bundled poppler installed to $(INSTALL_DIR)/poppler/bin"; \
+	fi
 	@powershell.exe -NoProfile -Command " \
 		\$$dir = '$(INSTALL_DIR)'.Replace('/', '\\'); \
 		\$$cur = [Environment]::GetEnvironmentVariable('PATH','User'); \
@@ -106,4 +123,16 @@ endif
 clean:
 	$(DEL) $(TARGET)
 
-.PHONY: clean sanitize install uninstall
+# Download and stage poppler-windows so `make install` bundles pdftotext.exe
+# alongside mn.exe. Windows only. Delegates to scripts/fetch-poppler.ps1 so
+# we don't have to escape PowerShell syntax through cmd/sh.
+fetch-poppler:
+ifeq ($(OS), Windows_NT)
+	@powershell -NoProfile -ExecutionPolicy Bypass -File scripts/fetch-poppler.ps1 -Version $(POPPLER_VERSION) -OutDir $(POPPLER_DIR)
+else
+	@echo "fetch-poppler is Windows-only. On macOS/Linux install poppler-utils via your package manager:"
+	@echo "  brew install poppler          # macOS"
+	@echo "  apt install poppler-utils     # Debian/Ubuntu"
+endif
+
+.PHONY: clean sanitize install uninstall fetch-poppler
