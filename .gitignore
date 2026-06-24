@@ -21,3 +21,6 @@ Thumbs.db
 
 # Binaries
 *.exe
+
+# Vendored third-party binaries (fetched by `make fetch-poppler`)
+vendor/
