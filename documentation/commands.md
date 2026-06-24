@@ -20,13 +20,14 @@ mn add ~/Documents/thesis.pdf
 mn add project/design.md
 ```
 
-**Supported file types:** `.txt`, `.md`, `.tex`, `.pdf`
+**Supported file types:** `.txt`, `.md`, `.pdf` (`.tex` is recognised but not yet parsed).
 See [file-types.md](file-types.md) for how each format is parsed.
 
 **Behaviour**
 - If the file has already been indexed, it is re-indexed (content refreshed).
 - Unsupported file extensions print an error and exit with code 1.
 - Non-existent paths print an error and exit with code 1.
+- `.pdf` ingestion requires the `pdftotext` binary (poppler-utils). If it's not found, `mn add` prints a per-OS install hint and skips the file — all other file types continue to work. See [Enabling PDF support](../README.md#enabling-pdf-support).
 
 ---
 

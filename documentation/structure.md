@@ -20,6 +20,7 @@ graph TD
         ING[Ingestor\ningest.c]
         P_TXT[Plain Text Parser\nparser/txt.c]
         P_MD[Markdown Parser\nparser/md.c]
+        P_PDF[PDF Parser\nparser/pdf.c\nshells out to pdftotext]
     end
 
     subgraph Storage ["Index Store (~/.mnemosyne/)"]
@@ -37,8 +38,9 @@ graph TD
     CMD --> ING
     ING -- ".txt" --> P_TXT
     ING -- ".md" --> P_MD
-    P_TXT & P_MD --> MANIFEST
-    P_TXT & P_MD --> DOCS
+    ING -- ".pdf" --> P_PDF
+    P_TXT & P_MD & P_PDF --> MANIFEST
+    P_TXT & P_MD & P_PDF --> DOCS
 
     User -- "mn search query" --> CMD
     CMD --> SE
@@ -92,7 +94,7 @@ Reads and writes `workspaces.json` (via `cJSON`). A workspace is a named list of
 ### `ingest.c` — Ingestor
 Detects file extension, delegates to the correct parser, then writes the resulting plain text into `~/.mnemosyne/index/docs/<sha256>.txt` and updates `manifest.json`.
 
-Currently supports: `.txt`, `.md`. `.tex` and `.pdf` are recognised by extension but not yet parsed (v2+).
+Currently supports: `.txt`, `.md`, `.pdf`. `.tex` is recognised by extension but not yet parsed.
 
 ### `parser/` — Format Parsers
 Each parser receives a file path and returns a heap-allocated `char *` of plain text. The caller owns the buffer and frees it.
@@ -101,6 +103,7 @@ Each parser receives a file path and returns a heap-allocated `char *` of plain 
 |---|---|---|
 | `txt.c` | `.txt` | `fread` directly |
 | `md.c` | `.md` | strip formatting markers; lowercase output; emit `[LIST]`, `[LINK]` tokens |
+| `pdf.c` | `.pdf` | shell out to `pdftotext` (poppler-utils); on Windows, prefer a bundled copy next to `mn.exe` before falling back to PATH |
 | `parser.c` | dispatch | routes to the correct parser by `FileType` |
 
 ### `index.c` — Index Store
@@ -170,13 +173,17 @@ Mnemosyne/
 │       ├── txt.c
 │       ├── txt.h
 │       ├── md.c
-│       └── md.h
+│       ├── md.h
+│       ├── pdf.c
+│       └── pdf.h
 ├── documentation/
 │   ├── structure.md      ← this file
 │   ├── commands.md
 │   ├── file-types.md
 │   ├── development.md
 │   └── roadmap.md
+├── scripts/
+│   └── fetch-poppler.ps1 ← Windows-only: downloads bundled pdftotext
 ├── Makefile
 ├── build.bat
 ├── .gitignore
