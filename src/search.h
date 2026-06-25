@@ -7,6 +7,8 @@ typedef struct {
     char file_type[16];
     int  match_count;
     long last_modified;
+    int  match_start;  /* byte offset in context[] where query begins; -1 if path-only match */
+    int  match_len;    /* byte length of the matched query */
 } SearchResult;
 
 int is_word_match(const char *buf, const char *mp, const char *query);
