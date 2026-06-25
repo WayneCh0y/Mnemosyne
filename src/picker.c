@@ -305,17 +305,31 @@ static void print_context(const SearchResult *r, int dimmed) {
     const char *reset  = dimmed ? "\033[0;2m"  : ANSI_RESET;
     const char *color1 = dimmed ? "\033[2;35m" : ANSI_MAGENTA;
     const char *color2 = dimmed ? "\033[2;34m" : ANSI_BLUE;
+    const char *hl     = dimmed ? ANSI_DIM_YELLOW : "\033[30;43m";
+    int hl_start = r->match_start;
+    int hl_end   = (hl_start >= 0) ? hl_start + r->match_len : -1;
+    int in_hl    = 0;
     int is_md = (strcmp(r->file_type, "md") == 0);
     int at_line_start = 1;
     if (dimmed) printf(ANSI_DIM);
     printf("    ");
     const char *p = r->context;
     while (*p != '\0') {
+        int idx = (int)(p - r->context);
+        if (!in_hl && idx == hl_start) { printf("%s", hl); in_hl = 1; }
+        if ( in_hl && idx == hl_end)   { printf("%s", reset); if (dimmed) printf(ANSI_DIM); in_hl = 0; }
+
         if (is_md && at_line_start && *p == '#') {
             while (*p == '#') p++;
             if (*p == ' ') p++;
-            printf("%s", color1);
-            while (*p != '\0' && *p != '\n') putchar(*p++);
+            if (!in_hl) printf("%s", color1);
+            while (*p != '\0' && *p != '\n') {
+                int cidx = (int)(p - r->context);
+                if (!in_hl && cidx == hl_start) { printf("%s", hl); in_hl = 1; }
+                if ( in_hl && cidx == hl_end)   { printf("%s%s", reset, color1); in_hl = 0; }
+                putchar(*p++);
+            }
+            if (in_hl) { printf("%s", reset); in_hl = 0; }
             printf("%s", reset);
             at_line_start = 0;
         } else if (is_md && strncmp(p, "[LIST] ", 7) == 0) {
@@ -332,6 +346,7 @@ static void print_context(const SearchResult *r, int dimmed) {
             putchar(*p++); at_line_start = 0;
         }
     }
+    if (in_hl) printf(ANSI_RESET);
     printf(ANSI_RESET "\n");
 }
 

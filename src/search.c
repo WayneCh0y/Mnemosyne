@@ -87,7 +87,8 @@ static const char *extract_path_line(const char *buf, char *path_out, int path_o
     return after;
 }
 
-static void build_context_txt(const char *buf, const char *mp, const char *query, char *context, int ctx_size) {
+static void build_context_txt(const char *buf, const char *mp, const char *query,
+                               char *context, int ctx_size, int *match_start_out) {
     int   qlen    = (int)strlen(query);
     int   moff    = (int)(mp - buf);
     int   linelen = (int)strlen(buf);
@@ -110,6 +111,8 @@ static void build_context_txt(const char *buf, const char *mp, const char *query
     memcpy(context + pos, mp + qlen, show_after);         pos += show_after;
     if (suf_dots) { memcpy(context + pos, "...", 3); pos += 3; }
     context[pos] = '\0';
+
+    *match_start_out = pre_dots + show_before;
 }
 
 static char *read_file_buf(const char *path) {
@@ -128,7 +131,9 @@ static char *read_file_buf(const char *path) {
     return buf;
 }
 
-static int scan_file_txt(const char *path, const char *query, const char *raw_query, char *context, int ctx_size) {
+static int scan_file_txt(const char *path, const char *query, const char *raw_query,
+                          char *context, int ctx_size,
+                          int *match_start_out, int *match_len_out) {
     char *buf = read_file_buf(path);
     if (buf == NULL) return 0;
 
@@ -141,9 +146,14 @@ static int scan_file_txt(const char *path, const char *query, const char *raw_qu
     while ((p = strstr(p, query)) != NULL) {
         if (is_word_match(content_start, p, query)) {
             match_count++;
-            if (match_count == 1) build_context_txt(content_start, p, query, context, ctx_size);
+            if (match_count == 1)
+                build_context_txt(content_start, p, query, context, ctx_size, match_start_out);
         }
         p += qlen;
+    }
+
+    if (match_count > 0) {
+        *match_len_out = qlen;
     }
 
     if (stored_path[0] != '\0' && raw_query[0] != '\0') {
@@ -151,7 +161,11 @@ static int scan_file_txt(const char *path, const char *query, const char *raw_qu
         const char *rp = stored_path;
         while ((rp = strstr(rp, raw_query)) != NULL) {
             if (is_path_match(stored_path, rp, rqlen)) {
-                if (match_count == 0) build_context_start(content_start, context, ctx_size);
+                if (match_count == 0) {
+                    build_context_start(content_start, context, ctx_size);
+                    *match_start_out = -1;
+                    *match_len_out   = 0;
+                }
                 match_count++;
                 break;
             }
@@ -163,7 +177,9 @@ static int scan_file_txt(const char *path, const char *query, const char *raw_qu
     return match_count;
 }
 
-static int scan_file_md(const char *path, const char *query, const char *raw_query, char *context, int ctx_size) {
+static int scan_file_md(const char *path, const char *query, const char *raw_query,
+                         char *context, int ctx_size,
+                         int *match_start_out, int *match_len_out) {
     char *buf = read_file_buf(path);
     if (buf == NULL) return 0;
 
@@ -176,9 +192,14 @@ static int scan_file_md(const char *path, const char *query, const char *raw_que
     while ((p = strstr(p, query)) != NULL) {
         if (is_word_match(content_start, p, query)) {
             match_count++;
-            if (match_count == 1) build_context_txt(content_start, p, query, context, ctx_size);
+            if (match_count == 1)
+                build_context_txt(content_start, p, query, context, ctx_size, match_start_out);
         }
         p += qlen;
+    }
+
+    if (match_count > 0) {
+        *match_len_out = qlen;
     }
 
     if (stored_path[0] != '\0' && raw_query[0] != '\0') {
@@ -186,7 +207,11 @@ static int scan_file_md(const char *path, const char *query, const char *raw_que
         const char *rp = stored_path;
         while ((rp = strstr(rp, raw_query)) != NULL) {
             if (is_path_match(stored_path, rp, rqlen)) {
-                if (match_count == 0) build_context_start(content_start, context, ctx_size);
+                if (match_count == 0) {
+                    build_context_start(content_start, context, ctx_size);
+                    *match_start_out = -1;
+                    *match_len_out   = 0;
+                }
                 match_count++;
                 break;
             }
@@ -225,11 +250,12 @@ SearchResult *search(const char *query, const char *raw_query, int *count) {
 
         char context[256] = {0};
         int  match_count;
+        int  match_start = -1, match_len = 0;
         switch (file_type_from_string(entries[i].file_type)) {
-            case FILE_TYPE_MD:  match_count = scan_file_md(doc_path, query, raw_query, context, sizeof(context));  break;
-            case FILE_TYPE_TEX: match_count = scan_file_tex(doc_path, query, context, sizeof(context));            break;
-            case FILE_TYPE_PDF: match_count = scan_file_pdf(doc_path, query, context, sizeof(context));            break;
-            default:            match_count = scan_file_txt(doc_path, query, raw_query, context, sizeof(context)); break;
+            case FILE_TYPE_MD:  match_count = scan_file_md(doc_path, query, raw_query, context, sizeof(context), &match_start, &match_len);  break;
+            case FILE_TYPE_TEX: match_count = scan_file_tex(doc_path, query, context, sizeof(context));                                       break;
+            case FILE_TYPE_PDF: match_count = scan_file_pdf(doc_path, query, context, sizeof(context));                                       break;
+            default:            match_count = scan_file_txt(doc_path, query, raw_query, context, sizeof(context), &match_start, &match_len);  break;
         }
 
         if (match_count > 0) {
@@ -243,6 +269,8 @@ SearchResult *search(const char *query, const char *raw_query, int *count) {
             results[found].file_type[sizeof(results[found].file_type) - 1] = '\0';
             results[found].match_count   = match_count;
             results[found].last_modified = entries[i].last_modified;
+            results[found].match_start   = match_start;
+            results[found].match_len     = match_len;
             found++;
         }
     }
