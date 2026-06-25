@@ -23,12 +23,49 @@
 #define ANSI_BLUE        "\033[34m"
 #define ANSI_YELLOW      "\033[33m"
 #define ANSI_DIM_YELLOW  "\033[2;33m"
+#define ANSI_GREEN       "\033[32m"
+#define ANSI_WHITE       "\033[37m"
 
 int read_key(void);
 /* Generic numbered string-list picker. Returns the chosen index, or -1 (Esc). */
 int run_menu_picker(const char *title, const char *subtitle,
                     const char **list, int display);
 int run_ide_picker(const char **list, int display);
+/* Per-app list of links/targets collected in the multiselect picker. */
+#define SNAP_LINKS_MAX 8
+typedef struct {
+    char items[SNAP_LINKS_MAX][WORKSPACE_TARGET_MAX];
+    int  count;
+} AppLinks;
+
+/* Multi-select checklist. selected[] (length count) is in/out: 1 = ticked.
+   Space toggles the highlighted row, Enter confirms, Esc cancels.
+   If links is non-NULL (length count), pressing any printable key on a selected
+   row opens an inline field to add a link to that row; links are appended (up to
+   SNAP_LINKS_MAX) and shown as "→ link" lines beneath the app.
+   Returns 1 if confirmed, 0 if cancelled. */
+int run_multiselect_picker(const char *title, const char *subtitle,
+                           const char **labels, int count, int *selected,
+                           AppLinks *links);
+
+/* Workspace editor entry: one stored (app, target) pair (is_new=0) or a new
+   app being added this session (is_new=1). Each row in the editor represents
+   exactly one workspace entry so instances of the same app stay separate.
+   new_links holds additional links typed this session. */
+typedef struct {
+    char app[WORKSPACE_APP_MAX];
+    char display[256];
+    int  is_new;
+    char existing_target[WORKSPACE_TARGET_MAX];
+    AppLinks new_links;
+} WsEditorApp;
+
+/* Workspace editor picker for `mn open add`. Shows existing apps and their links;
+   lets the user add links to existing apps and add new (validated) apps.
+   apps[]/count are in/out: new apps are appended (is_new=1) and new_links filled.
+   Returns 1 if confirmed (Enter), 0 if cancelled (Esc). */
+int run_workspace_add_picker(const char *ws_name,
+                             WsEditorApp *apps, int *count, int max);
 int run_search_picker(SearchResult *results, int count);
 int run_list_picker(IndexEntry *entries, int count,
                     const char *title, const char *subtitle);
@@ -40,9 +77,8 @@ int run_workspace_picker(Workspace *ws, int count,
 int run_entry_picker(const Workspace *ws, const char *title, const char *subtitle);
 /* Returns 1 with path_out filled (selected from list or typed), 0 if cancelled. */
 int run_path_picker(IndexEntry *entries, int count, char *path_out, size_t path_out_size);
-/* App chooser: menu of code / cursor / full-path-typed. Returns 1 with app_out
-   filled, 0 if cancelled (Esc). */
-int run_app_picker(char *app_out, size_t app_out_size);
+/* Strip directory prefix and trailing .exe from app path for a short display name. */
+void ws_display_name(const char *app, char *out, size_t out_size);
 /* Single styled text input box. Returns 1 with out filled, 0 if cancelled (Esc).
    When allow_empty is set, Enter on an empty value confirms (used as "skip"). */
 int run_text_input(const char *title, const char *subtitle, const char *label,

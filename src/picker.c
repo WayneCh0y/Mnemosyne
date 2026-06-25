@@ -10,6 +10,8 @@
 #endif
 
 #include "picker.h"
+#include "app_resolve.h"
+#include "app_launch.h"
 
 #ifdef _WIN32
 int read_key(void) {
@@ -79,6 +81,41 @@ static void print_more_below(int end, int count) {
         printf(ANSI_DIM "    ⋯ %d more below" ANSI_RESET "\n", count - end);
 }
 
+/* ── Shared numeric-jump input handler ─────────────────────────────────── */
+
+/* Processes one keypress while num_input >= 0 (the digit-accumulation mode).
+   Updates num_input, selected, show_error, and done in-place. */
+static void handle_num_input(int key, int list_len,
+                             int *num_input, int *selected,
+                             int *prev_selected, int *show_error,
+                             int *done) {
+    if (key >= '1' && key <= '9') {
+        *num_input = *num_input * 10 + (key - '0');
+    } else if (key == '0') {
+        if (*num_input > 0) *num_input = *num_input * 10;
+    } else if (key == KEY_BACKSPACE || key == 127) {
+        if (*num_input > 0) *num_input /= 10;
+    } else if (key == KEY_ENTER) {
+        if (*num_input >= 1 && *num_input <= list_len) {
+            *selected = *num_input - 1;
+            *done = 1;
+        } else {
+            *show_error = 1;
+            *selected   = *prev_selected;
+            *num_input  = -1;
+        }
+    } else if (key == KEY_ESC) {
+        *selected  = *prev_selected;
+        *num_input = -1;
+    } else if (key == KEY_UP) {
+        *num_input = -1; *selected = *prev_selected;
+        if (*selected > 0) (*selected)--;
+    } else if (key == KEY_DOWN) {
+        *num_input = -1; *selected = *prev_selected;
+        if (*selected < list_len - 1) (*selected)++;
+    }
+}
+
 /* ── Generic menu picker ───────────────────────────────────────────────── */
 
 static void print_picker_header(const char *title, const char *subtitle) {
@@ -130,33 +167,8 @@ int run_menu_picker(const char *title, const char *subtitle,
         show_error = 0;
 
         if (num_input >= 0) {
-            if (key >= '1' && key <= '9') {
-                num_input = num_input * 10 + (key - '0');
-            } else if (key == '0') {
-                if (num_input > 0) num_input = num_input * 10;
-            } else if (key == KEY_BACKSPACE || key == 127) {
-                if (num_input > 0) num_input /= 10;
-            } else if (key == KEY_ENTER) {
-                if (num_input >= 1 && num_input <= display) {
-                    selected = num_input - 1;
-                    done = 1;
-                } else {
-                    show_error = 1;
-                    selected = prev_selected;
-                    num_input = -1;
-                }
-            } else if (key == KEY_ESC) {
-                selected = prev_selected;
-                num_input = -1;
-            } else if (key == KEY_UP) {
-                num_input = -1;
-                selected = prev_selected;
-                if (selected > 0) selected--;
-            } else if (key == KEY_DOWN) {
-                num_input = -1;
-                selected = prev_selected;
-                if (selected < display - 1) selected++;
-            }
+            handle_num_input(key, display, &num_input, &selected,
+                             &prev_selected, &show_error, &done);
         } else {
             switch (key) {
             case KEY_UP:    if (selected > 0)           selected--; break;
@@ -185,6 +197,106 @@ int run_ide_picker(const char **list, int display) {
     return run_menu_picker("Choose a default IDE",
                            "Use the arrow keys to move, Enter to confirm, Esc to cancel.",
                            list, display);
+}
+
+/* ── Multi-select checklist picker ─────────────────────────────────────── */
+
+#define MS_MODE_LIST 0
+#define MS_MODE_TYPE 1
+
+static void render_multiselect(const char *title, const char *subtitle,
+                               const char **labels, int count,
+                               const int *selected, const AppLinks *links,
+                               int cursor, int mode, const char *typed) {
+    print_picker_header(title, subtitle);
+    int start = picker_window_start(cursor, count);
+    int end   = start + (count < PICKER_WINDOW ? count : PICKER_WINDOW);
+    print_more_above(start);
+    for (int i = start; i < end; i++) {
+        const char *arrow = (i == cursor) ? ANSI_WHITE "▶" ANSI_RESET : " ";
+        const char *color = selected[i] ? ANSI_GREEN : ANSI_DIM;
+        printf("  %s %s%s" ANSI_RESET "\n", arrow, color, labels[i]);
+        if (links && selected[i])
+            for (int k = 0; k < links[i].count; k++)
+                printf(ANSI_DIM_YELLOW "        \xe2\x86\x92 %s" ANSI_RESET "\n",
+                       links[i].items[k]);
+    }
+    print_more_below(end, count);
+    if (mode == MS_MODE_TYPE) {
+        printf("\n" ANSI_CYAN "  Add link for %s: " ANSI_RESET "%s" ANSI_SEL "_" ANSI_RESET,
+               labels[cursor], typed);
+        printf("\n" ANSI_DIM "  Enter add  •  Esc cancel  •  Backspace delete" ANSI_RESET);
+    } else if (links) {
+        printf("\n" ANSI_DIM "↑/↓ move  •  Space toggle  •  type to add link  •  Enter confirm  •  Esc cancel" ANSI_RESET);
+    } else {
+        printf("\n" ANSI_DIM "↑/↓ move  •  Space toggle  •  Enter confirm  •  Esc cancel" ANSI_RESET);
+    }
+    fflush(stdout);
+}
+
+int run_multiselect_picker(const char *title, const char *subtitle,
+                           const char **labels, int count, int *selected,
+                           AppLinks *links) {
+    int  cursor    = 0;
+    int  done      = 0;
+    int  cancelled = 0;
+    int  mode      = MS_MODE_LIST;
+    char typed[WORKSPACE_TARGET_MAX] = {0};
+    int  typed_len = 0;
+
+    printf(ANSI_CURSOR_HIDE);
+    render_multiselect(title, subtitle, labels, count, selected, links, cursor, mode, typed);
+
+    while (!done) {
+        int key = read_key();
+
+        if (mode == MS_MODE_TYPE) {
+            if (key == KEY_ENTER) {
+                if (typed_len > 0 && links[cursor].count < SNAP_LINKS_MAX) {
+                    int k = links[cursor].count;
+                    strncpy(links[cursor].items[k], typed, WORKSPACE_TARGET_MAX - 1);
+                    links[cursor].items[k][WORKSPACE_TARGET_MAX - 1] = '\0';
+                    links[cursor].count++;
+                }
+                mode = MS_MODE_LIST; typed[0] = '\0'; typed_len = 0;
+            } else if (key == KEY_ESC) {
+                mode = MS_MODE_LIST; typed[0] = '\0'; typed_len = 0;
+            } else if (key == KEY_BACKSPACE || key == 127) {
+                if (typed_len > 0) typed[--typed_len] = '\0';
+            } else if (key >= 32 && key < 127) {
+                if (typed_len < (int)sizeof(typed) - 1) {
+                    typed[typed_len++] = (char)key;
+                    typed[typed_len]   = '\0';
+                }
+            }
+        } else {
+            switch (key) {
+            case KEY_UP:    if (cursor > 0)         cursor--; break;
+            case KEY_DOWN:  if (cursor < count - 1) cursor++; break;
+            case ' ':       selected[cursor] = !selected[cursor]; break;
+            case KEY_ENTER: done = 1; break;
+            case KEY_ESC:   cancelled = 1; done = 1; break;
+            default:
+                /* Any printable key (not Space) on a selected row → start adding a
+                   link inline, seeded with that first character. */
+                if (links && selected[cursor] && key >= 33 && key < 127
+                    && links[cursor].count < SNAP_LINKS_MAX) {
+                    mode      = MS_MODE_TYPE;
+                    typed[0]  = (char)key;
+                    typed[1]  = '\0';
+                    typed_len = 1;
+                }
+                break;
+            }
+        }
+
+        if (!done)
+            render_multiselect(title, subtitle, labels, count, selected, links, cursor, mode, typed);
+    }
+
+    printf(ANSI_CURSOR_SHOW);
+    fflush(stdout);
+    return cancelled ? 0 : 1;
 }
 
 /* ── Search results picker ─────────────────────────────────────────────── */
@@ -265,33 +377,8 @@ int run_search_picker(SearchResult *results, int count) {
         show_error = 0;
 
         if (num_input >= 0) {
-            if (key >= '1' && key <= '9') {
-                num_input = num_input * 10 + (key - '0');
-            } else if (key == '0') {
-                if (num_input > 0) num_input = num_input * 10;
-            } else if (key == KEY_BACKSPACE || key == 127) {
-                if (num_input > 0) num_input /= 10;
-            } else if (key == KEY_ENTER) {
-                if (num_input >= 1 && num_input <= count) {
-                    selected = num_input - 1;
-                    done = 1;
-                } else {
-                    show_error = 1;
-                    selected = prev_selected;
-                    num_input = -1;
-                }
-            } else if (key == KEY_ESC) {
-                selected = prev_selected;
-                num_input = -1;
-            } else if (key == KEY_UP) {
-                num_input = -1;
-                selected = prev_selected;
-                if (selected > 0) selected--;
-            } else if (key == KEY_DOWN) {
-                num_input = -1;
-                selected = prev_selected;
-                if (selected < count - 1) selected++;
-            }
+            handle_num_input(key, count, &num_input, &selected,
+                             &prev_selected, &show_error, &done);
         } else {
             switch (key) {
             case KEY_UP:    if (selected > 0)         selected--; break;
@@ -350,33 +437,8 @@ int run_list_picker(IndexEntry *entries, int count,
         show_error = 0;
 
         if (num_input >= 0) {
-            if (key >= '1' && key <= '9') {
-                num_input = num_input * 10 + (key - '0');
-            } else if (key == '0') {
-                if (num_input > 0) num_input = num_input * 10;
-            } else if (key == KEY_BACKSPACE || key == 127) {
-                if (num_input > 0) num_input /= 10;
-            } else if (key == KEY_ENTER) {
-                if (num_input >= 1 && num_input <= count) {
-                    selected = num_input - 1;
-                    done = 1;
-                } else {
-                    show_error = 1;
-                    selected = prev_selected;
-                    num_input = -1;
-                }
-            } else if (key == KEY_ESC) {
-                selected = prev_selected;
-                num_input = -1;
-            } else if (key == KEY_UP) {
-                num_input = -1;
-                selected = prev_selected;
-                if (selected > 0) selected--;
-            } else if (key == KEY_DOWN) {
-                num_input = -1;
-                selected = prev_selected;
-                if (selected < count - 1) selected++;
-            }
+            handle_num_input(key, count, &num_input, &selected,
+                             &prev_selected, &show_error, &done);
         } else {
             switch (key) {
             case KEY_UP:    if (selected > 0)         selected--; break;
@@ -411,18 +473,35 @@ int run_list_picker(IndexEntry *entries, int count,
    truncated). */
 static void render_workspace_frame(const Workspace *w) {
     if (w->entry_count == 0) return;
-    int shown = w->entry_count < WS_FRAME_MAX_ENTRIES
-                ? w->entry_count : WS_FRAME_MAX_ENTRIES;
-    for (int j = 0; j < shown; j++) {
-        if (w->entries[j].target[0] != '\0')
-            printf(ANSI_DIM_YELLOW "    │ - %s \xe2\x86\x92 %s" ANSI_RESET "\n",
-                   w->entries[j].app, w->entries[j].target);
-        else
-            printf(ANSI_DIM_YELLOW "    │ - %s" ANSI_RESET "\n",
-                   w->entries[j].app);
+    int lines = 0;
+    for (int j = 0; j < w->entry_count; j++) {
+        if (lines >= WS_FRAME_MAX_ENTRIES) {
+            printf(ANSI_DIM_YELLOW "    │ \xe2\x8b\xaf \xe2\x80\xa6" ANSI_RESET "\n");
+            break;
+        }
+        char disp[256];
+        ws_display_name(w->entries[j].app, disp, sizeof(disp));
+        int tc = w->entries[j].target_count;
+        if (tc == 0) {
+            printf(ANSI_DIM_YELLOW "    │ %s" ANSI_RESET "\n", disp);
+            lines++;
+        } else if (tc == 1) {
+            printf(ANSI_DIM_YELLOW "    │ %s \xe2\x86\x92 %s" ANSI_RESET "\n",
+                   disp, w->entries[j].targets[0]);
+            lines++;
+        } else {
+            /* Show app name on its own line, then each target indented. */
+            if (lines < WS_FRAME_MAX_ENTRIES) {
+                printf(ANSI_DIM_YELLOW "    │ %s" ANSI_RESET "\n", disp);
+                lines++;
+            }
+            for (int k = 0; k < tc && lines < WS_FRAME_MAX_ENTRIES; k++) {
+                printf(ANSI_DIM_YELLOW "    │    \xe2\x86\x92 %s" ANSI_RESET "\n",
+                       w->entries[j].targets[k]);
+                lines++;
+            }
+        }
     }
-    if (w->entry_count > shown)
-        printf(ANSI_DIM_YELLOW "    │ ⋯ %d more" ANSI_RESET "\n", w->entry_count - shown);
 }
 
 static void render_workspace_list(Workspace *ws, int count, int selected,
@@ -463,33 +542,8 @@ int run_workspace_picker(Workspace *ws, int count,
         show_error = 0;
 
         if (num_input >= 0) {
-            if (key >= '1' && key <= '9') {
-                num_input = num_input * 10 + (key - '0');
-            } else if (key == '0') {
-                if (num_input > 0) num_input = num_input * 10;
-            } else if (key == KEY_BACKSPACE || key == 127) {
-                if (num_input > 0) num_input /= 10;
-            } else if (key == KEY_ENTER) {
-                if (num_input >= 1 && num_input <= count) {
-                    selected = num_input - 1;
-                    done = 1;
-                } else {
-                    show_error = 1;
-                    selected = prev_selected;
-                    num_input = -1;
-                }
-            } else if (key == KEY_ESC) {
-                selected = prev_selected;
-                num_input = -1;
-            } else if (key == KEY_UP) {
-                num_input = -1;
-                selected = prev_selected;
-                if (selected > 0) selected--;
-            } else if (key == KEY_DOWN) {
-                num_input = -1;
-                selected = prev_selected;
-                if (selected < count - 1) selected++;
-            }
+            handle_num_input(key, count, &num_input, &selected,
+                             &prev_selected, &show_error, &done);
         } else {
             switch (key) {
             case KEY_UP:    if (selected > 0)         selected--; break;
@@ -530,14 +584,27 @@ static void render_entry_list(const Workspace *w, int selected,
     int end   = start + (w->entry_count < PICKER_WINDOW ? w->entry_count : PICKER_WINDOW);
     print_more_above(start);
     for (int i = start; i < end; i++) {
-        const char *fmt_sel = w->entries[i].target[0] != '\0'
-            ? ANSI_SEL "  ▶ [%d] %s \xe2\x86\x92 %s" ANSI_RESET "\n"
-            : ANSI_SEL "  ▶ [%d] %s" ANSI_RESET "\n";
-        const char *fmt_dim = w->entries[i].target[0] != '\0'
-            ? ANSI_DIM "    [%d] %s \xe2\x86\x92 %s" ANSI_RESET "\n"
-            : ANSI_DIM "    [%d] %s" ANSI_RESET "\n";
-        const char *fmt = (num_input < 0 && i == selected) ? fmt_sel : fmt_dim;
-        printf(fmt, i + 1, w->entries[i].app, w->entries[i].target);
+        int sel = (num_input < 0 && i == selected);
+        char disp[256];
+        ws_display_name(w->entries[i].app, disp, sizeof(disp));
+        int tc = w->entries[i].target_count;
+        if (tc == 0) {
+            printf(sel ? ANSI_SEL "  \xe2\x96\xb6 [%d] %s" ANSI_RESET "\n"
+                       : ANSI_DIM "    [%d] %s" ANSI_RESET "\n",
+                   i + 1, disp);
+        } else if (tc == 1) {
+            printf(sel ? ANSI_SEL "  \xe2\x96\xb6 [%d] %s \xe2\x86\x92 %s" ANSI_RESET "\n"
+                       : ANSI_DIM "    [%d] %s \xe2\x86\x92 %s" ANSI_RESET "\n",
+                   i + 1, disp, w->entries[i].targets[0]);
+        } else {
+            printf(sel ? ANSI_SEL "  \xe2\x96\xb6 [%d] %s" ANSI_RESET "\n"
+                       : ANSI_DIM "    [%d] %s" ANSI_RESET "\n",
+                   i + 1, disp);
+            for (int k = 0; k < tc; k++)
+                printf(sel ? ANSI_SEL "         \xe2\x86\x92 %s" ANSI_RESET "\n"
+                           : ANSI_DIM "         \xe2\x86\x92 %s" ANSI_RESET "\n",
+                       w->entries[i].targets[k]);
+        }
     }
     print_more_below(end, w->entry_count);
     print_picker_footer(num_input, show_error);
@@ -561,33 +628,8 @@ int run_entry_picker(const Workspace *ws, const char *title, const char *subtitl
         if (count == 0) {
             if (key == KEY_ESC || key == KEY_ENTER) { selected = -1; done = 1; }
         } else if (num_input >= 0) {
-            if (key >= '1' && key <= '9') {
-                num_input = num_input * 10 + (key - '0');
-            } else if (key == '0') {
-                if (num_input > 0) num_input = num_input * 10;
-            } else if (key == KEY_BACKSPACE || key == 127) {
-                if (num_input > 0) num_input /= 10;
-            } else if (key == KEY_ENTER) {
-                if (num_input >= 1 && num_input <= count) {
-                    selected = num_input - 1;
-                    done = 1;
-                } else {
-                    show_error = 1;
-                    selected = prev_selected;
-                    num_input = -1;
-                }
-            } else if (key == KEY_ESC) {
-                selected = prev_selected;
-                num_input = -1;
-            } else if (key == KEY_UP) {
-                num_input = -1;
-                selected = prev_selected;
-                if (selected > 0) selected--;
-            } else if (key == KEY_DOWN) {
-                num_input = -1;
-                selected = prev_selected;
-                if (selected < count - 1) selected++;
-            }
+            handle_num_input(key, count, &num_input, &selected,
+                             &prev_selected, &show_error, &done);
         } else {
             switch (key) {
             case KEY_UP:    if (selected > 0)         selected--; break;
@@ -760,130 +802,194 @@ int run_path_picker(IndexEntry *entries, int count, char *path_out, size_t path_
     return cancelled ? 0 : 1;
 }
 
-/* ── App chooser (menu + inline type mode) ─────────────────────────────── */
+/* ── Workspace editor picker (mn open add) ─────────────────────────────── */
 
-#define APP_PICKER_OPT_PATH 1   /* "Program name or full path…" */
+#define WADD_LIST      0
+#define WADD_TYPE_LINK 1
+#define WADD_TYPE_APP  2
 
-static const char *const APP_PICKER_ITEMS[] = {
-    "code", "Program name or full path\xe2\x80\xa6"
-};
-#define APP_PICKER_COUNT 2
-
-static void render_app_picker(int selected, int num_input, int show_error,
-                              int mode, const char *typed) {
-    if (mode == PATH_PICKER_MODE_LIST) {
-        print_picker_header("Add an app",
-                            "Choose an app, type a program name, or a full path.");
-        for (int i = 0; i < APP_PICKER_COUNT; i++) {
-            if (num_input < 0 && i == selected)
-                printf(ANSI_SEL "  ▶ [%d] %s" ANSI_RESET "\n", i + 1, APP_PICKER_ITEMS[i]);
-            else
-                printf(ANSI_DIM "    [%d] %s" ANSI_RESET "\n", i + 1, APP_PICKER_ITEMS[i]);
-        }
-        print_picker_footer(num_input, show_error);
-    } else {
-        print_picker_header("Add an app",
-                            "Type a program name (e.g. chrome) or a full path.");
-        printf("\n" ANSI_CYAN "  Path: " ANSI_RESET "%s" ANSI_SEL "_" ANSI_RESET, typed);
-        printf("\n\n" ANSI_DIM "Enter confirm  •  Backspace delete  •  Esc back" ANSI_RESET);
-        fflush(stdout);
+/* Strip directory prefix and trailing .exe from app path for a short display name. */
+void ws_display_name(const char *app, char *out, size_t out_size) {
+    const char *b = app;
+    for (const char *p = app; *p; p++)
+        if (*p == '/' || *p == '\\') b = p + 1;
+    size_t n = strlen(b);
+    if (n >= 4) {
+        const char *ext = b + n - 4;
+        if (ext[0] == '.' &&
+            (ext[1] == 'e' || ext[1] == 'E') &&
+            (ext[2] == 'x' || ext[2] == 'X') &&
+            (ext[3] == 'e' || ext[3] == 'E'))
+            n -= 4;
     }
+    size_t copy = n < out_size - 1 ? n : out_size - 1;
+    memcpy(out, b, copy);
+    out[copy] = '\0';
 }
 
-int run_app_picker(char *app_out, size_t app_out_size) {
-    int selected      = 0;
-    int prev_selected = 0;
-    int num_input     = -1;
-    int show_error    = 0;
-    int mode          = PATH_PICKER_MODE_LIST;
-    char typed[4096]  = {0};
-    int  typed_len    = 0;
-    int  done         = 0;
-    int  cancelled    = 0;
+static void render_workspace_add(const char *ws_name,
+                                 const WsEditorApp *apps, int count,
+                                 int cursor, int mode,
+                                 const char *typed, const char *app_error) {
+    char title[140];
+    snprintf(title, sizeof(title), "Add to '%s'", ws_name);
+    print_picker_header(title,
+                        "Add links to existing apps, or navigate to [+ Add a new app].");
+
+    int total = count + 1;   /* +1 for the "[+ Add a new app]" pseudo-item */
+    int start = picker_window_start(cursor, total);
+    int end   = start + (total < PICKER_WINDOW ? total : PICKER_WINDOW);
+    print_more_above(start);
+    for (int i = start; i < end; i++) {
+        const char *arrow = (i == cursor) ? ANSI_WHITE "\xe2\x96\xb6" ANSI_RESET : " ";
+        if (i == count) {
+            printf("  %s " ANSI_CYAN "[+ Add a new app]" ANSI_RESET "\n", arrow);
+        } else {
+            const char *color = apps[i].is_new ? ANSI_GREEN : "";
+            printf("  %s %s%s" ANSI_RESET "\n", arrow, color, apps[i].display);
+            if (apps[i].existing_target[0])
+                printf(ANSI_DIM_YELLOW "        \xe2\x86\x92 %s" ANSI_RESET "\n",
+                       apps[i].existing_target);
+            for (int k = 0; k < apps[i].new_links.count; k++)
+                printf(ANSI_GREEN "        + %s" ANSI_RESET "\n",
+                       apps[i].new_links.items[k]);
+        }
+    }
+    print_more_below(end, total);
+
+    if (mode == WADD_TYPE_LINK) {
+        printf("\n" ANSI_CYAN "  Add link for %s: " ANSI_RESET "%s" ANSI_SEL "_" ANSI_RESET,
+               apps[cursor].display, typed);
+        printf("\n" ANSI_DIM "  Enter add  \xe2\x80\xa2  Esc cancel  \xe2\x80\xa2  Backspace delete" ANSI_RESET);
+    } else if (mode == WADD_TYPE_APP) {
+        if (app_error && app_error[0])
+            printf("\n" ANSI_YELLOW "  %s" ANSI_RESET, app_error);
+        printf("\n" ANSI_CYAN "  New app: " ANSI_RESET "%s" ANSI_SEL "_" ANSI_RESET, typed);
+        printf("\n" ANSI_DIM "  Enter add  \xe2\x80\xa2  Esc cancel  \xe2\x80\xa2  Backspace delete" ANSI_RESET);
+    } else if (cursor < count) {
+        printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  type to add link  \xe2\x80\xa2  Enter finish  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
+    } else {
+        printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  type or Enter to add app  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
+    }
+    fflush(stdout);
+}
+
+int run_workspace_add_picker(const char *ws_name,
+                             WsEditorApp *apps, int *count, int max) {
+    int  cursor    = 0;
+    int  mode      = WADD_LIST;
+    char typed[WORKSPACE_TARGET_MAX] = {0};
+    int  typed_len = 0;
+    char app_error[128] = {0};
+    int  done      = 0;
+    int  cancelled = 0;
 
     printf(ANSI_CURSOR_HIDE);
-    render_app_picker(selected, num_input, show_error, mode, typed);
+    render_workspace_add(ws_name, apps, *count, cursor, mode, typed, app_error);
 
     while (!done) {
         int key = read_key();
-        show_error = 0;
+        app_error[0] = '\0';
 
-        if (mode == PATH_PICKER_MODE_TYPE) {
+        if (mode == WADD_TYPE_LINK) {
             if (key == KEY_ENTER) {
-                if (typed_len > 0) {
-                    strncpy(app_out, typed, app_out_size - 1);
-                    app_out[app_out_size - 1] = '\0';
-                    done = 1;
+                if (typed_len > 0 && apps[cursor].new_links.count < SNAP_LINKS_MAX) {
+                    int k = apps[cursor].new_links.count;
+                    strncpy(apps[cursor].new_links.items[k], typed, WORKSPACE_TARGET_MAX - 1);
+                    apps[cursor].new_links.items[k][WORKSPACE_TARGET_MAX - 1] = '\0';
+                    apps[cursor].new_links.count++;
                 }
+                typed[0] = '\0'; typed_len = 0;
+                mode = WADD_LIST;
             } else if (key == KEY_ESC) {
-                typed_len = 0; typed[0] = '\0';
-                mode = PATH_PICKER_MODE_LIST;
+                typed[0] = '\0'; typed_len = 0;
+                mode = WADD_LIST;
             } else if (key == KEY_BACKSPACE || key == 127) {
                 if (typed_len > 0) typed[--typed_len] = '\0';
-                /* Backspace on an empty buffer is a no-op; use Esc to go back. */
             } else if (key >= 32 && key < 127) {
                 if (typed_len < (int)sizeof(typed) - 1) {
                     typed[typed_len++] = (char)key;
                     typed[typed_len]   = '\0';
                 }
             }
-        } else if (num_input >= 0) {
-            if (key >= '1' && key <= '9') {
-                num_input = num_input * 10 + (key - '0');
-            } else if (key == '0') {
-                if (num_input > 0) num_input = num_input * 10;
-            } else if (key == KEY_BACKSPACE || key == 127) {
-                if (num_input > 0) num_input /= 10;
-            } else if (key == KEY_ENTER) {
-                if (num_input >= 1 && num_input <= APP_PICKER_COUNT) {
-                    selected = num_input - 1;
-                    num_input = -1;
-                    if (selected == APP_PICKER_OPT_PATH) {
-                        mode = PATH_PICKER_MODE_TYPE;
+        } else if (mode == WADD_TYPE_APP) {
+            if (key == KEY_ENTER) {
+                if (typed_len > 0 && *count < max) {
+                    char resolved[WORKSPACE_APP_MAX] = {0};
+                    const char *final_app = typed;
+                    int valid = 1;
+                    if (is_new_window_app(typed)) {
+                        /* known IDE launcher — skip resolution */
                     } else {
-                        strncpy(app_out, APP_PICKER_ITEMS[selected], app_out_size - 1);
-                        app_out[app_out_size - 1] = '\0';
-                        done = 1;
+                        if (app_resolve(typed, resolved, sizeof(resolved)) && resolved[0])
+                            final_app = resolved;
+                        if (!app_value_exists(final_app)) {
+                            snprintf(app_error, sizeof(app_error),
+                                     "App not found: '%.60s'. Try a full path.", typed);
+                            typed[0] = '\0'; typed_len = 0;
+                            valid = 0;
+                        }
                     }
-                } else {
-                    show_error = 1;
-                    selected   = prev_selected;
-                    num_input  = -1;
+                    if (valid) {
+                        WsEditorApp *na = &apps[*count];
+                        memset(na, 0, sizeof(*na));
+                        strncpy(na->app, final_app, WORKSPACE_APP_MAX - 1);
+                        ws_display_name(final_app, na->display, sizeof(na->display));
+                        na->is_new = 1;
+                        cursor = (*count)++;
+                        typed[0] = '\0'; typed_len = 0;
+                        mode = WADD_LIST;
+                    }
                 }
             } else if (key == KEY_ESC) {
-                selected  = prev_selected;
-                num_input = -1;
-            } else if (key == KEY_UP) {
-                num_input = -1; selected = prev_selected;
-                if (selected > 0) selected--;
-            } else if (key == KEY_DOWN) {
-                num_input = -1; selected = prev_selected;
-                if (selected < APP_PICKER_COUNT - 1) selected++;
+                typed[0] = '\0'; typed_len = 0;
+                mode = WADD_LIST;
+            } else if (key == KEY_BACKSPACE || key == 127) {
+                if (typed_len > 0) typed[--typed_len] = '\0';
+            } else if (key >= 32 && key < 127) {
+                if (typed_len < (int)sizeof(typed) - 1) {
+                    typed[typed_len++] = (char)key;
+                    typed[typed_len]   = '\0';
+                }
             }
-        } else {
+        } else { /* WADD_LIST */
+            int total = *count + 1;
             switch (key) {
-            case KEY_UP:    if (selected > 0)                    selected--; break;
-            case KEY_DOWN:  if (selected < APP_PICKER_COUNT - 1) selected++; break;
+            case KEY_UP:    if (cursor > 0)          cursor--; break;
+            case KEY_DOWN:  if (cursor < total - 1)  cursor++; break;
             case KEY_ENTER:
-                if (selected == APP_PICKER_OPT_PATH) {
-                    mode = PATH_PICKER_MODE_TYPE;
+                if (cursor == *count) {
+                    mode = WADD_TYPE_APP;
                 } else {
-                    strncpy(app_out, APP_PICKER_ITEMS[selected], app_out_size - 1);
-                    app_out[app_out_size - 1] = '\0';
                     done = 1;
                 }
                 break;
-            case KEY_ESC:   cancelled = 1; done = 1; break;
+            case KEY_ESC:
+                cancelled = 1; done = 1;
+                break;
             default:
-                if (key >= '1' && key <= '9') {
-                    prev_selected = selected;
-                    num_input     = key - '0';
+                if (key >= 33 && key < 127) {
+                    if (cursor < *count &&
+                        apps[cursor].new_links.count < SNAP_LINKS_MAX) {
+                        /* printable key on an app row → start adding a link */
+                        mode      = WADD_TYPE_LINK;
+                        typed[0]  = (char)key;
+                        typed[1]  = '\0';
+                        typed_len = 1;
+                    } else if (cursor == *count && *count < max) {
+                        /* printable key on "[+ Add a new app]" → open app-type mode */
+                        mode      = WADD_TYPE_APP;
+                        typed[0]  = (char)key;
+                        typed[1]  = '\0';
+                        typed_len = 1;
+                    }
                 }
                 break;
             }
         }
 
-        if (!done) render_app_picker(selected, num_input, show_error, mode, typed);
+        if (!done)
+            render_workspace_add(ws_name, apps, *count, cursor, mode, typed, app_error);
     }
 
     printf(ANSI_CURSOR_SHOW);

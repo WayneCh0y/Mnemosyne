@@ -84,13 +84,35 @@ Workspace *workspace_load_all(int *count) {
             for (int j = 0; j < ec; j++) {
                 cJSON *e   = cJSON_GetArrayItem(ents, j);
                 cJSON *app = cJSON_GetObjectItem(e, "app");
-                cJSON *tgt = cJSON_GetObjectItem(e, "target");
                 strncpy(ws[i].entries[j].app, app ? app->valuestring : "",
                         WORKSPACE_APP_MAX - 1);
                 ws[i].entries[j].app[WORKSPACE_APP_MAX - 1] = '\0';
-                strncpy(ws[i].entries[j].target, tgt ? tgt->valuestring : "",
-                        WORKSPACE_TARGET_MAX - 1);
-                ws[i].entries[j].target[WORKSPACE_TARGET_MAX - 1] = '\0';
+                ws[i].entries[j].target_count = 0;
+
+                cJSON *tgts = cJSON_GetObjectItem(e, "targets");
+                if (tgts && cJSON_IsArray(tgts)) {
+                    /* New format: "targets": ["url1", "url2", ...] */
+                    int tc = cJSON_GetArraySize(tgts);
+                    if (tc > WORKSPACE_ENTRY_TARGETS_MAX) tc = WORKSPACE_ENTRY_TARGETS_MAX;
+                    for (int k = 0; k < tc; k++) {
+                        cJSON *t = cJSON_GetArrayItem(tgts, k);
+                        if (t && t->valuestring) {
+                            strncpy(ws[i].entries[j].targets[k], t->valuestring,
+                                    WORKSPACE_TARGET_MAX - 1);
+                            ws[i].entries[j].targets[k][WORKSPACE_TARGET_MAX - 1] = '\0';
+                            ws[i].entries[j].target_count++;
+                        }
+                    }
+                } else {
+                    /* Backward compat: old format "target": "url" */
+                    cJSON *tgt = cJSON_GetObjectItem(e, "target");
+                    const char *tval = (tgt && tgt->valuestring) ? tgt->valuestring : "";
+                    if (tval[0] != '\0') {
+                        strncpy(ws[i].entries[j].targets[0], tval, WORKSPACE_TARGET_MAX - 1);
+                        ws[i].entries[j].targets[0][WORKSPACE_TARGET_MAX - 1] = '\0';
+                        ws[i].entries[j].target_count = 1;
+                    }
+                }
                 ws[i].entry_count++;
             }
         }
@@ -110,9 +132,12 @@ int workspace_save_all(Workspace *ws, int count) {
         cJSON *ents = cJSON_CreateArray();
         cJSON_AddStringToObject(obj, "name", ws[i].name);
         for (int j = 0; j < ws[i].entry_count; j++) {
-            cJSON *e = cJSON_CreateObject();
-            cJSON_AddStringToObject(e, "app",    ws[i].entries[j].app);
-            cJSON_AddStringToObject(e, "target", ws[i].entries[j].target);
+            cJSON *e    = cJSON_CreateObject();
+            cJSON *tgts = cJSON_CreateArray();
+            cJSON_AddStringToObject(e, "app", ws[i].entries[j].app);
+            for (int k = 0; k < ws[i].entries[j].target_count; k++)
+                cJSON_AddItemToArray(tgts, cJSON_CreateString(ws[i].entries[j].targets[k]));
+            cJSON_AddItemToObject(e, "targets", tgts);
             cJSON_AddItemToArray(ents, e);
         }
         cJSON_AddItemToObject(obj, "entries", ents);
@@ -149,7 +174,9 @@ int workspace_create(const char *name) {
     return rc;
 }
 
-int workspace_add_entry(const char *name, const char *app, const char *target) {
+int workspace_add_entry_with_targets(const char *name, const char *app,
+                                     const char targets[][WORKSPACE_TARGET_MAX],
+                                     int target_count) {
     int count;
     Workspace *ws = workspace_load_all(&count);
     if (ws == NULL) return -3;
@@ -164,13 +191,28 @@ int workspace_add_entry(const char *name, const char *app, const char *target) {
     int j = ws[idx].entry_count;
     strncpy(ws[idx].entries[j].app, app, WORKSPACE_APP_MAX - 1);
     ws[idx].entries[j].app[WORKSPACE_APP_MAX - 1] = '\0';
-    strncpy(ws[idx].entries[j].target, target, WORKSPACE_TARGET_MAX - 1);
-    ws[idx].entries[j].target[WORKSPACE_TARGET_MAX - 1] = '\0';
+    if (target_count > WORKSPACE_ENTRY_TARGETS_MAX)
+        target_count = WORKSPACE_ENTRY_TARGETS_MAX;
+    ws[idx].entries[j].target_count = target_count;
+    for (int k = 0; k < target_count; k++) {
+        strncpy(ws[idx].entries[j].targets[k], targets[k], WORKSPACE_TARGET_MAX - 1);
+        ws[idx].entries[j].targets[k][WORKSPACE_TARGET_MAX - 1] = '\0';
+    }
     ws[idx].entry_count++;
 
     int rc = workspace_save_all(ws, count);
     free(ws);
     return rc;
+}
+
+int workspace_add_entry(const char *name, const char *app, const char *target) {
+    if (target == NULL || target[0] == '\0') {
+        return workspace_add_entry_with_targets(name, app, NULL, 0);
+    }
+    char single[1][WORKSPACE_TARGET_MAX];
+    strncpy(single[0], target, WORKSPACE_TARGET_MAX - 1);
+    single[0][WORKSPACE_TARGET_MAX - 1] = '\0';
+    return workspace_add_entry_with_targets(name, app, single, 1);
 }
 
 int workspace_remove(const char *name) {

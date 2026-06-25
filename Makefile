@@ -43,10 +43,11 @@ SRCS = src/main.c \
        src/workspace.c \
        src/app_resolve.c \
        src/app_launch.c \
+       src/app_enum.c \
        src/cJSON.c
 
 ifeq ($(OS), Windows_NT)
-    LDFLAGS = -ladvapi32 -lshell32
+    LDFLAGS = -ladvapi32 -lshell32 -luser32 -ldwmapi
 else
     LDFLAGS =
 endif
