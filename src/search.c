@@ -16,6 +16,32 @@ static FileType file_type_from_string(const char *s) {
     return FILE_TYPE_UNKNOWN;
 }
 
+int search_find_line(const char *path, const char *query) {
+    FILE *f = fopen(path, "r");
+    if (f == NULL) return 1;
+
+    int qlen = (int)strlen(query);
+    char line[4096];
+    int line_num = 0;
+
+    while (fgets(line, sizeof(line), f) != NULL) {
+        line_num++;
+        for (int i = 0; line[i] != '\0'; i++)
+            line[i] = (char)tolower((unsigned char)line[i]);
+        const char *p = line;
+        while ((p = strstr(p, query)) != NULL) {
+            if (is_word_match(line, p, query)) {
+                fclose(f);
+                return line_num;
+            }
+            p += qlen;
+        }
+    }
+
+    fclose(f);
+    return 1;
+}
+
 static int cmp(const void *a, const void *b) {
     const SearchResult *ra = a, *rb = b;
     if (rb->last_modified != ra->last_modified)
@@ -115,7 +141,7 @@ static int scan_file_txt(const char *path, const char *query, const char *raw_qu
     while ((p = strstr(p, query)) != NULL) {
         if (is_word_match(content_start, p, query)) {
             match_count++;
-            if (match_count == 1) build_context_txt(buf, p, query, context, ctx_size);
+            if (match_count == 1) build_context_txt(content_start, p, query, context, ctx_size);
         }
         p += qlen;
     }
@@ -150,7 +176,7 @@ static int scan_file_md(const char *path, const char *query, const char *raw_que
     while ((p = strstr(p, query)) != NULL) {
         if (is_word_match(content_start, p, query)) {
             match_count++;
-            if (match_count == 1) build_context_txt(buf, p, query, context, ctx_size);
+            if (match_count == 1) build_context_txt(content_start, p, query, context, ctx_size);
         }
         p += qlen;
     }

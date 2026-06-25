@@ -28,25 +28,14 @@
 #include "app_launch.h"
 #include "app_enum.h"
 
-static int is_valid_add(int argc) {
-    if (argc == 3) {
-        return 1;
-    }
-    return 0;
-}
+static int is_valid_add(int argc) { return argc == 3; }
 
 static void cmd_add(int argc, char *argv[]) {
     if (!is_valid_add(argc)) { print_help(); return; }
-
     ingest_file(argv[2]);
-
-    return;
 }
 
-static int is_valid_search(int argc) {
-    if (argc >= 3) { return 1; }
-    return 0;
-}
+static int is_valid_search(int argc) { return argc >= 3; }
 
 /* Updates the index if a file has been modified or deleted. */
 static void update_files(void) {
@@ -84,36 +73,6 @@ static char* build_query(int argc, char *argv[], char *raw_out, int raw_size) {
         query[i] = (char)tolower((unsigned char)query[i]);
 
     return query;
-}
-
-/* Returns the line number of the first occurrence of the query in the
-   original file. */
-static int find_line_in_original(const char *path, const char *query) {
-    FILE *f = fopen(path, "r");
-    if (f == NULL) return 1;
-
-    int qlen = (int)strlen(query);
-    char line[4096];
-    int line_num = 0;
-
-    while (fgets(line, sizeof(line), f) != NULL) {
-        line_num++;
-
-        for (int i = 0; line[i] != '\0'; i++)
-            line[i] = (char)tolower((unsigned char)line[i]);
-
-        const char *p = line;
-        while ((p = strstr(p, query)) != NULL) {
-            if (is_word_match(line, p, query)) {
-                fclose(f);
-                return line_num;
-            }
-            p += qlen;
-        }
-    }
-
-    fclose(f);
-    return 1;
 }
 
 /* Closes the terminal mn is launched from by terminating its parent shell.
@@ -184,7 +143,7 @@ static void handle_enter(SearchResult *results, int selected, const char *query)
         }
     }
     const char *ide_name = get_ide();
-    int line = find_line_in_original(file_path, query);
+    int line = search_find_line(file_path, query);
     char launch[32 + 4096 + 4096 + 64];
 
     if (repo_path && (strcmp(ide_name, "code") == 0 || strcmp(ide_name, "cursor") == 0)) {
@@ -204,22 +163,16 @@ static void handle_enter(SearchResult *results, int selected, const char *query)
 }
 
 static void cmd_search(int argc, char *argv[]) {
-    /*
-        We update files regardless, when a search command is triggered.
-    */
     update_files();
 
     if (!is_valid_search(argc)) { print_help(); return; }
 
     char raw_query[256] = {0};
-    char* query = build_query(argc, argv, raw_query, sizeof(raw_query));
+    char *query = build_query(argc, argv, raw_query, sizeof(raw_query));
 
     int count;
-    SearchResult* results = search(query, raw_query, &count);
+    SearchResult *results = search(query, raw_query, &count);
 
-    /*
-        Nothing found :/
-    */
     if (count == 0) {
         printf("No results found.\n");
         free(results);
@@ -231,8 +184,6 @@ static void cmd_search(int argc, char *argv[]) {
     if (chosen != -1)
         handle_enter(results, chosen, query);
     free(results);
-
-    return;
 }
 
 static void handle_list_enter(IndexEntry *entries, int selected) {
@@ -299,13 +250,7 @@ static void cmd_remove(int argc, char *argv[]) {
 }
 
 static int is_valid_config(int argc, char *argv[]) {
-    if (argc == 4 && strcmp(argv[2], "ide") == 0) {
-        return 1;
-    }
-    if (argc == 3 && strcmp(argv[2], "ide") == 0) {
-        return 1;
-    }
-    return 0;
+    return (argc == 3 || argc == 4) && strcmp(argv[2], "ide") == 0;
 }
 
 static void cmd_config(int argc, char *argv[]) {
@@ -328,183 +273,106 @@ static void cmd_config(int argc, char *argv[]) {
     }
 }
 
-#ifdef _WIN32
-/* Launches an app + optional target.
-   code/cursor are .cmd launchers on PATH, so they go through a hidden cmd.exe.
-   UWP / Microsoft Store apps (shell:AppsFolder\<AUMID>) are launched via
-   explorer.exe. Every other app is a full executable path supplied by the
-   user, launched directly via ShellExecuteEx. */
-static void win_launch(const char *app, const char *target) {
-    if (is_uwp_app(app)) {
-        char params[WORKSPACE_APP_MAX + 4];
-        snprintf(params, sizeof(params), "\"%s\"", app);
-        SHELLEXECUTEINFOA sei = {0};
-        sei.cbSize       = sizeof(sei);
-        sei.lpVerb       = "open";
-        sei.lpFile       = "explorer.exe";
-        sei.lpParameters = params;
-        sei.nShow        = SW_SHOWNORMAL;
-        if (!ShellExecuteExA(&sei))
-            fprintf(stderr, "error: failed to launch '%s'\n", app);
-        (void)target;
-        return;
-    }
-
-    if (is_new_window_app(app)) {
-        /* IDE launcher (.cmd) — run via hidden cmd.exe so no console flashes. */
-        char cmd_params[WORKSPACE_APP_MAX + WORKSPACE_TARGET_MAX + 64];
-        if (target[0])
-            snprintf(cmd_params, sizeof(cmd_params),
-                     "/c %s --new-window \"%s\"", app, target);
-        else
-            snprintf(cmd_params, sizeof(cmd_params), "/c %s --new-window", app);
-
-        SHELLEXECUTEINFOA sei = {0};
-        sei.cbSize       = sizeof(sei);
-        sei.lpVerb       = "open";
-        sei.lpFile       = "cmd.exe";
-        sei.lpParameters = cmd_params;
-        sei.nShow        = SW_HIDE;
-        if (!ShellExecuteExA(&sei))
-            fprintf(stderr, "error: failed to launch '%s'\n", app);
-        return;
-    }
-
-    /* Full executable path — launch directly. */
-    char params[WORKSPACE_TARGET_MAX + 4];
-    params[0] = '\0';
-    if (target[0])
-        snprintf(params, sizeof(params), "\"%s\"", target);
-
-    SHELLEXECUTEINFOA sei = {0};
-    sei.cbSize       = sizeof(sei);
-    sei.lpVerb       = "open";
-    sei.lpFile       = app;
-    sei.lpParameters = params[0] ? params : NULL;
-    sei.nShow        = SW_SHOWNORMAL;
-    if (!ShellExecuteExA(&sei))
-        fprintf(stderr, "error: failed to launch '%s'\n", app);
-}
-
-/* Batch-launches a regular executable (e.g. a browser) with all its targets in
-   one invocation.  Browsers open each quoted URL argument as a separate tab,
-   avoiding the spurious blank tab that appears when each URL triggers its own
-   process launch. */
-static void win_launch_batch(const char *app, const char **targets, int count) {
-    size_t total = 1;
-    for (int i = 0; i < count; i++) total += strlen(targets[i]) + 4;
-    char *params = malloc(total);
-    if (!params) return;
-    int pos = 0;
-    params[0] = '\0';
-    for (int i = 0; i < count; i++) {
-        if (!targets[i][0]) continue;
-        if (pos > 0) params[pos++] = ' ';
-        params[pos++] = '"';
-        size_t len = strlen(targets[i]);
-        memcpy(params + pos, targets[i], len);
-        pos += (int)len;
-        params[pos++] = '"';
-        params[pos] = '\0';
-    }
-    SHELLEXECUTEINFOA sei = {0};
-    sei.cbSize       = sizeof(sei);
-    sei.lpVerb       = "open";
-    sei.lpFile       = app;
-    sei.lpParameters = pos > 0 ? params : NULL;
-    sei.nShow        = SW_SHOWNORMAL;
-    if (!ShellExecuteExA(&sei))
-        fprintf(stderr, "error: failed to launch '%s'\n", app);
-    free(params);
-}
-#endif
-
 static void launch_workspace(const Workspace *ws) {
     printf("Opening '%s' (%d app%s)...\n",
            ws->name, ws->entry_count, ws->entry_count == 1 ? "" : "s");
 #ifdef _WIN32
-    /* Group regular-executable entries by app so all their targets are passed in
-       one invocation (prevents browsers opening a spurious blank tab).
-       UWP and IDE apps keep per-entry launches since batching doesn't apply. */
-    int handled[WORKSPACE_ENTRIES_MAX] = {0};
+    /* Each entry represents one app instance (one window). For UWP/IDEs, launch
+       once per target. For browsers, all targets open as tabs in one window. */
     for (int i = 0; i < ws->entry_count; i++) {
-        if (handled[i]) continue;
-        handled[i] = 1;
-        const char *app    = ws->entries[i].app;
-        const char *target = ws->entries[i].target;
+        const char *app = ws->entries[i].app;
+        int tc = ws->entries[i].target_count;
 
         if (is_uwp_app(app) || is_new_window_app(app)) {
-            int dup = 0;
-            for (int j = 0; j < i; j++) {
-                if (strcmp(ws->entries[j].app,    app)    == 0 &&
-                    strcmp(ws->entries[j].target, target) == 0) { dup = 1; break; }
+            /* UWP and IDE apps: launch once per target (or once standalone). */
+            if (tc == 0) {
+                app_launch(app, "");
+            } else {
+                for (int k = 0; k < tc; k++)
+                    app_launch(app, ws->entries[i].targets[k]);
             }
-            if (!dup) win_launch(app, target);
         } else {
-            const char *targets[WORKSPACE_ENTRIES_MAX];
-            int tc = 0;
-            targets[tc++] = target;
-            for (int j = i + 1; j < ws->entry_count; j++) {
-                if (strcmp(ws->entries[j].app, app) != 0) continue;
-                handled[j] = 1;
-                int dup = 0;
-                for (int k = 0; k < tc; k++) {
-                    if (strcmp(targets[k], ws->entries[j].target) == 0) { dup = 1; break; }
-                }
-                if (!dup) targets[tc++] = ws->entries[j].target;
+            /* Regular executable / .lnk (e.g. browsers): each entry is one window.
+               Single target: plain launch. Multiple targets: --new-window url1 url2 ...
+               so the browser opens them all as tabs in one new window. */
+            if (tc == 0) {
+                app_launch(app, "");
+            } else if (tc == 1) {
+                app_launch(app, ws->entries[i].targets[0]);
+            } else {
+                char params[WORKSPACE_ENTRY_TARGETS_MAX * (WORKSPACE_TARGET_MAX + 4) + 16];
+                int pos = snprintf(params, sizeof(params), "--new-window");
+                for (int k = 0; k < tc && pos < (int)sizeof(params) - 1; k++)
+                    pos += snprintf(params + pos, sizeof(params) - pos,
+                                    " \"%s\"", ws->entries[i].targets[k]);
+                SHELLEXECUTEINFOA sei = {0};
+                sei.cbSize       = sizeof(sei);
+                sei.lpVerb       = "open";
+                sei.lpFile       = app;
+                sei.lpParameters = params;
+                sei.nShow        = SW_SHOWNORMAL;
+                if (!ShellExecuteExA(&sei))
+                    fprintf(stderr, "error: failed to launch '%s'\n", app);
             }
-            win_launch_batch(app, targets, tc);
         }
     }
 #else
+    /* Each entry is one app instance. For IDEs, launch once per target.
+       For other apps, pass all targets in one invocation. */
     for (int i = 0; i < ws->entry_count; i++) {
-        /* Skip duplicate (app, target) pairs — same combo already launched. */
-        int duplicate = 0;
-        for (int j = 0; j < i; j++) {
-            if (strcmp(ws->entries[j].app,    ws->entries[i].app)    == 0 &&
-                strcmp(ws->entries[j].target, ws->entries[i].target) == 0) {
-                duplicate = 1;
-                break;
-            }
-        }
-        if (duplicate) continue;
+        const char *app = ws->entries[i].app;
+        int tc = ws->entries[i].target_count;
 
-        const char *app    = ws->entries[i].app;
-        const char *target = ws->entries[i].target;
 #if defined(__APPLE__)
-        {
-            const char *new_win = is_new_window_app(app) ? " --new-window" : "";
-            char cmd[WORKSPACE_APP_MAX + WORKSPACE_TARGET_MAX + 64];
-            /* 'open -a <app>' resolves GUI apps by bundle name (case-insensitive).
-               code/cursor are in PATH via their installer — use bare name. */
-            if (!is_new_window_app(app)) {
-                if (target[0] != '\0')
-                    snprintf(cmd, sizeof(cmd), "open -a \"%s\" \"%s\"", app, target);
-                else
-                    snprintf(cmd, sizeof(cmd), "open -a \"%s\"", app);
+        if (is_new_window_app(app)) {
+            /* IDEs: one launch per target (or once standalone). */
+            if (tc == 0) {
+                char cmd[WORKSPACE_APP_MAX + 16];
+                snprintf(cmd, sizeof(cmd), "%s --new-window", app);
+                system(cmd);
             } else {
-                if (target[0] != '\0')
-                    snprintf(cmd, sizeof(cmd), "%s%s \"%s\"", app, new_win, target);
-                else
-                    snprintf(cmd, sizeof(cmd), "%s%s", app, new_win);
+                for (int k = 0; k < tc; k++) {
+                    char cmd[WORKSPACE_APP_MAX + WORKSPACE_TARGET_MAX + 16];
+                    snprintf(cmd, sizeof(cmd), "%s --new-window \"%s\"",
+                             app, ws->entries[i].targets[k]);
+                    system(cmd);
+                }
             }
+        } else {
+            /* GUI apps via 'open -a': pass all targets together (one window). */
+            char cmd[WORKSPACE_APP_MAX + WORKSPACE_ENTRY_TARGETS_MAX * (WORKSPACE_TARGET_MAX + 4) + 16];
+            int pos = snprintf(cmd, sizeof(cmd), "open -a \"%s\"", app);
+            for (int k = 0; k < tc && pos < (int)sizeof(cmd) - 1; k++)
+                pos += snprintf(cmd + pos, sizeof(cmd) - pos,
+                                " \"%s\"", ws->entries[i].targets[k]);
             system(cmd);
         }
 #else
-        {
-            /* code/cursor return immediately; a user-supplied executable path is a
-               GUI app that would otherwise block, so background it with '&'. */
-            const char *new_win = is_new_window_app(app) ? " --new-window" : "";
-            const char *bg      = is_new_window_app(app) ? "" : " &";
-            char cmd[WORKSPACE_APP_MAX + WORKSPACE_TARGET_MAX + 32];
-            if (target[0] != '\0')
-                snprintf(cmd, sizeof(cmd), "\"%s\"%s \"%s\"%s", app, new_win, target, bg);
-            else
-                snprintf(cmd, sizeof(cmd), "\"%s\"%s%s", app, new_win, bg);
+        if (is_new_window_app(app)) {
+            /* IDEs: one launch per target (or once standalone). */
+            if (tc == 0) {
+                char cmd[WORKSPACE_APP_MAX + 16];
+                snprintf(cmd, sizeof(cmd), "%s --new-window", app);
+                system(cmd);
+            } else {
+                for (int k = 0; k < tc; k++) {
+                    char cmd[WORKSPACE_APP_MAX + WORKSPACE_TARGET_MAX + 16];
+                    snprintf(cmd, sizeof(cmd), "%s --new-window \"%s\"",
+                             app, ws->entries[i].targets[k]);
+                    system(cmd);
+                }
+            }
+        } else {
+            /* GUI app: pass all targets in one invocation, backgrounded. */
+            char cmd[WORKSPACE_APP_MAX + WORKSPACE_ENTRY_TARGETS_MAX * (WORKSPACE_TARGET_MAX + 4) + 16];
+            int pos = snprintf(cmd, sizeof(cmd), "\"%s\"", app);
+            for (int k = 0; k < tc && pos < (int)sizeof(cmd) - 1; k++)
+                pos += snprintf(cmd + pos, sizeof(cmd) - pos,
+                                " \"%s\"", ws->entries[i].targets[k]);
+            pos += snprintf(cmd + pos, sizeof(cmd) - pos, " &");
             system(cmd);
         }
 #endif
-        app_launch(ws->entries[i].app, ws->entries[i].target);
     }
 #endif
     close_terminal();
@@ -545,88 +413,70 @@ static void cmd_open_add(void) {
         return;
     }
 
-    /* Three-step flow; Esc steps back one state (and exits at the first). */
-    enum { ADD_PICK_WS, ADD_PICK_APP, ADD_PICK_TARGET } state = ADD_PICK_WS;
-    int  ws_idx = -1;
-    char app[WORKSPACE_APP_MAX];
-    char target[WORKSPACE_TARGET_MAX] = {0};
-    int  done = 0;
+    /* Step 1: pick workspace */
+    int ws_idx = run_workspace_picker(ws, count, "Add to which workspace?",
+                                      "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  Enter choose  \xe2\x80\xa2  Esc cancel");
+    if (ws_idx == -1) {
+        printf(ANSI_CLEAR ANSI_RESET "Cancelled.\n");
+        free(ws);
+        return;
+    }
 
-    while (!done) {
-        if (state == ADD_PICK_WS) {
-            int chosen = run_workspace_picker(ws, count, "Add to which workspace?",
-                                              "↑/↓ move  •  Enter choose  •  Esc cancel");
-            if (chosen == -1) {
-                printf(ANSI_CLEAR ANSI_RESET "Cancelled.\n");
-                free(ws);
-                return;
-            }
-            ws_idx = chosen;
-            state  = ADD_PICK_APP;
-        } else if (state == ADD_PICK_APP) {
-            if (!run_app_picker(app, sizeof(app))) {
-                state = ADD_PICK_WS;   /* Esc → back to workspace pick */
-                continue;
-            }
-            if (!is_new_window_app(app)) {
-                char resolved[WORKSPACE_APP_MAX];
-                if (app_resolve(app, resolved, sizeof(resolved))) {
-                    strncpy(app, resolved, sizeof(app) - 1);
-                    app[sizeof(app) - 1] = '\0';
-                }
-            }
-            state = ADD_PICK_TARGET;
-        } else { /* ADD_PICK_TARGET */
-            target[0] = '\0';
-            int ok;
-            if (is_new_window_app(app)) {
-                int entry_count;
-                IndexEntry *entries = index_get_entries(&entry_count);
-                if (!entries || entry_count == 0) {
-                    free(entries);
-                    ok = run_text_input("Add an app",
-                                        "Path to open in the IDE (Enter to skip).",
-                                        "Path", target, sizeof(target), 1);
-                } else {
-                    ok = run_path_picker(entries, entry_count, target, sizeof(target));
-                    free(entries);
-                }
-            } else {
-                /* Non-IDE app: warn (don't block) if the value won't launch on
-                   this machine — the user may be on a different machine when they
-                   run it. UWP markers and macOS bundle names are trusted without
-                   a fs check. */
-                int exists = app_value_exists(app);
-                const char *subtitle = exists
-                    ? "URL, app link (e.g. spotify:playlist:...), or file path. Enter to skip."
-                    : "\033[33mwarning: not found on this machine — it will still be saved.\033[0m";
-                ok = run_text_input("Add an app", subtitle, "URL or path",
-                                    target, sizeof(target), 1);
-            }
-            if (!ok) {
-                state = ADD_PICK_APP;   /* Esc → back to app pick */
-                continue;
-            }
-            done = 1;
+    /* Step 2: build workspace editor state from existing entries, grouped by app.
+       WsEditorApp is large (~68 KB each); allocate on the heap to avoid stack overflow. */
+    WsEditorApp *editor_apps = calloc(WORKSPACE_ENTRIES_MAX, sizeof(WsEditorApp));
+    if (!editor_apps) {
+        fprintf(stderr, "error: out of memory\n");
+        free(ws);
+        return;
+    }
+    int editor_count = 0;
+
+    /* One editor row per stored entry so instances of the same app stay separate. */
+    const Workspace *chosen_ws = &ws[ws_idx];
+    for (int i = 0; i < chosen_ws->entry_count && editor_count < WORKSPACE_ENTRIES_MAX; i++) {
+        WsEditorApp *e = &editor_apps[editor_count++];
+        strncpy(e->app, chosen_ws->entries[i].app, WORKSPACE_APP_MAX - 1);
+        ws_display_name(chosen_ws->entries[i].app, e->display, sizeof(e->display));
+        if (chosen_ws->entries[i].target_count > 0)
+            strncpy(e->existing_target, chosen_ws->entries[i].targets[0], WORKSPACE_TARGET_MAX - 1);
+    }
+
+    /* Step 3: run workspace editor — Esc cancels, Enter confirms. */
+    if (!run_workspace_add_picker(chosen_ws->name, editor_apps, &editor_count,
+                                  WORKSPACE_ENTRIES_MAX)) {
+        printf(ANSI_CLEAR ANSI_RESET "Cancelled.\n");
+        free(editor_apps);
+        free(ws);
+        return;
+    }
+
+    /* Step 4: save new additions — one workspace entry per app instance. */
+    printf(ANSI_CLEAR ANSI_RESET);
+    const char *ws_name = chosen_ws->name;
+    int added = 0;
+    int full  = 0;
+    for (int i = 0; i < editor_count && !full; i++) {
+        if (editor_apps[i].new_links.count == 0) {
+            if (!editor_apps[i].is_new) continue;
+            int rc = workspace_add_entry(ws_name, editor_apps[i].app, "");
+            if (rc == 0) { added++; }
+            else if (rc == -2) { fprintf(stderr, "error: workspace '%s' is full\n", ws_name); full = 1; }
+        } else {
+            /* All links for this app instance go into one grouped entry. */
+            int rc = workspace_add_entry_with_targets(ws_name, editor_apps[i].app,
+                                                      editor_apps[i].new_links.items,
+                                                      editor_apps[i].new_links.count);
+            if (rc == 0) { added++; }
+            else if (rc == -2) { fprintf(stderr, "error: workspace '%s' is full\n", ws_name); full = 1; }
         }
     }
 
-    printf(ANSI_CLEAR ANSI_RESET);
-    const char *ws_name = ws[ws_idx].name;
-    int rc = workspace_add_entry(ws_name, app, target);
-    if (rc == 0) {
-        if (target[0] != '\0')
-            printf("Added to '%s': %s \xe2\x86\x92 %s\n", ws_name, app, target);
-        else
-            printf("Added to '%s': %s\n", ws_name, app);
-    } else if (rc == -1) {
-        fprintf(stderr, "error: workspace '%s' not found\n", ws_name);
-    } else if (rc == -2) {
-        fprintf(stderr, "error: workspace '%s' is full (max %d entries)\n",
-                ws_name, WORKSPACE_ENTRIES_MAX);
-    } else {
-        fprintf(stderr, "error: failed to save workspace\n");
-    }
+    if (added == 0)
+        printf("Nothing added to '%s'.\n", ws_name);
+    else
+        printf("Added %d entr%s to '%s'.\n", added, added == 1 ? "y" : "ies", ws_name);
+    free(editor_apps);
     free(ws);
 }
 
@@ -770,15 +620,15 @@ static void cmd_open_snap(void) {
     int added = 0;
     for (int i = 0; i < n; i++) {
         if (!selected[i]) continue;
-        int any = 0;
+        int rc;
         if (links[i].count == 0) {
-            any = (workspace_add_entry(name, apps[i].app, "") == 0);
+            rc = workspace_add_entry(name, apps[i].app, "");
         } else {
-            for (int k = 0; k < links[i].count; k++)
-                if (workspace_add_entry(name, apps[i].app, links[i].items[k]) == 0)
-                    any = 1;
+            /* All links for this app instance go into one grouped entry. */
+            rc = workspace_add_entry_with_targets(name, apps[i].app,
+                                                  links[i].items, links[i].count);
         }
-        if (any) added++;
+        if (rc == 0) added++;
     }
     free(links);
     printf(ANSI_CLEAR ANSI_RESET);

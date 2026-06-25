@@ -12,7 +12,6 @@
 
 /* ── shared helpers ────────────────────────────────────────────────────── */
 
-/* Basename after the last '/' or '\\'. Returns a pointer within path. */
 static const char *base_name(const char *path) {
     const char *b = path;
     for (const char *p = path; *p; p++)
@@ -20,28 +19,10 @@ static const char *base_name(const char *path) {
     return b;
 }
 
-#ifdef _WIN32
-static int path_ieq(const char *a, const char *b) {
-    while (*a && *b) {
-        char ca = *a, cb = *b;
-        if (ca >= 'A' && ca <= 'Z') ca += 32;
-        if (cb >= 'A' && cb <= 'Z') cb += 32;
-        if (ca != cb) return 0;
-        a++; b++;
-    }
-    return *a == *b;
-}
-#else
-static int path_eq(const char *a, const char *b) { return strcmp(a, b) == 0; }
-#endif
-
-/* If `display` (the captured basename / process name, with an optional trailing
-   .exe) is a known launcher, return the canonical name `mn open add` would store
-   so snapshots launch identically. Otherwise NULL. */
 static const char *canonical_launcher(const char *display) {
     const char *b = base_name(display);
     size_t n = strlen(b);
-    if (n >= 4) {                      /* strip a trailing ".exe", case-insensitive */
+    if (n >= 4) {
         const char *ext = b + n - 4;
         if (ext[0] == '.' &&
             (ext[1] == 'e' || ext[1] == 'E') &&
@@ -56,20 +37,20 @@ static const char *canonical_launcher(const char *display) {
     return NULL;
 }
 
-/* Append app/display to out unless app is already present. */
+/* Append a RunningApp entry.  Display is the process basename only.
+   On Windows every top-level window is a distinct entry (two Edge windows →
+   two rows).  On macOS/Linux true duplicates are skipped. */
 static void add_unique(RunningApp *out, int *count, int max,
                        const char *app, const char *display) {
     if (*count >= max) return;
     const char *launch = canonical_launcher(display);
     if (launch) app = launch;
-    for (int i = 0; i < *count; i++) {
-#ifdef _WIN32
-        if (path_ieq(out[i].app, app)) return;
-#else
-        if (path_eq(out[i].app, app)) return;
+#ifndef _WIN32
+    for (int i = 0; i < *count; i++)
+        if (strcmp(out[i].app, app) == 0 && strcmp(out[i].display, display) == 0)
+            return;
 #endif
-    }
-    snprintf(out[*count].app, sizeof(out[*count].app), "%s", app);
+    snprintf(out[*count].app,     sizeof(out[*count].app),     "%s", app);
     snprintf(out[*count].display, sizeof(out[*count].display), "%s", display);
     (*count)++;
 }
@@ -92,6 +73,22 @@ static DWORD parent_pid_of(DWORD pid) {
     return ppid;
 }
 
+static int str_ieq(const char *a, const char *b) {
+    while (*a && *b) {
+        char ca = (*a >= 'A' && *a <= 'Z') ? (char)(*a + 32) : *a;
+        char cb = (*b >= 'A' && *b <= 'Z') ? (char)(*b + 32) : *b;
+        if (ca != cb) return 0;
+        a++; b++;
+    }
+    return *a == *b;
+}
+
+/* UWP infrastructure processes that host other apps — never user-facing. */
+static int is_system_process(const char *bn) {
+    return str_ieq(bn, "ApplicationFrameHost.exe")
+        || str_ieq(bn, "TextInputHost.exe");
+}
+
 typedef struct {
     RunningApp *out;
     int        *count;
@@ -103,17 +100,23 @@ typedef struct {
 static BOOL CALLBACK enum_proc(HWND hwnd, LPARAM lparam) {
     EnumCtx *ctx = (EnumCtx *)lparam;
 
-    /* Keep only top-level, user-facing windows (the "alt-tab" heuristic). */
     if (!IsWindowVisible(hwnd)) return TRUE;
     if (GetWindow(hwnd, GW_OWNER) != NULL) return TRUE;
     if (GetWindowTextLengthA(hwnd) == 0) return TRUE;
     if (GetWindowLongPtrA(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) return TRUE;
 
-    /* Skip DWM-cloaked windows: suspended UWP apps, other virtual desktops, and
-       host windows like ApplicationFrameHost/TextInputHost. */
-    BOOL cloaked = FALSE;
+    /* UWP app content windows use this class — they're already represented by
+       their ApplicationFrameHost frame (which we filter by process name), so
+       skip the raw content window to avoid duplicates or orphan entries. */
+    char cls[64];
+    GetClassNameA(hwnd, cls, sizeof(cls));
+    if (strcmp(cls, "Windows.UI.Core.CoreWindow") == 0) return TRUE;
+
+    /* Skip app-cloaked windows (suspended UWP content).
+       Shell-cloaked windows (other virtual desktops) still appear. */
+    DWORD cloaked = 0;
     if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked)))
-        && cloaked)
+            && (cloaked & DWM_CLOAKED_APP))
         return TRUE;
 
     DWORD pid = 0;
@@ -125,8 +128,11 @@ static BOOL CALLBACK enum_proc(HWND hwnd, LPARAM lparam) {
 
     char path[WORKSPACE_APP_MAX];
     DWORD sz = sizeof(path);
-    if (QueryFullProcessImageNameA(h, 0, path, &sz))
-        add_unique(ctx->out, ctx->count, ctx->max, path, base_name(path));
+    if (QueryFullProcessImageNameA(h, 0, path, &sz)) {
+        const char *bn = base_name(path);
+        if (!is_system_process(bn))
+            add_unique(ctx->out, ctx->count, ctx->max, path, bn);
+    }
     CloseHandle(h);
 
     return (*ctx->count < ctx->max) ? TRUE : FALSE;
@@ -135,7 +141,13 @@ static BOOL CALLBACK enum_proc(HWND hwnd, LPARAM lparam) {
 int app_enum_running(RunningApp *out, int max) {
     int count = 0;
     DWORD self = GetCurrentProcessId();
-    EnumCtx ctx = { out, &count, max, self, parent_pid_of(self) };
+    EnumCtx ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.out        = out;
+    ctx.count      = &count;
+    ctx.max        = max;
+    ctx.self_pid   = self;
+    ctx.parent_pid = parent_pid_of(self);
     EnumWindows(enum_proc, (LPARAM)&ctx);
     return count;
 }
@@ -144,8 +156,6 @@ int app_enum_running(RunningApp *out, int max) {
 #elif defined(__APPLE__)
 
 int app_enum_running(RunningApp *out, int max) {
-    /* System Events lists every GUI (non-background-only) process by app name,
-       which is exactly the value `open -a <name>` (see app_launch.c) expects. */
     FILE *fp = popen(
         "osascript -e 'tell application \"System Events\" to get name of "
         "every process whose background only is false' 2>/dev/null", "r");
@@ -157,7 +167,6 @@ int app_enum_running(RunningApp *out, int max) {
     pclose(fp);
 
     int count = 0;
-    /* AppleScript prints a comma+space separated list, e.g. "Safari, Code". */
     char *save = NULL;
     for (char *tok = strtok_r(buf, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
         while (*tok == ' ' || *tok == '\t' || *tok == '\n') tok++;
@@ -174,7 +183,6 @@ int app_enum_running(RunningApp *out, int max) {
 #include <unistd.h>
 
 int app_enum_running(RunningApp *out, int max) {
-    /* wmctrl -lp lists managed windows; column 3 is the owning PID. */
     FILE *fp = popen("wmctrl -lp 2>/dev/null", "r");
     if (!fp) return -1;
 
@@ -183,7 +191,6 @@ int app_enum_running(RunningApp *out, int max) {
     int any = 0;
     while (fgets(line, sizeof(line), fp)) {
         any = 1;
-        /* Fields: <win-id> <desktop> <pid> <host> <title...> */
         unsigned long winid; int desktop; long pid;
         if (sscanf(line, "%lx %d %ld", &winid, &desktop, &pid) != 3) continue;
         if (pid <= 0) continue;
@@ -198,7 +205,6 @@ int app_enum_running(RunningApp *out, int max) {
     }
     int rc = pclose(fp);
 
-    /* No output and a non-zero exit usually means wmctrl isn't installed. */
     if (!any && rc != 0) return -1;
     return count;
 }
