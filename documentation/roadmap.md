@@ -34,6 +34,7 @@ Mnemosyne is designed to grow incrementally. Each version builds directly on the
 
 **New features**
 - `mn open` — workspaces: named sets of apps/files/URLs launched together, managed and opened via interactive pickers
+- `.pdf` ingestion via `pdftotext` (poppler-utils) — bundled on Windows via `make fetch-poppler`, installed via package manager on macOS/Linux. See [file-types.md](file-types.md#pdf--pdf) for details.
 - Case-insensitive search by default
 - `-c` / `--case-sensitive` flag to opt back in
 - `mn reindex` command to rebuild the inverted index from stored docs

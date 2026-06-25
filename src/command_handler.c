@@ -130,6 +130,14 @@ static void close_terminal(void) {
 
 static void handle_enter(SearchResult *results, int selected, const char *query) {
     const char *file_path = results[selected].original_path;
+
+    /* Open PDFs with the OS's default PDF viewer instead of the IDE. */
+    if (strcmp(results[selected].file_type, "pdf") == 0) {
+        open_with_default_app(file_path);
+        close_terminal();
+        return;
+    }
+
     const char *repo_path = NULL;
     int entry_count;
     IndexEntry *entries = index_get_entries(&entry_count);
@@ -188,6 +196,14 @@ static void cmd_search(int argc, char *argv[]) {
 
 static void handle_list_enter(IndexEntry *entries, int selected) {
     const char *file_path = entries[selected].original_path;
+
+    /* Open PDFs with the OS's default PDF viewer instead of the IDE. */
+    if (strcmp(entries[selected].file_type, "pdf") == 0) {
+        open_with_default_app(file_path);
+        close_terminal();
+        return;
+    }
+
     const char *repo_path = (strcmp(entries[selected].repository, "none") != 0)
                             ? entries[selected].repository : NULL;
     const char *ide_name = get_ide();

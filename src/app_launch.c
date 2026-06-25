@@ -154,3 +154,23 @@ void app_launch(const char *app, const char *target) {
     }
 #endif
 }
+
+void open_with_default_app(const char *path) {
+#ifdef _WIN32
+    SHELLEXECUTEINFOA sei = {0};
+    sei.cbSize = sizeof(sei);
+    sei.lpVerb = "open";
+    sei.lpFile = path;
+    sei.nShow  = SW_SHOWNORMAL;
+    if (!ShellExecuteExA(&sei))
+        fprintf(stderr, "error: failed to open '%s'\n", path);
+#elif defined(__APPLE__)
+    char cmd[WORKSPACE_TARGET_MAX + 16];
+    snprintf(cmd, sizeof(cmd), "open \"%s\"", path);
+    system(cmd);
+#else
+    char cmd[WORKSPACE_TARGET_MAX + 32];
+    snprintf(cmd, sizeof(cmd), "xdg-open \"%s\" &", path);
+    system(cmd);
+#endif
+}

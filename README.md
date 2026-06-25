@@ -21,6 +21,7 @@ Named after the Greek goddess of memory.
   - [macOS](#macos)
   - [Windows](#windows)
   - [Enabling GUI IDE launchers](#enabling-gui-ide-launchers)
+  - [Enabling PDF support](#enabling-pdf-support)
   - [Uninstalling](#uninstalling)
 - [Quick Start](#quick-start)
 
@@ -117,6 +118,35 @@ For `mnemosyne` to open files in `code`, `cursor`, or `idea`, the matching CLI l
 Open a new terminal afterwards, then verify with `code --version`, `cursor --version`, or `idea --version`.
 
 `nvim`, `vim`, and `nano` are installed via package managers and are on PATH automatically.
+
+### Enabling PDF support
+
+Mnemosyne extracts text from `.pdf` files via `pdftotext` (from poppler-utils). Without it, `mn add` on a PDF prints an error and skips the file — all other file types work normally.
+
+**Linux:**
+```bash
+sudo apt install poppler-utils       # Debian/Ubuntu
+sudo dnf install poppler-utils       # Fedora
+```
+
+**macOS:**
+```bash
+brew install poppler
+```
+
+**Windows** — fetch a bundled copy and install it alongside `mn.exe`. No system PATH changes, no separate poppler install:
+```powershell
+mingw32-make fetch-poppler           # one-time, downloads ~50 MB into vendor/
+mingw32-make install                 # copies pdftotext.exe + DLLs next to mn.exe
+```
+`fetch-poppler` downloads a pinned [poppler-windows](https://github.com/oschwartz10612/poppler-windows) release into `vendor/poppler-windows/` (gitignored) and normalizes the layout. `install` then copies it to `%USERPROFILE%\bin\poppler\bin\` so `mn.exe` finds it as a sibling.
+
+To pin a different release:
+```powershell
+mingw32-make fetch-poppler POPPLER_VERSION=25.07.0-0
+```
+
+> On Windows, `mn` resolves `pdftotext.exe` in this order: (1) next to `mn.exe`, (2) `poppler\bin\` next to `mn.exe`, (3) PATH. So you can also drop a manually-downloaded poppler folder in either location instead of using `fetch-poppler`.
 
 ### Uninstalling
 ```bash
