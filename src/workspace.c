@@ -258,6 +258,33 @@ int workspace_remove_entry(const char *name, int index) {
     return rc;
 }
 
+int workspace_append_targets_to_entry(const char *name, int entry_idx,
+                                      const char targets[][WORKSPACE_TARGET_MAX],
+                                      int target_count) {
+    int count;
+    Workspace *ws = workspace_load_all(&count);
+    if (ws == NULL) return -3;
+
+    int idx = -1;
+    for (int i = 0; i < count; i++) {
+        if (strcmp(ws[i].name, name) == 0) { idx = i; break; }
+    }
+    if (idx == -1) { free(ws); return -1; }
+    if (entry_idx < 0 || entry_idx >= ws[idx].entry_count) { free(ws); return -2; }
+
+    WorkspaceEntry *e = &ws[idx].entries[entry_idx];
+    for (int k = 0; k < target_count; k++) {
+        if (e->target_count >= WORKSPACE_ENTRY_TARGETS_MAX) break;
+        strncpy(e->targets[e->target_count], targets[k], WORKSPACE_TARGET_MAX - 1);
+        e->targets[e->target_count][WORKSPACE_TARGET_MAX - 1] = '\0';
+        e->target_count++;
+    }
+
+    int rc = workspace_save_all(ws, count);
+    free(ws);
+    return rc;
+}
+
 int workspace_get(const char *name, Workspace *out) {
     int count;
     Workspace *ws = workspace_load_all(&count);

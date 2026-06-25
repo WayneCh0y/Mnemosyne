@@ -436,11 +436,18 @@ static void cmd_open_add(void) {
     const Workspace *chosen_ws = &ws[ws_idx];
     for (int i = 0; i < chosen_ws->entry_count && editor_count < WORKSPACE_ENTRIES_MAX; i++) {
         WsEditorApp *e = &editor_apps[editor_count++];
-        strncpy(e->app, chosen_ws->entries[i].app, WORKSPACE_APP_MAX - 1);
-        ws_display_name(chosen_ws->entries[i].app, e->display, sizeof(e->display));
-        if (chosen_ws->entries[i].target_count > 0)
-            strncpy(e->existing_target, chosen_ws->entries[i].targets[0], WORKSPACE_TARGET_MAX - 1);
+        const WorkspaceEntry *src = &chosen_ws->entries[i];
+        strncpy(e->app, src->app, WORKSPACE_APP_MAX - 1);
+        ws_display_name(src->app, e->display, sizeof(e->display));
+        int tc = src->target_count;
+        if (tc > SNAP_LINKS_MAX) tc = SNAP_LINKS_MAX;
+        for (int k = 0; k < tc; k++) {
+            strncpy(e->existing_links.items[k], src->targets[k], WORKSPACE_TARGET_MAX - 1);
+            e->existing_links.items[k][WORKSPACE_TARGET_MAX - 1] = '\0';
+        }
+        e->existing_links.count = tc;
     }
+    int original_count = editor_count;
 
     /* Step 3: run workspace editor — Esc cancels, Enter confirms. */
     if (!run_workspace_add_picker(chosen_ws->name, editor_apps, &editor_count,
@@ -457,18 +464,28 @@ static void cmd_open_add(void) {
     int added = 0;
     int full  = 0;
     for (int i = 0; i < editor_count && !full; i++) {
-        if (editor_apps[i].new_links.count == 0) {
-            if (!editor_apps[i].is_new) continue;
-            int rc = workspace_add_entry(ws_name, editor_apps[i].app, "");
+        if (i < original_count) {
+            /* Existing entry: append new links to it rather than creating a duplicate. */
+            if (editor_apps[i].new_links.count == 0) continue;
+            int rc = workspace_append_targets_to_entry(ws_name, i,
+                                                       editor_apps[i].new_links.items,
+                                                       editor_apps[i].new_links.count);
             if (rc == 0) { added++; }
-            else if (rc == -2) { fprintf(stderr, "error: workspace '%s' is full\n", ws_name); full = 1; }
+            else { fprintf(stderr, "error: failed to update entry %d in '%s'\n", i + 1, ws_name); }
         } else {
-            /* All links for this app instance go into one grouped entry. */
-            int rc = workspace_add_entry_with_targets(ws_name, editor_apps[i].app,
-                                                      editor_apps[i].new_links.items,
-                                                      editor_apps[i].new_links.count);
-            if (rc == 0) { added++; }
-            else if (rc == -2) { fprintf(stderr, "error: workspace '%s' is full\n", ws_name); full = 1; }
+            /* New app added this session. */
+            if (editor_apps[i].new_links.count == 0) {
+                int rc = workspace_add_entry(ws_name, editor_apps[i].app, "");
+                if (rc == 0) { added++; }
+                else if (rc == -2) { fprintf(stderr, "error: workspace '%s' is full\n", ws_name); full = 1; }
+            } else {
+                /* All links for this app instance go into one grouped entry. */
+                int rc = workspace_add_entry_with_targets(ws_name, editor_apps[i].app,
+                                                          editor_apps[i].new_links.items,
+                                                          editor_apps[i].new_links.count);
+                if (rc == 0) { added++; }
+                else if (rc == -2) { fprintf(stderr, "error: workspace '%s' is full\n", ws_name); full = 1; }
+            }
         }
     }
 

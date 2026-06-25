@@ -48,15 +48,16 @@ int run_multiselect_picker(const char *title, const char *subtitle,
                            const char **labels, int count, int *selected,
                            AppLinks *links);
 
-/* Workspace editor entry: one stored (app, target) pair (is_new=0) or a new
+/* Workspace editor entry: an existing stored app instance (is_new=0) or a new
    app being added this session (is_new=1). Each row in the editor represents
    exactly one workspace entry so instances of the same app stay separate.
-   new_links holds additional links typed this session. */
+   existing_links holds the targets already saved for this entry (shown dimmed);
+   new_links holds additional links typed this session (shown green). */
 typedef struct {
     char app[WORKSPACE_APP_MAX];
     char display[256];
     int  is_new;
-    char existing_target[WORKSPACE_TARGET_MAX];
+    AppLinks existing_links;
     AppLinks new_links;
 } WsEditorApp;
 

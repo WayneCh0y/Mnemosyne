@@ -823,6 +823,12 @@ int run_path_picker(IndexEntry *entries, int count, char *path_out, size_t path_
 #define WADD_TYPE_LINK 1
 #define WADD_TYPE_APP  2
 
+/* An editor entry is full once its saved + this-session links reach the per-entry
+   target cap; no further links may be added to it. */
+static int wadd_is_full(const WsEditorApp *a) {
+    return a->existing_links.count + a->new_links.count >= WORKSPACE_ENTRY_TARGETS_MAX;
+}
+
 /* Strip directory prefix and trailing .exe from app path for a short display name. */
 void ws_display_name(const char *app, char *out, size_t out_size) {
     const char *b = app;
@@ -861,10 +867,12 @@ static void render_workspace_add(const char *ws_name,
             printf("  %s " ANSI_CYAN "[+ Add a new app]" ANSI_RESET "\n", arrow);
         } else {
             const char *color = apps[i].is_new ? ANSI_GREEN : "";
-            printf("  %s %s%s" ANSI_RESET "\n", arrow, color, apps[i].display);
-            if (apps[i].existing_target[0])
+            const char *full_tag = wadd_is_full(&apps[i])
+                                 ? " " ANSI_DIM_YELLOW "(full)" ANSI_RESET : "";
+            printf("  %s %s%s" ANSI_RESET "%s\n", arrow, color, apps[i].display, full_tag);
+            for (int k = 0; k < apps[i].existing_links.count; k++)
                 printf(ANSI_DIM_YELLOW "        \xe2\x86\x92 %s" ANSI_RESET "\n",
-                       apps[i].existing_target);
+                       apps[i].existing_links.items[k]);
             for (int k = 0; k < apps[i].new_links.count; k++)
                 printf(ANSI_GREEN "        + %s" ANSI_RESET "\n",
                        apps[i].new_links.items[k]);
@@ -882,7 +890,10 @@ static void render_workspace_add(const char *ws_name,
         printf("\n" ANSI_CYAN "  New app: " ANSI_RESET "%s" ANSI_SEL "_" ANSI_RESET, typed);
         printf("\n" ANSI_DIM "  Enter add  \xe2\x80\xa2  Esc cancel  \xe2\x80\xa2  Backspace delete" ANSI_RESET);
     } else if (cursor < count) {
-        printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  type to add link  \xe2\x80\xa2  Enter finish  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
+        if (wadd_is_full(&apps[cursor]))
+            printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  app is full  \xe2\x80\xa2  Enter finish  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
+        else
+            printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  type to add link  \xe2\x80\xa2  Enter finish  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
     } else {
         printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  type or Enter to add app  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
     }
@@ -908,7 +919,7 @@ int run_workspace_add_picker(const char *ws_name,
 
         if (mode == WADD_TYPE_LINK) {
             if (key == KEY_ENTER) {
-                if (typed_len > 0 && apps[cursor].new_links.count < SNAP_LINKS_MAX) {
+                if (typed_len > 0 && !wadd_is_full(&apps[cursor])) {
                     int k = apps[cursor].new_links.count;
                     strncpy(apps[cursor].new_links.items[k], typed, WORKSPACE_TARGET_MAX - 1);
                     apps[cursor].new_links.items[k][WORKSPACE_TARGET_MAX - 1] = '\0';
@@ -984,8 +995,7 @@ int run_workspace_add_picker(const char *ws_name,
                 break;
             default:
                 if (key >= 33 && key < 127) {
-                    if (cursor < *count &&
-                        apps[cursor].new_links.count < SNAP_LINKS_MAX) {
+                    if (cursor < *count && !wadd_is_full(&apps[cursor])) {
                         /* printable key on an app row → start adding a link */
                         mode      = WADD_TYPE_LINK;
                         typed[0]  = (char)key;
