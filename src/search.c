@@ -228,8 +228,13 @@ static int scan_file_tex(const char *path, const char *query, char *context, int
     return 0;
 }
 
-static int scan_file_pdf(const char *path, const char *query, char *context, int ctx_size) {
-    return scan_file_txt(path, query, query, context, ctx_size);
+static int scan_file_pdf(const char *path, const char *query, const char *raw_query,
+                          char *context, int ctx_size,
+                          int *match_start_out, int *match_len_out) {
+    /* Extracted PDF text is stored in the same doc .txt format, so reuse the
+       text scanner (including word-boundary highlighting). */
+    return scan_file_txt(path, query, raw_query, context, ctx_size,
+                         match_start_out, match_len_out);
 }
 
 SearchResult *search(const char *query, const char *raw_query, int *count) {
@@ -253,7 +258,7 @@ SearchResult *search(const char *query, const char *raw_query, int *count) {
         switch (file_type_from_string(entries[i].file_type)) {
             case FILE_TYPE_MD:  match_count = scan_file_md(doc_path, query, raw_query, context, sizeof(context), &match_start, &match_len);  break;
             case FILE_TYPE_TEX: match_count = scan_file_tex(doc_path, query, context, sizeof(context));                                       break;
-            case FILE_TYPE_PDF: match_count = scan_file_pdf(doc_path, query, context, sizeof(context));                                       break;
+            case FILE_TYPE_PDF: match_count = scan_file_pdf(doc_path, query, raw_query, context, sizeof(context), &match_start, &match_len);  break;
             default:            match_count = scan_file_txt(doc_path, query, raw_query, context, sizeof(context), &match_start, &match_len);  break;
         }
 
