@@ -206,32 +206,65 @@ int run_ide_picker(const char **list, int display) {
 #define MS_MODE_LIST 0
 #define MS_MODE_TYPE 1
 
+/* Navigated as a flat list of rows: one per app, plus one per link beneath each
+   selected app (so the cursor can land on a single link to remove it). */
+enum { MS_ROW_APP, MS_ROW_LINK };
+typedef struct {
+    int kind;
+    int app;   /* index into labels[]/selected[]/links[] */
+    int link;  /* link index within links[app] for MS_ROW_LINK, else -1 */
+} MsRow;
+
+#define MS_MAX_ROWS (WORKSPACE_ENTRIES_MAX * (1 + SNAP_LINKS_MAX))
+
+static int build_ms_rows(int count, const int *selected, const AppLinks *links,
+                         MsRow *rows) {
+    int n = 0;
+    for (int i = 0; i < count && n < MS_MAX_ROWS; i++) {
+        rows[n].kind = MS_ROW_APP; rows[n].app = i; rows[n].link = -1; n++;
+        if (links && selected[i])
+            for (int k = 0; k < links[i].count && n < MS_MAX_ROWS; k++) {
+                rows[n].kind = MS_ROW_LINK; rows[n].app = i; rows[n].link = k; n++;
+            }
+    }
+    return n;
+}
+
 static void render_multiselect(const char *title, const char *subtitle,
-                               const char **labels, int count,
+                               const char **labels,
                                const int *selected, const AppLinks *links,
-                               int cursor, int mode, const char *typed) {
+                               const MsRow *rows, int nrows,
+                               int cursor, int mode, const char *typed, int type_app) {
     print_picker_header(title, subtitle);
-    int start = picker_window_start(cursor, count);
-    int end   = start + (count < PICKER_WINDOW ? count : PICKER_WINDOW);
+    int start = picker_window_start(cursor, nrows);
+    int end   = start + (nrows < PICKER_WINDOW ? nrows : PICKER_WINDOW);
     print_more_above(start);
     for (int i = start; i < end; i++) {
-        const char *arrow = (i == cursor) ? ANSI_GREEN CURSOR_TOKEN ANSI_RESET : " ";
-        const char *color = selected[i] ? ANSI_GREEN : ANSI_DIM;
-        printf("  %s %s%s" ANSI_RESET "\n", arrow, color, labels[i]);
-        if (links && selected[i])
-            for (int k = 0; k < links[i].count; k++)
-                printf(ANSI_DIM_YELLOW "        \xe2\x86\x92 %s" ANSI_RESET "\n",
-                       links[i].items[k]);
+        const MsRow *r = &rows[i];
+        const char *cur = (i == cursor) ? ANSI_GREEN CURSOR_TOKEN ANSI_RESET : " ";
+        if (r->kind == MS_ROW_APP) {
+            if (selected[r->app])
+                printf("  %s " ANSI_APP_HL " %s " ANSI_RESET "\n", cur, labels[r->app]);
+            else
+                printf("  %s " ANSI_DIM "%s" ANSI_RESET "\n", cur, labels[r->app]);
+        } else { /* MS_ROW_LINK */
+            printf("  %s     " ANSI_DIM_YELLOW "\xe2\x86\x92 %s" ANSI_RESET "\n",
+                   cur, links[r->app].items[r->link]);
+        }
     }
-    print_more_below(end, count);
+    print_more_below(end, nrows);
     if (mode == MS_MODE_TYPE) {
         printf("\n" ANSI_CYAN "  Add link for %s: " ANSI_RESET "%s" ANSI_SEL "_" ANSI_RESET,
-               labels[cursor], typed);
+               labels[type_app], typed);
         printf("\n" ANSI_DIM "  Enter add  •  Esc cancel  •  Backspace delete" ANSI_RESET);
-    } else if (links) {
-        printf("\n" ANSI_DIM "↑/↓ move  •  Backspace toggle  •  type to add link  •  Enter confirm  •  Esc cancel" ANSI_RESET);
     } else {
-        printf("\n" ANSI_DIM "↑/↓ move  •  Backspace toggle  •  Enter confirm  •  Esc cancel" ANSI_RESET);
+        const MsRow *r = &rows[cursor];
+        if (r->kind == MS_ROW_LINK)
+            printf("\n" ANSI_DIM "↑/↓ move  •  Backspace remove link  •  Enter confirm  •  Esc cancel" ANSI_RESET);
+        else if (links && selected[r->app])
+            printf("\n" ANSI_DIM "↑/↓ move  •  Backspace deselect  •  type to add link  •  Enter confirm  •  Esc cancel" ANSI_RESET);
+        else
+            printf("\n" ANSI_DIM "↑/↓ move  •  Backspace toggle  •  Enter confirm  •  Esc cancel" ANSI_RESET);
     }
     fflush(stdout);
 }
@@ -239,26 +272,30 @@ static void render_multiselect(const char *title, const char *subtitle,
 int run_multiselect_picker(const char *title, const char *subtitle,
                            const char **labels, int count, int *selected,
                            AppLinks *links) {
+    static MsRow rows[MS_MAX_ROWS];
     int  cursor    = 0;
     int  done      = 0;
     int  cancelled = 0;
     int  mode      = MS_MODE_LIST;
+    int  type_app  = 0;   /* app being given a new link in MS_MODE_TYPE */
     char typed[WORKSPACE_TARGET_MAX] = {0};
     int  typed_len = 0;
 
+    int nrows = build_ms_rows(count, selected, links, rows);
     printf(ANSI_CURSOR_HIDE);
-    render_multiselect(title, subtitle, labels, count, selected, links, cursor, mode, typed);
+    render_multiselect(title, subtitle, labels, selected, links,
+                       rows, nrows, cursor, mode, typed, type_app);
 
     while (!done) {
         int key = read_key();
 
         if (mode == MS_MODE_TYPE) {
             if (key == KEY_ENTER) {
-                if (typed_len > 0 && links[cursor].count < SNAP_LINKS_MAX) {
-                    int k = links[cursor].count;
-                    strncpy(links[cursor].items[k], typed, WORKSPACE_TARGET_MAX - 1);
-                    links[cursor].items[k][WORKSPACE_TARGET_MAX - 1] = '\0';
-                    links[cursor].count++;
+                if (typed_len > 0 && links[type_app].count < SNAP_LINKS_MAX) {
+                    int k = links[type_app].count;
+                    strncpy(links[type_app].items[k], typed, WORKSPACE_TARGET_MAX - 1);
+                    links[type_app].items[k][WORKSPACE_TARGET_MAX - 1] = '\0';
+                    links[type_app].count++;
                 }
                 mode = MS_MODE_LIST; typed[0] = '\0'; typed_len = 0;
             } else if (key == KEY_ESC) {
@@ -272,19 +309,30 @@ int run_multiselect_picker(const char *title, const char *subtitle,
                 }
             }
         } else {
+            const MsRow *r = &rows[cursor];
             switch (key) {
             case KEY_UP:    if (cursor > 0)         cursor--; break;
-            case KEY_DOWN:  if (cursor < count - 1) cursor++; break;
+            case KEY_DOWN:  if (cursor < nrows - 1) cursor++; break;
             case KEY_BACKSPACE:
-            case 127:       selected[cursor] = !selected[cursor]; break;
+            case 127:
+                if (r->kind == MS_ROW_APP) {
+                    selected[r->app] = !selected[r->app];
+                } else { /* MS_ROW_LINK → remove the link immediately */
+                    AppLinks *L = &links[r->app];
+                    for (int j = r->link; j < L->count - 1; j++)
+                        memcpy(L->items[j], L->items[j + 1], WORKSPACE_TARGET_MAX);
+                    L->count--;
+                }
+                break;
             case KEY_ENTER: done = 1; break;
             case KEY_ESC:   cancelled = 1; done = 1; break;
             default:
-                /* Any printable key (not Space) on a selected row → start adding a
-                   link inline, seeded with that first character. */
-                if (links && selected[cursor] && key >= 33 && key < 127
-                    && links[cursor].count < SNAP_LINKS_MAX) {
+                /* Any printable key on a selected app row → start adding a link
+                   inline, seeded with that first character. */
+                if (links && r->kind == MS_ROW_APP && selected[r->app]
+                    && key >= 33 && key < 127 && links[r->app].count < SNAP_LINKS_MAX) {
                     mode      = MS_MODE_TYPE;
+                    type_app  = r->app;
                     typed[0]  = (char)key;
                     typed[1]  = '\0';
                     typed_len = 1;
@@ -293,8 +341,13 @@ int run_multiselect_picker(const char *title, const char *subtitle,
             }
         }
 
-        if (!done)
-            render_multiselect(title, subtitle, labels, count, selected, links, cursor, mode, typed);
+        if (!done) {
+            nrows = build_ms_rows(count, selected, links, rows);
+            if (cursor >= nrows) cursor = nrows - 1;
+            if (cursor < 0)      cursor = 0;
+            render_multiselect(title, subtitle, labels, selected, links,
+                               rows, nrows, cursor, mode, typed, type_app);
+        }
     }
 
     printf(ANSI_CURSOR_SHOW);

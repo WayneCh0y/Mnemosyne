@@ -46,10 +46,12 @@ typedef struct {
 } AppLinks;
 
 /* Multi-select checklist. selected[] (length count) is in/out: 1 = ticked.
-   Space toggles the highlighted row, Enter confirms, Esc cancels.
+   ↑/↓ move the cursor, which can land on an app or, for a selected app, one of
+   its links. Backspace on an app toggles its tick; Backspace on a link removes
+   that link immediately. Enter confirms, Esc cancels.
    If links is non-NULL (length count), pressing any printable key on a selected
-   row opens an inline field to add a link to that row; links are appended (up to
-   SNAP_LINKS_MAX) and shown as "→ link" lines beneath the app.
+   app opens an inline field to add a link (appended, up to SNAP_LINKS_MAX); links
+   are shown as "→ link" lines beneath the app.
    Returns 1 if confirmed, 0 if cancelled. */
 int run_multiselect_picker(const char *title, const char *subtitle,
                            const char **labels, int count, int *selected,
