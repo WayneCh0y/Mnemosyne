@@ -25,6 +25,8 @@ typedef struct {
 int  targetlist_push(char (**arr)[WORKSPACE_TARGET_MAX], int *cap, int *count, const char *s);
 /* Removes index idx, shifting the tail down. */
 void targetlist_remove(char (*arr)[WORKSPACE_TARGET_MAX], int *count, int idx);
+/* Swaps entries at idx1 and idx2 in-place. */
+void targetlist_swap(char (*arr)[WORKSPACE_TARGET_MAX], int idx1, int idx2);
 /* Frees the backing store and resets *arr=NULL, *cap=*count=0. (free(NULL) safe.) */
 void targetlist_free(char (**arr)[WORKSPACE_TARGET_MAX], int *cap, int *count);
 

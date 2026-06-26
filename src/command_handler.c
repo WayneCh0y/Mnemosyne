@@ -440,6 +440,7 @@ static void free_editor_apps(WsEditorApp *apps, int cap) {
         targetlist_free(&apps[i].new_links.items, &apps[i].new_links.cap,
                         &apps[i].new_links.count);
         free(apps[i].existing_del);
+        free(apps[i].existing_pos);
     }
     free(apps);
 }
@@ -490,8 +491,13 @@ static void cmd_open_edit(void) {
         for (int k = 0; k < src->target_count; k++)
             targetlist_push(&e->existing_links.items, &e->existing_links.cap,
                             &e->existing_links.count, src->targets[k]);
-        if (e->existing_links.count > 0)
+        if (e->existing_links.count > 0) {
             e->existing_del = calloc(e->existing_links.count, sizeof(int));
+            e->existing_pos = malloc(e->existing_links.count * sizeof(int));
+            if (e->existing_pos)
+                for (int k = 0; k < e->existing_links.count; k++)
+                    e->existing_pos[k] = k;
+        }
     }
 
     /* Step 3: run the editor — Esc cancels, Enter confirms. */
@@ -585,6 +591,9 @@ static void cmd_open_snap(void) {
         app_display_token(apps[i].app, label_bufs[i], sizeof(label_bufs[i]));
         labels[i] = label_bufs[i];
         selected[i] = 1;
+        if (apps[i].target[0] != '\0')
+            targetlist_push(&links[i].items, &links[i].cap,
+                            &links[i].count, apps[i].target);
     }
 
     char name[WORKSPACE_NAME_MAX] = {0};

@@ -9,6 +9,8 @@
 
 #define KEY_UP        1000
 #define KEY_DOWN      1001
+#define KEY_LEFT      1002
+#define KEY_RIGHT     1003
 #define KEY_ENTER     13
 #define KEY_ESC       27
 #define KEY_BACKSPACE 8
@@ -32,6 +34,7 @@
 #define ANSI_DEL_HL      "\033[30;41m"
 #define ANSI_ADD_HL      "\033[30;42m"
 #define ANSI_APP_HL      "\033[37;44m"
+#define ANSI_LIFT_HL     "\033[1;37;46m"  /* bold white on cyan — lifted/reordering link */
 
 int read_key(void);
 /* Generic numbered string-list picker. Returns the chosen index, or -1 (Esc). */
@@ -68,6 +71,9 @@ int run_multiselect_picker(const char *title, const char *subtitle,
    Staged removals: marked_delete flags an existing app for deletion (shown red),
    and existing_del[k] flags the k-th existing link for deletion (shown red).
    existing_del is heap-allocated to existing_links.count at build time.
+   existing_pos[k] holds the original index of the link currently at slot k; it
+   travels with the link through reorder swaps so a link is "moved" (shown with a
+   ↕ marker) exactly when existing_pos[k] != k. Allocated alongside existing_del.
    New apps/links are un-staged by dropping them from the lists. */
 typedef struct {
     char app[WORKSPACE_APP_MAX];
@@ -76,6 +82,7 @@ typedef struct {
     int  marked_delete;
     AppLinks existing_links;
     int *existing_del;
+    int *existing_pos;
     AppLinks new_links;
 } WsEditorApp;
 
