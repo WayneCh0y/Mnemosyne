@@ -215,16 +215,28 @@ typedef struct {
     int link;  /* link index within links[app] for MS_ROW_LINK, else -1 */
 } MsRow;
 
-#define MS_MAX_ROWS (WORKSPACE_ENTRIES_MAX * (1 + SNAP_LINKS_MAX))
-
+/* Builds the flat row list into a heap buffer, growing it as needed.
+   rows and cap are in/out; returns the row count. */
 static int build_ms_rows(int count, const int *selected, const AppLinks *links,
-                         MsRow *rows) {
+                         MsRow **rows, int *cap) {
+    int need = 0;
+    for (int i = 0; i < count; i++) {
+        need++;
+        if (links && selected[i]) need += links[i].count;
+    }
+    if (need > *cap) {
+        int ncap = *cap ? *cap : 16;
+        while (ncap < need) ncap *= 2;
+        MsRow *p = realloc(*rows, (size_t)ncap * sizeof(MsRow));
+        if (p != NULL) { *rows = p; *cap = ncap; }
+    }
     int n = 0;
-    for (int i = 0; i < count && n < MS_MAX_ROWS; i++) {
-        rows[n].kind = MS_ROW_APP; rows[n].app = i; rows[n].link = -1; n++;
+    MsRow *r = *rows;
+    for (int i = 0; i < count && n < *cap; i++) {
+        r[n].kind = MS_ROW_APP; r[n].app = i; r[n].link = -1; n++;
         if (links && selected[i])
-            for (int k = 0; k < links[i].count && n < MS_MAX_ROWS; k++) {
-                rows[n].kind = MS_ROW_LINK; rows[n].app = i; rows[n].link = k; n++;
+            for (int k = 0; k < links[i].count && n < *cap; k++) {
+                r[n].kind = MS_ROW_LINK; r[n].app = i; r[n].link = k; n++;
             }
     }
     return n;
@@ -272,7 +284,8 @@ static void render_multiselect(const char *title, const char *subtitle,
 int run_multiselect_picker(const char *title, const char *subtitle,
                            const char **labels, int count, int *selected,
                            AppLinks *links) {
-    static MsRow rows[MS_MAX_ROWS];
+    MsRow *rows    = NULL;
+    int  rows_cap  = 0;
     int  cursor    = 0;
     int  done      = 0;
     int  cancelled = 0;
@@ -281,7 +294,7 @@ int run_multiselect_picker(const char *title, const char *subtitle,
     char typed[WORKSPACE_TARGET_MAX] = {0};
     int  typed_len = 0;
 
-    int nrows = build_ms_rows(count, selected, links, rows);
+    int nrows = build_ms_rows(count, selected, links, &rows, &rows_cap);
     printf(ANSI_CURSOR_HIDE);
     render_multiselect(title, subtitle, labels, selected, links,
                        rows, nrows, cursor, mode, typed, type_app);
@@ -291,12 +304,9 @@ int run_multiselect_picker(const char *title, const char *subtitle,
 
         if (mode == MS_MODE_TYPE) {
             if (key == KEY_ENTER) {
-                if (typed_len > 0 && links[type_app].count < SNAP_LINKS_MAX) {
-                    int k = links[type_app].count;
-                    strncpy(links[type_app].items[k], typed, WORKSPACE_TARGET_MAX - 1);
-                    links[type_app].items[k][WORKSPACE_TARGET_MAX - 1] = '\0';
-                    links[type_app].count++;
-                }
+                if (typed_len > 0)
+                    targetlist_push(&links[type_app].items, &links[type_app].cap,
+                                    &links[type_app].count, typed);
                 mode = MS_MODE_LIST; typed[0] = '\0'; typed_len = 0;
             } else if (key == KEY_ESC) {
                 mode = MS_MODE_LIST; typed[0] = '\0'; typed_len = 0;
@@ -318,10 +328,7 @@ int run_multiselect_picker(const char *title, const char *subtitle,
                 if (r->kind == MS_ROW_APP) {
                     selected[r->app] = !selected[r->app];
                 } else { /* MS_ROW_LINK → remove the link immediately */
-                    AppLinks *L = &links[r->app];
-                    for (int j = r->link; j < L->count - 1; j++)
-                        memcpy(L->items[j], L->items[j + 1], WORKSPACE_TARGET_MAX);
-                    L->count--;
+                    targetlist_remove(links[r->app].items, &links[r->app].count, r->link);
                 }
                 break;
             case KEY_ENTER: done = 1; break;
@@ -330,7 +337,7 @@ int run_multiselect_picker(const char *title, const char *subtitle,
                 /* Any printable key on a selected app row → start adding a link
                    inline, seeded with that first character. */
                 if (links && r->kind == MS_ROW_APP && selected[r->app]
-                    && key >= 33 && key < 127 && links[r->app].count < SNAP_LINKS_MAX) {
+                    && key >= 33 && key < 127) {
                     mode      = MS_MODE_TYPE;
                     type_app  = r->app;
                     typed[0]  = (char)key;
@@ -342,7 +349,7 @@ int run_multiselect_picker(const char *title, const char *subtitle,
         }
 
         if (!done) {
-            nrows = build_ms_rows(count, selected, links, rows);
+            nrows = build_ms_rows(count, selected, links, &rows, &rows_cap);
             if (cursor >= nrows) cursor = nrows - 1;
             if (cursor < 0)      cursor = 0;
             render_multiselect(title, subtitle, labels, selected, links,
@@ -350,6 +357,7 @@ int run_multiselect_picker(const char *title, const char *subtitle,
         }
     }
 
+    free(rows);
     printf(ANSI_CURSOR_SHOW);
     fflush(stdout);
     return cancelled ? 0 : 1;
@@ -714,12 +722,6 @@ static int confirm_centered(const char *question) {
 #define WADD_TYPE_LINK 1
 #define WADD_TYPE_APP  2
 
-/* An editor entry is full once its saved + this-session links reach the per-entry
-   target cap; no further links may be added to it. */
-static int wadd_is_full(const WsEditorApp *a) {
-    return a->existing_links.count + a->new_links.count >= WORKSPACE_ENTRY_TARGETS_MAX;
-}
-
 /* Strip directory prefix and trailing .exe from app path for a short display name. */
 void ws_display_name(const char *app, char *out, size_t out_size) {
     const char *b = app;
@@ -748,26 +750,37 @@ typedef struct {
     int link;  /* link index within the app's links for LINK rows, else -1 */
 } WeditRow;
 
-/* Worst case: every app row plus all its links (capped at SNAP_LINKS_MAX combined),
-   plus the [+ Add a new app] and [- Remove this workspace] pseudo-rows. */
-#define WEDIT_MAX_ROWS (WORKSPACE_ENTRIES_MAX * (1 + SNAP_LINKS_MAX) + 2)
-
-/* Flattens the editor state into the navigable row list; returns the row count.
-   Links of an app staged for deletion are collapsed (the whole app is going). */
-static int build_edit_rows(const WsEditorApp *apps, int count, WeditRow *rows) {
-    int n = 0;
+/* Flattens the editor state into the navigable row list, growing the heap buffer
+   as needed; returns the row count. rows and cap are in/out. Links of an app staged
+   for deletion are collapsed (the whole app is going). */
+static int build_edit_rows(const WsEditorApp *apps, int count,
+                           WeditRow **rows, int *cap) {
+    int need = 2;   /* the two trailing pseudo-rows */
     for (int i = 0; i < count; i++) {
-        rows[n].kind = ROW_APP; rows[n].app = i; rows[n].link = -1; n++;
+        need++;
+        if (!apps[i].marked_delete)
+            need += apps[i].existing_links.count + apps[i].new_links.count;
+    }
+    if (need > *cap) {
+        int ncap = *cap ? *cap : 16;
+        while (ncap < need) ncap *= 2;
+        WeditRow *p = realloc(*rows, (size_t)ncap * sizeof(WeditRow));
+        if (p != NULL) { *rows = p; *cap = ncap; }
+    }
+    int n = 0;
+    WeditRow *rw = *rows;
+    for (int i = 0; i < count && n + 2 < *cap; i++) {
+        rw[n].kind = ROW_APP; rw[n].app = i; rw[n].link = -1; n++;
         if (apps[i].marked_delete) continue;
-        for (int k = 0; k < apps[i].existing_links.count; k++) {
-            rows[n].kind = ROW_LINK_EXISTING; rows[n].app = i; rows[n].link = k; n++;
+        for (int k = 0; k < apps[i].existing_links.count && n + 2 < *cap; k++) {
+            rw[n].kind = ROW_LINK_EXISTING; rw[n].app = i; rw[n].link = k; n++;
         }
-        for (int k = 0; k < apps[i].new_links.count; k++) {
-            rows[n].kind = ROW_LINK_NEW; rows[n].app = i; rows[n].link = k; n++;
+        for (int k = 0; k < apps[i].new_links.count && n + 2 < *cap; k++) {
+            rw[n].kind = ROW_LINK_NEW; rw[n].app = i; rw[n].link = k; n++;
         }
     }
-    rows[n].kind = ROW_ADD_APP; rows[n].app = -1; rows[n].link = -1; n++;
-    rows[n].kind = ROW_DEL_WS;  rows[n].app = -1; rows[n].link = -1; n++;
+    rw[n].kind = ROW_ADD_APP; rw[n].app = -1; rw[n].link = -1; n++;
+    rw[n].kind = ROW_DEL_WS;  rw[n].app = -1; rw[n].link = -1; n++;
     return n;
 }
 
@@ -796,13 +809,10 @@ static void render_workspace_edit(const char *ws_name,
             const WsEditorApp *a = &apps[r->app];
             if (a->marked_delete) {
                 printf("  %s " ANSI_RED "- %s" ANSI_RESET "\n", arrow, a->display);
+            } else if (a->is_new) {
+                printf("  %s " ANSI_GREEN "+ %s" ANSI_RESET "\n", arrow, a->display);
             } else {
-                const char *full_tag = wadd_is_full(a)
-                                     ? " " ANSI_DIM_YELLOW "(full)" ANSI_RESET : "";
-                if (a->is_new)
-                    printf("  %s " ANSI_GREEN "+ %s" ANSI_RESET "%s\n", arrow, a->display, full_tag);
-                else
-                    printf("  %s " ANSI_APP_HL " %s " ANSI_RESET "%s\n", arrow, a->display, full_tag);
+                printf("  %s " ANSI_APP_HL " %s " ANSI_RESET "\n", arrow, a->display);
             }
         } else if (r->kind == ROW_LINK_EXISTING) {
             const WsEditorApp *a = &apps[r->app];
@@ -835,8 +845,6 @@ static void render_workspace_edit(const char *ws_name,
             printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  Enter to remove this workspace  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
         } else if (r->kind == ROW_APP && apps[r->app].marked_delete) {
             printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  Backspace undo remove  \xe2\x80\xa2  Enter save  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
-        } else if (r->kind == ROW_APP && wadd_is_full(&apps[r->app])) {
-            printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  app is full  \xe2\x80\xa2  Backspace remove  \xe2\x80\xa2  Enter save  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
         } else if (r->kind == ROW_APP) {
             printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  type to add link  \xe2\x80\xa2  Backspace remove  \xe2\x80\xa2  Enter save  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
         } else { /* link row */
@@ -849,7 +857,8 @@ static void render_workspace_edit(const char *ws_name,
 int run_workspace_edit_picker(const char *ws_name,
                               WsEditorApp *apps, int *count, int max,
                               int *delete_workspace) {
-    static WeditRow rows[WEDIT_MAX_ROWS];
+    WeditRow *rows = NULL;
+    int  rows_cap  = 0;
     int  cursor    = 0;
     int  mode      = WADD_LIST;
     char typed[WORKSPACE_TARGET_MAX] = {0};
@@ -860,7 +869,7 @@ int run_workspace_edit_picker(const char *ws_name,
     int  cancelled = 0;
 
     *delete_workspace = 0;
-    int nrows = build_edit_rows(apps, *count, rows);
+    int nrows = build_edit_rows(apps, *count, &rows, &rows_cap);
 
     printf(ANSI_CURSOR_HIDE);
     render_workspace_edit(ws_name, apps, rows, nrows, cursor, mode,
@@ -872,12 +881,10 @@ int run_workspace_edit_picker(const char *ws_name,
 
         if (mode == WADD_TYPE_LINK) {
             if (key == KEY_ENTER) {
-                if (typed_len > 0 && !wadd_is_full(&apps[type_app])) {
-                    int k = apps[type_app].new_links.count;
-                    strncpy(apps[type_app].new_links.items[k], typed, WORKSPACE_TARGET_MAX - 1);
-                    apps[type_app].new_links.items[k][WORKSPACE_TARGET_MAX - 1] = '\0';
-                    apps[type_app].new_links.count++;
-                }
+                if (typed_len > 0)
+                    targetlist_push(&apps[type_app].new_links.items,
+                                    &apps[type_app].new_links.cap,
+                                    &apps[type_app].new_links.count, typed);
                 typed[0] = '\0'; typed_len = 0;
                 mode = WADD_LIST;
             } else if (key == KEY_ESC) {
@@ -919,7 +926,7 @@ int run_workspace_edit_picker(const char *ws_name,
                         typed[0] = '\0'; typed_len = 0;
                         mode = WADD_LIST;
                         /* park the cursor on the freshly added app row */
-                        nrows = build_edit_rows(apps, *count, rows);
+                        nrows = build_edit_rows(apps, *count, &rows, &rows_cap);
                         for (int i = 0; i < nrows; i++)
                             if (rows[i].kind == ROW_APP && rows[i].app == *count - 1) { cursor = i; break; }
                     }
@@ -964,9 +971,19 @@ int run_workspace_edit_picker(const char *ws_name,
                 if (r->kind == ROW_APP) {
                     int ai = r->app;
                     if (apps[ai].is_new) {
-                        /* unsaved app → drop it entirely */
-                        for (int j = ai; j < *count - 1; j++) apps[j] = apps[j + 1];
+                        /* unsaved app → free its heap lists, then shift the tail down
+                           (a struct move would otherwise leak the freed slot's data). */
+                        targetlist_free(&apps[ai].existing_links.items,
+                                        &apps[ai].existing_links.cap,
+                                        &apps[ai].existing_links.count);
+                        targetlist_free(&apps[ai].new_links.items,
+                                        &apps[ai].new_links.cap,
+                                        &apps[ai].new_links.count);
+                        free(apps[ai].existing_del);
+                        memmove(&apps[ai], &apps[ai + 1],
+                                (size_t)(*count - ai - 1) * sizeof(WsEditorApp));
                         (*count)--;
+                        memset(&apps[*count], 0, sizeof(WsEditorApp));
                     } else {
                         apps[ai].marked_delete = !apps[ai].marked_delete;
                     }
@@ -974,17 +991,14 @@ int run_workspace_edit_picker(const char *ws_name,
                     apps[r->app].existing_del[r->link] = !apps[r->app].existing_del[r->link];
                 } else if (r->kind == ROW_LINK_NEW) {
                     /* unsaved link → drop it from new_links */
-                    AppLinks *nl = &apps[r->app].new_links;
-                    for (int j = r->link; j < nl->count - 1; j++)
-                        memcpy(nl->items[j], nl->items[j + 1], WORKSPACE_TARGET_MAX);
-                    nl->count--;
+                    targetlist_remove(apps[r->app].new_links.items,
+                                      &apps[r->app].new_links.count, r->link);
                 }
                 /* ROW_DEL_WS: Backspace does nothing; use Enter to confirm removal. */
                 break;
             default:
                 if (key >= 33 && key < 127) {
-                    if (r->kind == ROW_APP && !apps[r->app].marked_delete
-                        && !wadd_is_full(&apps[r->app])) {
+                    if (r->kind == ROW_APP && !apps[r->app].marked_delete) {
                         /* printable key on an app row → start adding a link */
                         mode      = WADD_TYPE_LINK;
                         type_app  = r->app;
@@ -1004,7 +1018,7 @@ int run_workspace_edit_picker(const char *ws_name,
         }
 
         if (!done) {
-            nrows = build_edit_rows(apps, *count, rows);
+            nrows = build_edit_rows(apps, *count, &rows, &rows_cap);
             if (cursor >= nrows) cursor = nrows - 1;
             if (cursor < 0)      cursor = 0;
             render_workspace_edit(ws_name, apps, rows, nrows, cursor, mode,
@@ -1012,6 +1026,7 @@ int run_workspace_edit_picker(const char *ws_name,
         }
     }
 
+    free(rows);
     printf(ANSI_CURSOR_SHOW);
     fflush(stdout);
     return cancelled ? 0 : 1;

@@ -38,11 +38,13 @@ int read_key(void);
 int run_menu_picker(const char *title, const char *subtitle,
                     const char **list, int display);
 int run_ide_picker(const char **list, int display);
-/* Per-app list of links/targets collected in the multiselect picker. */
-#define SNAP_LINKS_MAX 8
+/* Per-app list of links/targets collected in the multiselect picker. Backed by a
+   growable fixed-width string list (see targetlist_push/remove/free); items is
+   NULL until the first push. */
 typedef struct {
-    char items[SNAP_LINKS_MAX][WORKSPACE_TARGET_MAX];
+    char (*items)[WORKSPACE_TARGET_MAX];
     int  count;
+    int  cap;
 } AppLinks;
 
 /* Multi-select checklist. selected[] (length count) is in/out: 1 = ticked.
@@ -50,8 +52,9 @@ typedef struct {
    its links. Backspace on an app toggles its tick; Backspace on a link removes
    that link immediately. Enter confirms, Esc cancels.
    If links is non-NULL (length count), pressing any printable key on a selected
-   app opens an inline field to add a link (appended, up to SNAP_LINKS_MAX); links
-   are shown as "→ link" lines beneath the app.
+   app opens an inline field to add a link (appended, no fixed cap); links are
+   shown as "→ link" lines beneath the app. The caller owns links and must
+   targetlist_free() each before freeing the array.
    Returns 1 if confirmed, 0 if cancelled. */
 int run_multiselect_picker(const char *title, const char *subtitle,
                            const char **labels, int count, int *selected,
@@ -64,14 +67,15 @@ int run_multiselect_picker(const char *title, const char *subtitle,
    new_links holds additional links typed this session (shown green).
    Staged removals: marked_delete flags an existing app for deletion (shown red),
    and existing_del[k] flags the k-th existing link for deletion (shown red).
-   New apps/links are un-staged by dropping them from the arrays. */
+   existing_del is heap-allocated to existing_links.count at build time.
+   New apps/links are un-staged by dropping them from the lists. */
 typedef struct {
     char app[WORKSPACE_APP_MAX];
     char display[256];
     int  is_new;
     int  marked_delete;
     AppLinks existing_links;
-    int  existing_del[SNAP_LINKS_MAX];
+    int *existing_del;
     AppLinks new_links;
 } WsEditorApp;
 

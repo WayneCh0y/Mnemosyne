@@ -10,6 +10,37 @@ static void workspace_path(char *out, size_t n) {
     snprintf(out, n, "%s/workspaces.json", get_data_path());
 }
 
+/* ── Growable fixed-width string lists ─────────────────────────────────── */
+
+int targetlist_push(char (**arr)[WORKSPACE_TARGET_MAX], int *cap, int *count,
+                    const char *s) {
+    if (*count >= *cap) {
+        int ncap = *cap ? *cap * 2 : 4;
+        char (*p)[WORKSPACE_TARGET_MAX] = realloc(*arr, (size_t)ncap * sizeof(*p));
+        if (p == NULL) return -1;
+        *arr = p;
+        *cap = ncap;
+    }
+    strncpy((*arr)[*count], s, WORKSPACE_TARGET_MAX - 1);
+    (*arr)[*count][WORKSPACE_TARGET_MAX - 1] = '\0';
+    (*count)++;
+    return 0;
+}
+
+void targetlist_remove(char (*arr)[WORKSPACE_TARGET_MAX], int *count, int idx) {
+    if (idx < 0 || idx >= *count) return;
+    for (int j = idx; j < *count - 1; j++)
+        memcpy(arr[j], arr[j + 1], WORKSPACE_TARGET_MAX);
+    (*count)--;
+}
+
+void targetlist_free(char (**arr)[WORKSPACE_TARGET_MAX], int *cap, int *count) {
+    free(*arr);
+    *arr   = NULL;
+    *cap   = 0;
+    *count = 0;
+}
+
 static cJSON *load_ws_json(void) {
     char path[4096];
     workspace_path(path, sizeof(path));
@@ -78,31 +109,29 @@ Workspace *workspace_load_all(int *count) {
                 strncpy(ws[i].entries[j].app, app ? app->valuestring : "",
                         WORKSPACE_APP_MAX - 1);
                 ws[i].entries[j].app[WORKSPACE_APP_MAX - 1] = '\0';
+                /* malloc leaves these garbage; init before any push. */
+                ws[i].entries[j].targets      = NULL;
                 ws[i].entries[j].target_count = 0;
+                ws[i].entries[j].target_cap   = 0;
+                WorkspaceEntry *en = &ws[i].entries[j];
 
                 cJSON *tgts = cJSON_GetObjectItem(e, "targets");
                 if (tgts && cJSON_IsArray(tgts)) {
                     /* New format: "targets": ["url1", "url2", ...] */
                     int tc = cJSON_GetArraySize(tgts);
-                    if (tc > WORKSPACE_ENTRY_TARGETS_MAX) tc = WORKSPACE_ENTRY_TARGETS_MAX;
                     for (int k = 0; k < tc; k++) {
                         cJSON *t = cJSON_GetArrayItem(tgts, k);
-                        if (t && t->valuestring) {
-                            strncpy(ws[i].entries[j].targets[k], t->valuestring,
-                                    WORKSPACE_TARGET_MAX - 1);
-                            ws[i].entries[j].targets[k][WORKSPACE_TARGET_MAX - 1] = '\0';
-                            ws[i].entries[j].target_count++;
-                        }
+                        if (t && t->valuestring)
+                            targetlist_push(&en->targets, &en->target_cap,
+                                            &en->target_count, t->valuestring);
                     }
                 } else {
                     /* Backward compat: old format "target": "url" */
                     cJSON *tgt = cJSON_GetObjectItem(e, "target");
                     const char *tval = (tgt && tgt->valuestring) ? tgt->valuestring : "";
-                    if (tval[0] != '\0') {
-                        strncpy(ws[i].entries[j].targets[0], tval, WORKSPACE_TARGET_MAX - 1);
-                        ws[i].entries[j].targets[0][WORKSPACE_TARGET_MAX - 1] = '\0';
-                        ws[i].entries[j].target_count = 1;
-                    }
+                    if (tval[0] != '\0')
+                        targetlist_push(&en->targets, &en->target_cap,
+                                        &en->target_count, tval);
                 }
                 ws[i].entry_count++;
             }
@@ -112,6 +141,16 @@ Workspace *workspace_load_all(int *count) {
     cJSON_Delete(root);
     *count = n;
     return ws;
+}
+
+void workspace_free_all(Workspace *ws, int count) {
+    if (ws == NULL) return;
+    for (int i = 0; i < count; i++)
+        for (int j = 0; j < ws[i].entry_count; j++)
+            targetlist_free(&ws[i].entries[j].targets,
+                            &ws[i].entries[j].target_cap,
+                            &ws[i].entries[j].target_count);
+    free(ws);
 }
 
 int workspace_save_all(Workspace *ws, int count) {
@@ -176,23 +215,23 @@ int workspace_add_entry_with_targets(const char *name, const char *app,
     for (int i = 0; i < count; i++) {
         if (strcmp(ws[i].name, name) == 0) { idx = i; break; }
     }
-    if (idx == -1) { free(ws); return -1; }
-    if (ws[idx].entry_count >= WORKSPACE_ENTRIES_MAX) { free(ws); return -2; }
+    if (idx == -1) { workspace_free_all(ws, count); return -1; }
+    if (ws[idx].entry_count >= WORKSPACE_ENTRIES_MAX) { workspace_free_all(ws, count); return -2; }
 
     int j = ws[idx].entry_count;
-    strncpy(ws[idx].entries[j].app, app, WORKSPACE_APP_MAX - 1);
-    ws[idx].entries[j].app[WORKSPACE_APP_MAX - 1] = '\0';
-    if (target_count > WORKSPACE_ENTRY_TARGETS_MAX)
-        target_count = WORKSPACE_ENTRY_TARGETS_MAX;
-    ws[idx].entries[j].target_count = target_count;
-    for (int k = 0; k < target_count; k++) {
-        strncpy(ws[idx].entries[j].targets[k], targets[k], WORKSPACE_TARGET_MAX - 1);
-        ws[idx].entries[j].targets[k][WORKSPACE_TARGET_MAX - 1] = '\0';
-    }
+    WorkspaceEntry *en = &ws[idx].entries[j];
+    strncpy(en->app, app, WORKSPACE_APP_MAX - 1);
+    en->app[WORKSPACE_APP_MAX - 1] = '\0';
+    /* fresh slot beyond the loaded count → init before pushing. */
+    en->targets      = NULL;
+    en->target_count = 0;
+    en->target_cap   = 0;
+    for (int k = 0; k < target_count; k++)
+        targetlist_push(&en->targets, &en->target_cap, &en->target_count, targets[k]);
     ws[idx].entry_count++;
 
     int rc = workspace_save_all(ws, count);
-    free(ws);
+    workspace_free_all(ws, count);
     return rc;
 }
 
