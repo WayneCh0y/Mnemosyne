@@ -420,7 +420,7 @@ static void cmd_open_create(const char *name) {
         fprintf(stderr, "error: failed to create workspace\n");
 }
 
-static void cmd_open_add(void) {
+static void cmd_open_edit(void) {
     int count;
     Workspace *ws = workspace_load_all(&count);
     if (!ws || count == 0) {
@@ -430,7 +430,7 @@ static void cmd_open_add(void) {
     }
 
     /* Step 1: pick workspace */
-    int ws_idx = run_workspace_picker(ws, count, "Add to which workspace?",
+    int ws_idx = run_workspace_picker(ws, count, "Edit which workspace?",
                                       "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  Enter choose  \xe2\x80\xa2  Esc cancel");
     if (ws_idx == -1) {
         printf(ANSI_CLEAR ANSI_RESET "Cancelled.\n");
@@ -438,7 +438,7 @@ static void cmd_open_add(void) {
         return;
     }
 
-    /* Step 2: build workspace editor state from existing entries, grouped by app.
+    /* Step 2: build workspace editor state from existing entries, one row per entry.
        WsEditorApp is large (~68 KB each); allocate on the heap to avoid stack overflow. */
     WsEditorApp *editor_apps = calloc(WORKSPACE_ENTRIES_MAX, sizeof(WsEditorApp));
     if (!editor_apps) {
@@ -463,122 +463,62 @@ static void cmd_open_add(void) {
         }
         e->existing_links.count = tc;
     }
-    int original_count = editor_count;
 
-    /* Step 3: run workspace editor — Esc cancels, Enter confirms. */
-    if (!run_workspace_add_picker(chosen_ws->name, editor_apps, &editor_count,
-                                  WORKSPACE_ENTRIES_MAX)) {
+    /* Step 3: run the editor — Esc cancels, Enter confirms. */
+    int delete_ws = 0;
+    if (!run_workspace_edit_picker(chosen_ws->name, editor_apps, &editor_count,
+                                   WORKSPACE_ENTRIES_MAX, &delete_ws)) {
         printf(ANSI_CLEAR ANSI_RESET "Cancelled.\n");
         free(editor_apps);
         free(ws);
         return;
     }
 
-    /* Step 4: save new additions — one workspace entry per app instance. */
+    /* Step 4: commit staged changes. */
     printf(ANSI_CLEAR ANSI_RESET);
-    const char *ws_name = chosen_ws->name;
-    int added = 0;
-    int full  = 0;
-    for (int i = 0; i < editor_count && !full; i++) {
-        if (i < original_count) {
-            /* Existing entry: append new links to it rather than creating a duplicate. */
-            if (editor_apps[i].new_links.count == 0) continue;
-            int rc = workspace_append_targets_to_entry(ws_name, i,
-                                                       editor_apps[i].new_links.items,
-                                                       editor_apps[i].new_links.count);
-            if (rc == 0) { added++; }
-            else { fprintf(stderr, "error: failed to update entry %d in '%s'\n", i + 1, ws_name); }
-        } else {
-            /* New app added this session. */
-            if (editor_apps[i].new_links.count == 0) {
-                int rc = workspace_add_entry(ws_name, editor_apps[i].app, "");
-                if (rc == 0) { added++; }
-                else if (rc == -2) { fprintf(stderr, "error: workspace '%s' is full\n", ws_name); full = 1; }
-            } else {
-                /* All links for this app instance go into one grouped entry. */
-                int rc = workspace_add_entry_with_targets(ws_name, editor_apps[i].app,
-                                                          editor_apps[i].new_links.items,
-                                                          editor_apps[i].new_links.count);
-                if (rc == 0) { added++; }
-                else if (rc == -2) { fprintf(stderr, "error: workspace '%s' is full\n", ws_name); full = 1; }
-            }
-        }
+    char ws_name[WORKSPACE_NAME_MAX];
+    strncpy(ws_name, chosen_ws->name, sizeof(ws_name) - 1);
+    ws_name[sizeof(ws_name) - 1] = '\0';
+
+    if (delete_ws) {
+        int rc = workspace_remove(ws_name);
+        if (rc == 0)
+            printf("Workspace '%s' removed.\n", ws_name);
+        else
+            fprintf(stderr, "error: failed to remove workspace '%s'\n", ws_name);
+        free(editor_apps);
+        free(ws);
+        return;
     }
 
-    if (added == 0)
-        printf("Nothing added to '%s'.\n", ws_name);
+    /* Rebuild the chosen workspace's entries in place from the editor state, then
+       save the whole file. A full rebuild is index-safe and covers all four
+       operations: adding/removing apps and adding/removing individual links. */
+    Workspace *w = &ws[ws_idx];
+    int ec = 0;
+    for (int i = 0; i < editor_count; i++) {
+        const WsEditorApp *a = &editor_apps[i];
+        if (a->marked_delete) continue;                 /* app staged for removal */
+        WorkspaceEntry *e = &w->entries[ec++];
+        memset(e, 0, sizeof(*e));
+        strncpy(e->app, a->app, WORKSPACE_APP_MAX - 1);
+        int tc = 0;
+        for (int k = 0; k < a->existing_links.count && tc < WORKSPACE_ENTRY_TARGETS_MAX; k++)
+            if (!a->existing_del[k])
+                strncpy(e->targets[tc++], a->existing_links.items[k], WORKSPACE_TARGET_MAX - 1);
+        for (int k = 0; k < a->new_links.count && tc < WORKSPACE_ENTRY_TARGETS_MAX; k++)
+            strncpy(e->targets[tc++], a->new_links.items[k], WORKSPACE_TARGET_MAX - 1);
+        e->target_count = tc;
+    }
+    w->entry_count = ec;
+
+    if (workspace_save_all(ws, count) == 0)
+        printf("Saved workspace '%s'.\n", ws_name);
     else
-        printf("Added %d entr%s to '%s'.\n", added, added == 1 ? "y" : "ies", ws_name);
+        fprintf(stderr, "error: failed to save workspace '%s'\n", ws_name);
+
     free(editor_apps);
     free(ws);
-}
-
-static void cmd_open_remove(void) {
-    static const char *RM_MENU_ITEMS[] = {
-        "A whole workspace", "An app from a workspace"
-    };
-
-    /* Interactive flow; Esc steps back one state (and exits at the menu). */
-    enum { RM_MENU, RM_PICK_WS_DELETE, RM_PICK_WS_FORAPP, RM_PICK_APP } state = RM_MENU;
-    Workspace *ws = NULL;
-    int count = 0;
-    int ws_idx = -1;
-
-    for (;;) {
-        if (state == RM_MENU) {
-            int choice = run_menu_picker("Remove from a workspace",
-                                         "What do you want to remove?",
-                                         RM_MENU_ITEMS, 2);
-            if (choice == -1) { printf(ANSI_CLEAR ANSI_RESET "Cancelled.\n"); free(ws); return; }
-
-            free(ws);
-            ws = workspace_load_all(&count);
-            if (!ws || count == 0) {
-                printf(ANSI_CLEAR ANSI_RESET "No workspaces yet.\n");
-                free(ws);
-                return;
-            }
-            state = (choice == 0) ? RM_PICK_WS_DELETE : RM_PICK_WS_FORAPP;
-        } else if (state == RM_PICK_WS_DELETE) {
-            int chosen = run_workspace_picker(ws, count, "Remove a workspace",
-                                              "↑/↓ move  •  Enter remove  •  Esc back");
-            if (chosen == -1) { state = RM_MENU; continue; }
-            printf(ANSI_CLEAR ANSI_RESET);
-            const char *name = ws[chosen].name;
-            int rc = workspace_remove(name);
-            if (rc == 0)
-                printf("Workspace '%s' removed.\n", name);
-            else if (rc == -1)
-                fprintf(stderr, "error: workspace '%s' not found\n", name);
-            else
-                fprintf(stderr, "error: failed to remove workspace\n");
-            free(ws);
-            return;
-        } else if (state == RM_PICK_WS_FORAPP) {
-            int chosen = run_workspace_picker(ws, count, "Choose a workspace",
-                                              "↑/↓ move  •  Enter choose  •  Esc back");
-            if (chosen == -1) { state = RM_MENU; continue; }
-            ws_idx = chosen;
-            state  = RM_PICK_APP;
-        } else { /* RM_PICK_APP */
-            int chosen = run_entry_picker(&ws[ws_idx], "Remove an app",
-                                          "↑/↓ move  •  Enter remove  •  Esc back");
-            if (chosen == -1) { state = RM_PICK_WS_FORAPP; continue; }
-            printf(ANSI_CLEAR ANSI_RESET);
-            const char *name = ws[ws_idx].name;
-            int rc = workspace_remove_entry(name, chosen);
-            if (rc == 0)
-                printf("Entry %d removed from workspace '%s'.\n", chosen + 1, name);
-            else if (rc == -1)
-                fprintf(stderr, "error: workspace '%s' not found\n", name);
-            else if (rc == -2)
-                fprintf(stderr, "error: no entry at index %d\n", chosen + 1);
-            else
-                fprintf(stderr, "error: failed to save workspace\n");
-            free(ws);
-            return;
-        }
-    }
 }
 
 static void cmd_open_snap(void) {
@@ -672,8 +612,7 @@ static void cmd_open_snap(void) {
 static void cmd_open(int argc, char *argv[]) {
     if (argc == 2)                                       { cmd_open_run();           return; }
     if (argc == 4 && strcmp(argv[2], "create") == 0)     { cmd_open_create(argv[3]); return; }
-    if (argc == 3 && strcmp(argv[2], "add")    == 0)     { cmd_open_add();           return; }
-    if (argc == 3 && strcmp(argv[2], "remove") == 0)     { cmd_open_remove();        return; }
+    if (argc == 3 && strcmp(argv[2], "edit")   == 0)     { cmd_open_edit();          return; }
     if (argc == 3 && strcmp(argv[2], "snap")   == 0)     { cmd_open_snap();          return; }
     print_help();
 }

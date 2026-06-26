@@ -176,9 +176,9 @@ mn config ide nvim
 # browse all indexed files interactively
 mn list
 
-# create a workspace, then add apps to it (code/cursor, or a full path to any .exe/app)
+# create a workspace, then add/remove apps & links in it (code/cursor, or a full path to any .exe/app)
 mn open create work
-mn open add
+mn open edit
 
 # or snapshot the apps you already have open into a new workspace
 mn open snap

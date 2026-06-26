@@ -40,23 +40,7 @@ int workspace_add_entry_with_targets(const char *name, const char *app,
                                      const char targets[][WORKSPACE_TARGET_MAX],
                                      int target_count);
 
-/* Copies the named workspace into *out. Returns 0=ok, -1=not found. */
-int workspace_get(const char *name, Workspace *out);
-
 /* Removes an entire workspace. Returns 0=ok, -1=not found, -2=error. */
 int workspace_remove(const char *name);
-
-/* Removes entry at zero-based index from a workspace.
-   Returns 0=ok, -1=not found, -2=out of range, -3=error. */
-int workspace_remove_entry(const char *name, int index);
-
-/* Appends targets to an existing entry at zero-based entry_idx.
-   Returns 0=ok, -1=workspace not found, -2=index out of range, -3=error. */
-int workspace_append_targets_to_entry(const char *name, int entry_idx,
-                                      const char targets[][WORKSPACE_TARGET_MAX],
-                                      int target_count);
-
-/* Ensures workspaces.json exists (creates it empty if not). */
-void workspace_ensure_file(void);
 
 #endif

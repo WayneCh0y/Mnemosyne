@@ -10,15 +10,6 @@ static void workspace_path(char *out, size_t n) {
     snprintf(out, n, "%s/workspaces.json", get_data_path());
 }
 
-void workspace_ensure_file(void) {
-    char path[4096];
-    workspace_path(path, sizeof(path));
-    FILE *f = fopen(path, "r");
-    if (f != NULL) { fclose(f); return; }
-    f = fopen(path, "w");
-    if (f != NULL) { fprintf(f, "[]\n"); fclose(f); }
-}
-
 static cJSON *load_ws_json(void) {
     char path[4096];
     workspace_path(path, sizeof(path));
@@ -235,68 +226,4 @@ int workspace_remove(const char *name) {
     int rc = save_ws_json(root);
     cJSON_Delete(root);
     return rc;
-}
-
-int workspace_remove_entry(const char *name, int index) {
-    int count;
-    Workspace *ws = workspace_load_all(&count);
-    if (ws == NULL) return -3;
-
-    int idx = -1;
-    for (int i = 0; i < count; i++) {
-        if (strcmp(ws[i].name, name) == 0) { idx = i; break; }
-    }
-    if (idx == -1) { free(ws); return -1; }
-    if (index < 0 || index >= ws[idx].entry_count) { free(ws); return -2; }
-
-    for (int j = index; j < ws[idx].entry_count - 1; j++)
-        ws[idx].entries[j] = ws[idx].entries[j + 1];
-    ws[idx].entry_count--;
-
-    int rc = workspace_save_all(ws, count);
-    free(ws);
-    return rc;
-}
-
-int workspace_append_targets_to_entry(const char *name, int entry_idx,
-                                      const char targets[][WORKSPACE_TARGET_MAX],
-                                      int target_count) {
-    int count;
-    Workspace *ws = workspace_load_all(&count);
-    if (ws == NULL) return -3;
-
-    int idx = -1;
-    for (int i = 0; i < count; i++) {
-        if (strcmp(ws[i].name, name) == 0) { idx = i; break; }
-    }
-    if (idx == -1) { free(ws); return -1; }
-    if (entry_idx < 0 || entry_idx >= ws[idx].entry_count) { free(ws); return -2; }
-
-    WorkspaceEntry *e = &ws[idx].entries[entry_idx];
-    for (int k = 0; k < target_count; k++) {
-        if (e->target_count >= WORKSPACE_ENTRY_TARGETS_MAX) break;
-        strncpy(e->targets[e->target_count], targets[k], WORKSPACE_TARGET_MAX - 1);
-        e->targets[e->target_count][WORKSPACE_TARGET_MAX - 1] = '\0';
-        e->target_count++;
-    }
-
-    int rc = workspace_save_all(ws, count);
-    free(ws);
-    return rc;
-}
-
-int workspace_get(const char *name, Workspace *out) {
-    int count;
-    Workspace *ws = workspace_load_all(&count);
-    if (ws == NULL) return -1;
-
-    for (int i = 0; i < count; i++) {
-        if (strcmp(ws[i].name, name) == 0) {
-            *out = ws[i];
-            free(ws);
-            return 0;
-        }
-    }
-    free(ws);
-    return -1;
 }
