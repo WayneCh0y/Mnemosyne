@@ -6,6 +6,7 @@
 typedef struct {
     char app[WORKSPACE_APP_MAX];  /* launch value: full exe path (Win/Linux) or bundle name (macOS) */
     char display[256];            /* short friendly label for the picker (basename / app name) */
+    char target[WORKSPACE_TARGET_MAX];  /* optional prefilled target/link for snapshot */
 } RunningApp;
 
 /* Enumerates the user's currently-open GUI applications into out[0..max).

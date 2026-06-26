@@ -585,6 +585,9 @@ static void cmd_open_snap(void) {
         app_display_token(apps[i].app, label_bufs[i], sizeof(label_bufs[i]));
         labels[i] = label_bufs[i];
         selected[i] = 1;
+        if (apps[i].target[0] != '\0')
+            targetlist_push(&links[i].items, &links[i].cap,
+                            &links[i].count, apps[i].target);
     }
 
     char name[WORKSPACE_NAME_MAX] = {0};
