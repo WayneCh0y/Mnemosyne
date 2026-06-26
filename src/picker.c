@@ -14,6 +14,7 @@
 #include "picker.h"
 #include "app_resolve.h"
 #include "app_launch.h"
+#include "tokenizer.h"
 
 #ifdef _WIN32
 int read_key(void) {
@@ -722,23 +723,11 @@ static int confirm_centered(const char *question) {
 #define WADD_TYPE_LINK 1
 #define WADD_TYPE_APP  2
 
-/* Strip directory prefix and trailing .exe from app path for a short display name. */
+/* Friendly, normalized display name for an app value. Delegates to the
+   tokenizer so all forms of the same app (path, bare name, UWP marker) and
+   known apps render consistently. */
 void ws_display_name(const char *app, char *out, size_t out_size) {
-    const char *b = app;
-    for (const char *p = app; *p; p++)
-        if (*p == '/' || *p == '\\') b = p + 1;
-    size_t n = strlen(b);
-    if (n >= 4) {
-        const char *ext = b + n - 4;
-        if (ext[0] == '.' &&
-            (ext[1] == 'e' || ext[1] == 'E') &&
-            (ext[2] == 'x' || ext[2] == 'X') &&
-            (ext[3] == 'e' || ext[3] == 'E'))
-            n -= 4;
-    }
-    size_t copy = n < out_size - 1 ? n : out_size - 1;
-    memcpy(out, b, copy);
-    out[copy] = '\0';
+    app_display_token(app, out, out_size);
 }
 
 /* The editor is navigated as a flat list of rows: one per app, one per link

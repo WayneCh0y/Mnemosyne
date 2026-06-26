@@ -27,6 +27,7 @@
 #include "app_resolve.h"
 #include "app_launch.h"
 #include "app_enum.h"
+#include "tokenizer.h"
 
 static int is_valid_add(int argc) { return argc == 3; }
 
@@ -573,13 +574,18 @@ static void cmd_open_snap(void) {
     }
 
     const char *labels[WORKSPACE_ENTRIES_MAX];
+    char label_bufs[WORKSPACE_ENTRIES_MAX][256];
     int selected[WORKSPACE_ENTRIES_MAX];
     AppLinks *links = calloc(n, sizeof(AppLinks));
     if (links == NULL) {
         fprintf(stderr, "error: out of memory\n");
         return;
     }
-    for (int i = 0; i < n; i++) { labels[i] = apps[i].display; selected[i] = 1; }
+    for (int i = 0; i < n; i++) {
+        app_display_token(apps[i].app, label_bufs[i], sizeof(label_bufs[i]));
+        labels[i] = label_bufs[i];
+        selected[i] = 1;
+    }
 
     char name[WORKSPACE_NAME_MAX] = {0};
     int name_taken = 0;
