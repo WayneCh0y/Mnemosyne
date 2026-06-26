@@ -3,6 +3,7 @@
 
 #include "types.h"
 
+void ingest_path(const char *path);
 void ingest_file(const char *path);
 
 #endif

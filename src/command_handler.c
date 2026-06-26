@@ -32,7 +32,7 @@ static int is_valid_add(int argc) { return argc == 3; }
 
 static void cmd_add(int argc, char *argv[]) {
     if (!is_valid_add(argc)) { print_help(); return; }
-    ingest_file(argv[2]);
+    ingest_path(argv[2]);
 }
 
 static int is_valid_search(int argc) { return argc >= 3; }

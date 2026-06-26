@@ -2,6 +2,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <windows.h>
+#undef FILE_TYPE_UNKNOWN
+#else
+#include <dirent.h>
+#endif
 
 #include "ingest.h"
 #include "config.h"
@@ -118,4 +124,73 @@ void ingest_file(const char *path) {
     index_add(abs_path, hash, (long)st.st_size, (long)st.st_mtime, file_type);
 
     free(text);
+}
+
+static void ingest_directory(const char *dir, int depth) {
+    if (depth > 8) return;
+#ifdef _WIN32
+    char pattern[4096];
+    snprintf(pattern, sizeof(pattern), "%s\\*", dir);
+
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+
+    do {
+        if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0) continue;
+
+        char child_path[4096];
+        snprintf(child_path, sizeof(child_path), "%s\\%s", dir, fd.cFileName);
+
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            ingest_directory(child_path, depth + 1);
+        } else {
+            if (get_file_type(child_path) != FILE_TYPE_UNKNOWN) {
+                ingest_file(child_path);
+            }
+        }
+    } while (FindNextFileA(h, &fd));
+
+    FindClose(h);
+#else
+    DIR *d = opendir(dir);
+    if (d == NULL) return;
+
+    struct dirent *entry;
+    while ((entry = readdir(d)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+
+        char child_path[4096];
+        snprintf(child_path, sizeof(child_path), "%s/%s", dir, entry->d_name);
+
+        struct stat st;
+        if (stat(child_path, &st) != 0) continue;
+
+        if (S_ISDIR(st.st_mode)) {
+            ingest_directory(child_path, depth + 1);
+        } else if (S_ISREG(st.st_mode)) {
+            if (get_file_type(child_path) != FILE_TYPE_UNKNOWN) {
+                ingest_file(child_path);
+            }
+        }
+    }
+
+    closedir(d);
+#endif
+}
+
+void ingest_path(const char *path) {
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        fprintf(stderr, "error: path not found: %s\n", path);
+        return;
+    }
+
+    if (S_ISDIR(st.st_mode)) {
+        ingest_directory(path, 0);
+    } else if (S_ISREG(st.st_mode)) {
+        ingest_file(path);
+    } else {
+        fprintf(stderr, "error: unsupported path type: %s\n", path);
+    }
 }
