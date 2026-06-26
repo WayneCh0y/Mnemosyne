@@ -34,6 +34,13 @@ void targetlist_remove(char (*arr)[WORKSPACE_TARGET_MAX], int *count, int idx) {
     (*count)--;
 }
 
+void targetlist_swap(char (*arr)[WORKSPACE_TARGET_MAX], int idx1, int idx2) {
+    char tmp[WORKSPACE_TARGET_MAX];
+    memcpy(tmp,        arr[idx1], WORKSPACE_TARGET_MAX);
+    memcpy(arr[idx1],  arr[idx2], WORKSPACE_TARGET_MAX);
+    memcpy(arr[idx2],  tmp,       WORKSPACE_TARGET_MAX);
+}
+
 void targetlist_free(char (**arr)[WORKSPACE_TARGET_MAX], int *cap, int *count) {
     free(*arr);
     *arr   = NULL;

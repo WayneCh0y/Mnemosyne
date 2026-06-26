@@ -23,6 +23,8 @@ int read_key(void) {
         c = _getch();
         if (c == 72) return KEY_UP;
         if (c == 80) return KEY_DOWN;
+        if (c == 75) return KEY_LEFT;
+        if (c == 77) return KEY_RIGHT;
         return 0;
     }
     return c;
@@ -52,6 +54,8 @@ int read_key(void) {
         if (seq[0] == '[') {
             if (seq[1] == 'A') result = KEY_UP;
             if (seq[1] == 'B') result = KEY_DOWN;
+            if (seq[1] == 'C') result = KEY_RIGHT;
+            if (seq[1] == 'D') result = KEY_LEFT;
         }
     }
 
@@ -773,12 +777,32 @@ static int build_edit_rows(const WsEditorApp *apps, int count,
     return n;
 }
 
+/* Swaps the link at index `link` with its neighbour in the direction of `key`
+   (KEY_LEFT = toward 0, KEY_RIGHT = toward the end) within the app's existing or
+   new link list, and moves the row cursor to follow it. For existing links the
+   parallel deletion-flag and original-position arrays are swapped in step so they
+   stay aligned with items (otherwise a delete marker would stick to a slot rather
+   than its link). No-op at a list boundary. */
+static void reorder_link(WsEditorApp *a, int kind, int link, int key, int *cursor) {
+    AppLinks *al = (kind == ROW_LINK_EXISTING) ? &a->existing_links : &a->new_links;
+    int j = (key == KEY_LEFT) ? link - 1 : link + 1;
+    if (j < 0 || j >= al->count) return;   /* at the boundary — nothing to swap */
+    targetlist_swap(al->items, link, j);
+    if (kind == ROW_LINK_EXISTING) {
+        int t = a->existing_del[link]; a->existing_del[link] = a->existing_del[j]; a->existing_del[j] = t;
+        if (a->existing_pos) {
+            t = a->existing_pos[link]; a->existing_pos[link] = a->existing_pos[j]; a->existing_pos[j] = t;
+        }
+    }
+    *cursor += (key == KEY_LEFT) ? -1 : 1;
+}
+
 static void render_workspace_edit(const char *ws_name,
                                   const WsEditorApp *apps,
                                   const WeditRow *rows, int nrows,
                                   int cursor, int mode,
                                   const char *typed, const char *app_error,
-                                  int type_app) {
+                                  int type_app, int reordering) {
     char title[140];
     snprintf(title, sizeof(title), "Edit '%s'", ws_name);
     print_picker_header(title,
@@ -808,11 +832,19 @@ static void render_workspace_edit(const char *ws_name,
             const char *link = a->existing_links.items[r->link];
             if (a->existing_del[r->link])
                 printf("  %s    " ANSI_RED "- %s" ANSI_RESET "\n", arrow, link);
+            else if (i == cursor && reordering)
+                printf("  %s    " ANSI_LIFT_HL " \xe2\x86\x94 %s " ANSI_RESET "\n", arrow, link);
+            else if (a->existing_pos && a->existing_pos[r->link] != r->link)
+                printf("  %s    " ANSI_CYAN "\xe2\x86\x95 %s" ANSI_RESET "\n", arrow, link);
             else
                 printf("  %s    " ANSI_DIM_YELLOW "\xe2\x86\x92 %s" ANSI_RESET "\n", arrow, link);
         } else { /* ROW_LINK_NEW */
             const WsEditorApp *a = &apps[r->app];
-            printf("  %s    " ANSI_GREEN "+ %s" ANSI_RESET "\n", arrow, a->new_links.items[r->link]);
+            const char *link = a->new_links.items[r->link];
+            if (i == cursor && reordering)
+                printf("  %s    " ANSI_LIFT_HL " \xe2\x86\x94 %s " ANSI_RESET "\n", arrow, link);
+            else
+                printf("  %s    " ANSI_GREEN "+ %s" ANSI_RESET "\n", arrow, link);
         }
     }
     print_more_below(end, nrows);
@@ -837,7 +869,10 @@ static void render_workspace_edit(const char *ws_name,
         } else if (r->kind == ROW_APP) {
             printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  type to add link  \xe2\x80\xa2  Backspace remove  \xe2\x80\xa2  Enter save  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
         } else { /* link row */
-            printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  Backspace remove  \xe2\x80\xa2  Enter save  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
+            if (reordering)
+                printf("\n" ANSI_DIM "\xe2\x86\x90/\xe2\x86\x92 reorder  \xe2\x80\xa2  Enter to place  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
+            else
+                printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  \xe2\x86\x90/\xe2\x86\x92 reorder  \xe2\x80\xa2  Backspace remove  \xe2\x80\xa2  Enter save  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
         }
     }
     fflush(stdout);
@@ -854,6 +889,7 @@ int run_workspace_edit_picker(const char *ws_name,
     int  typed_len = 0;
     char app_error[128] = {0};
     int  type_app  = 0;   /* app being given a new link in WADD_TYPE_LINK */
+    int  reordering = 0;    /* 1 while a link is "lifted" for repositioning (move mode) */
     int  done      = 0;
     int  cancelled = 0;
 
@@ -862,7 +898,7 @@ int run_workspace_edit_picker(const char *ws_name,
 
     printf(ANSI_CURSOR_HIDE);
     render_workspace_edit(ws_name, apps, rows, nrows, cursor, mode,
-                          typed, app_error, type_app);
+                          typed, app_error, type_app, reordering);
 
     while (!done) {
         int key = read_key();
@@ -931,11 +967,32 @@ int run_workspace_edit_picker(const char *ws_name,
                     typed[typed_len]   = '\0';
                 }
             }
-        } else { /* WADD_LIST */
+        } else if (reordering) {
+            /* ── Move mode ──────────────────────────────────────────────────
+               A link is lifted. Only ←/→ reposition it and Enter locks it in;
+               ↑/↓, Backspace and typing are ignored so it can't be deleted or
+               left behind mid-move. Esc still cancels the whole edit. */
+            const WeditRow *r = &rows[cursor];
+            if (key == KEY_LEFT || key == KEY_RIGHT) {
+                reorder_link(&apps[r->app], r->kind, r->link, key, &cursor);
+            } else if (key == KEY_ENTER) {
+                reordering = 0;   /* lock in; the ↕ marker now reflects the new order */
+            } else if (key == KEY_ESC) {
+                cancelled = 1; done = 1;
+            }
+        } else { /* WADD_LIST (normal navigation) */
             const WeditRow *r = &rows[cursor];
             switch (key) {
             case KEY_UP:    if (cursor > 0)         cursor--; break;
             case KEY_DOWN:  if (cursor < nrows - 1) cursor++; break;
+            case KEY_LEFT:
+            case KEY_RIGHT:
+                /* lift a link into move mode (also applies this first nudge) */
+                if (r->kind == ROW_LINK_EXISTING || r->kind == ROW_LINK_NEW) {
+                    reordering = 1;
+                    reorder_link(&apps[r->app], r->kind, r->link, key, &cursor);
+                }
+                break;
             case KEY_ENTER:
                 if (r->kind == ROW_ADD_APP) {
                     mode = WADD_TYPE_APP;
@@ -969,6 +1026,7 @@ int run_workspace_edit_picker(const char *ws_name,
                                         &apps[ai].new_links.cap,
                                         &apps[ai].new_links.count);
                         free(apps[ai].existing_del);
+                        free(apps[ai].existing_pos);
                         memmove(&apps[ai], &apps[ai + 1],
                                 (size_t)(*count - ai - 1) * sizeof(WsEditorApp));
                         (*count)--;
@@ -1011,7 +1069,7 @@ int run_workspace_edit_picker(const char *ws_name,
             if (cursor >= nrows) cursor = nrows - 1;
             if (cursor < 0)      cursor = 0;
             render_workspace_edit(ws_name, apps, rows, nrows, cursor, mode,
-                                  typed, app_error, type_app);
+                                  typed, app_error, type_app, reordering);
         }
     }
 
