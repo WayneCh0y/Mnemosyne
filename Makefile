@@ -45,6 +45,7 @@ SRCS = src/main.c \
        src/app_resolve.c \
        src/app_launch.c \
        src/app_enum.c \
+       src/tokenizer.c \
        src/cJSON.c
 
 ifeq ($(OS), Windows_NT)
