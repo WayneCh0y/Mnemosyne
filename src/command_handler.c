@@ -247,7 +247,7 @@ static void cmd_list(int argc, char *argv[]) {
 
 static void cmd_remove(int argc, char *argv[]) {
     /* Direct form: remove by path (scriptable, backward compatible). */
-    if (argc == 3) { remove_file(argv[2]); return; }
+    if (argc == 3) { remove_path(argv[2]); return; }
     if (argc != 2) { print_help(); return; }
 
     /* Interactive form: pick a file from the index to remove. */

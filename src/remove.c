@@ -44,3 +44,53 @@ void remove_file(const char *path) {
     }
     /* rc == -1: index_remove already printed the error */
 }
+
+void remove_folder(const char *path) {
+    char abs_folder[4096];
+
+#ifdef _WIN32
+    if (_fullpath(abs_folder, path, sizeof(abs_folder)) == NULL) {
+        fprintf(stderr, "error: could not resolve absolute path for: %s\n", path);
+        return;
+    }
+#else
+    if (realpath(path, abs_folder) == NULL) {
+        fprintf(stderr, "error: could not resolve absolute path for: %s\n", path);
+        return;
+    }
+#endif
+
+    int count;
+    IndexEntry *entries = index_get_entries(&count);
+    if (entries == NULL) return;
+
+    size_t plen = strlen(abs_folder);
+    int removed = 0;
+
+    for (int i = 0; i < count; i++) {
+        const char *p = entries[i].original_path;
+        if (strncmp(p, abs_folder, plen) == 0 &&
+            (p[plen] == '/' || p[plen] == '\\')) {
+            if (remove_entry_by_abs_path(p) == 1) removed++;
+        }
+    }
+
+    free(entries);
+
+    if (removed == 0)
+        printf("No indexed files under %s.\n", abs_folder);
+    else
+        printf("Removed %d file%s under %s.\n",
+               removed, removed == 1 ? "" : "s", abs_folder);
+}
+
+void remove_path(const char *path) {
+    struct stat st;
+    if (stat(path, &st) == 0 && (st.st_mode & S_IFDIR) != 0) {
+        remove_folder(path);
+    } else {
+        /* Either a regular file, or a path that no longer exists on disk —
+           fall through to remove_file, which will warn if not indexed. */
+        remove_file(path);
+    }
+}
