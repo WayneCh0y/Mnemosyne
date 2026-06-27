@@ -417,6 +417,18 @@ int run_search_picker(SearchResult *results, int count) {
     return selected;
 }
 
+static void find_parent_dir(const char *path, char *out, size_t out_size) {
+    strncpy(out, path, out_size - 1);
+    out[out_size - 1] = '\0';
+#ifdef _WIN32
+    char *last = strrchr(out, '\\');
+#else
+    char *last = strrchr(out, '/');
+#endif
+
+    if (last) *last = '\0';
+}
+
 /* ── Index list picker ─────────────────────────────────────────────────── */
 
 static void render_list(IndexEntry *entries, int count, int selected,
@@ -426,12 +438,36 @@ static void render_list(IndexEntry *entries, int count, int selected,
     int start = picker_window_start(selected, count);
     int end   = start + (count < PICKER_WINDOW ? count : PICKER_WINDOW);
     print_more_above(start);
+    
+    char prev_dir[4096] = "";
     for (int i = start; i < end; i++) {
+        char dir[4096];
+        find_parent_dir(entries[i].original_path, dir, sizeof(dir));
+
+        /* Print a dim header only when the directory changes from the previous row. */
+        if (strcmp(dir, prev_dir) != 0) {
+#ifdef _WIN32
+            printf(ANSI_DIM "%s\\" ANSI_RESET "\n", dir);
+#else
+            printf(ANSI_DIM "%s/" ANSI_RESET "\n", dir);
+#endif
+            strcpy(prev_dir, dir);
+        }
+
+        /* Then the existing row, but show just the basename now since the dir is in the header. */
+#ifdef _WIN32
+        const char *base = strrchr(entries[i].original_path, '\\');
+#else
+        const char *base = strrchr(entries[i].original_path, '/');
+#endif
+        base = base ? base + 1 : entries[i].original_path;
+
         if (num_input < 0 && i == selected)
-            printf(ANSI_SEL "  ▶ [%d] %s" ANSI_RESET "\n", i + 1, entries[i].original_path);
+            printf(ANSI_SEL "  ▶ [%d] %s" ANSI_RESET "\n", i + 1, base);
         else
-            printf(ANSI_DIM "    [%d] %s" ANSI_RESET "\n", i + 1, entries[i].original_path);
+            printf(ANSI_DIM "    [%d] %s" ANSI_RESET "\n", i + 1, base);
     }
+
     print_more_below(end, count);
     print_picker_footer(num_input, show_error);
 }
