@@ -309,23 +309,29 @@ static void launch_workspace(const Workspace *ws) {
     for (int i = 0; i < ws->entry_count; i++) {
         const char *app = ws->entries[i].app;
         int tc = ws->entries[i].target_count;
+        const char *layout = ws->entries[i].layout;
 
         if (is_uwp_app(app) || is_new_window_app(app)) {
             /* UWP and IDE apps: launch once per target (or once standalone). */
             if (tc == 0) {
-                app_launch(app, "");
+                app_launch(app, "", layout);
             } else {
                 for (int k = 0; k < tc; k++)
-                    app_launch(app, ws->entries[i].targets[k]);
+                    app_launch(app, ws->entries[i].targets[k], layout);
             }
         } else {
             /* Regular executable / .lnk (e.g. browsers): each entry is one window.
-               Single target: plain launch. Multiple targets: --new-window url1 url2 ...
-               so the browser opens them all as tabs in one new window. */
+               A single non-web target opens directly in the app. Web URLs (one or
+               many) go through `app --new-window <urls>` so each entry gets its OWN
+               window we can position — otherwise a URL opened via the OS handler
+               becomes a tab in an existing window, ignoring app + layout, and two
+               URL entries can't occupy two partitions. */
+            const char *t0 = (tc >= 1) ? ws->entries[i].targets[0] : "";
+            int web = (strncmp(t0, "http://", 7) == 0 || strncmp(t0, "https://", 8) == 0);
             if (tc == 0) {
-                app_launch(app, "");
-            } else if (tc == 1) {
-                app_launch(app, ws->entries[i].targets[0]);
+                app_launch(app, "", layout);
+            } else if (tc == 1 && !web) {
+                app_launch(app, ws->entries[i].targets[0], layout);
             } else {
                 size_t cap = (size_t)tc * (WORKSPACE_TARGET_MAX + 4) + 16;
                 char *params = malloc(cap);
@@ -334,6 +340,7 @@ static void launch_workspace(const Workspace *ws) {
                 for (int k = 0; k < tc && pos < (int)cap - 1; k++)
                     pos += snprintf(params + pos, cap - pos,
                                     " \"%s\"", ws->entries[i].targets[k]);
+                void *before = win_capture_before();
                 SHELLEXECUTEINFOA sei = {0};
                 sei.cbSize       = sizeof(sei);
                 sei.lpVerb       = "open";
@@ -342,6 +349,7 @@ static void launch_workspace(const Workspace *ws) {
                 sei.nShow        = SW_SHOWNORMAL;
                 if (!ShellExecuteExA(&sei))
                     fprintf(stderr, "error: failed to launch '%s'\n", app);
+                win_place_new(before, layout);
                 free(params);
             }
         }
@@ -492,6 +500,8 @@ static void cmd_open_edit(void) {
         const WorkspaceEntry *src = &chosen_ws->entries[i];
         strncpy(e->app, src->app, WORKSPACE_APP_MAX - 1);
         ws_display_name(src->app, e->display, sizeof(e->display));
+        strncpy(e->layout, src->layout, sizeof(e->layout) - 1);
+        e->layout[sizeof(e->layout) - 1] = '\0';
         for (int k = 0; k < src->target_count; k++)
             editlink_push(&e->links, src->targets[k], src->targets[k], k);
     }
@@ -555,6 +565,8 @@ static void cmd_open_edit(void) {
         WorkspaceEntry *e = &w->entries[ec++];
         strncpy(e->app, a->app, WORKSPACE_APP_MAX - 1);
         e->app[WORKSPACE_APP_MAX - 1] = '\0';
+        strncpy(e->layout, a->layout, sizeof(e->layout) - 1);
+        e->layout[sizeof(e->layout) - 1] = '\0';
         /* dest slot may be beyond the old count (garbage) → init before pushing. */
         e->targets = NULL; e->target_count = 0; e->target_cap = 0;
         for (int k = 0; k < a->links.count; k++)

@@ -13,6 +13,7 @@ typedef struct {
     char (*targets)[WORKSPACE_TARGET_MAX];  /* heap-grown; NULL when target_cap == 0 */
     int  target_count;  /* 0 = launch app standalone with no args */
     int  target_cap;
+    char layout[16];    /* screen-partition token ("" = none); see picker placement */
 } WorkspaceEntry;
 
 /* ── Growable fixed-width string lists ──────────────────────────────────────

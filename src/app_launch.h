@@ -8,8 +8,20 @@
    - a UWP marker ("shell:AppsFolder\<AUMID>") on Windows
    - a protocol URI (e.g. "spotify:playlist:...", "https://...")
    `target` is an optional argument (path / file). For URIs it must be empty;
-   the OS protocol handler decides what to do. */
-void app_launch(const char *app, const char *target);
+   the OS protocol handler decides what to do.
+   `layout` is a screen-partition token ("" or "full" = maximize on the primary
+   screen, else left/right/top/bottom/tl/tr/bl/br); applied after launch on
+   Windows, ignored elsewhere. */
+void app_launch(const char *app, const char *target, const char *layout);
+
+#ifdef _WIN32
+/* Window-placement helpers for launches that don't go through app_launch (e.g.
+   the multi-target browser path). Snapshot the existing top-level windows just
+   before launching, then move the window that newly appears to `layout`.
+   win_place_new frees the snapshot. Both no-op safely on allocation failure. */
+void *win_capture_before(void);
+void  win_place_new(void *before, const char *layout);
+#endif
 
 /* Returns 1 if `value` looks like an RFC-3986 protocol URI: a 2+ character
    scheme made of letters/digits/+/-/. followed by ':'. The 2-char minimum

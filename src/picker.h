@@ -110,6 +110,7 @@ typedef struct {
     int  is_new;
     int  marked_delete;
     EditLinkList links;
+    char layout[16];   /* screen-partition token ("" = none) chosen via '\' */
 } WsEditorApp;
 
 /* Workspace editor picker for `mn open edit`. Shows existing apps and their links;

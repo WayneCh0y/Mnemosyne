@@ -816,6 +816,122 @@ static int run_text_input_centered(const char *title, const char *label,
     return cancelled ? 0 : 1;
 }
 
+/* ── App screen-placement chooser ('\' in the workspace editor) ──────────────
+   A self-contained visual grid for assigning an app a screen partition. The
+   placement is stored as a short token ("" = none); only this module knows the
+   token<->grid mapping, so it stays decoupled from save/load. */
+
+/* quadrant-fill mask bits */
+#define PL_TL 1
+#define PL_TR 2
+#define PL_BL 4
+#define PL_BR 8
+typedef struct { const char *token; const char *label; int mask; } Placement;
+static const Placement PLACEMENTS[] = {
+    { "full",   "Full screen",  PL_TL|PL_TR|PL_BL|PL_BR   },
+    { "left",   "Left half",    PL_TL|PL_BL               },
+    { "right",  "Right half",   PL_TR|PL_BR               },
+    { "top",    "Top half",     PL_TL|PL_TR               },
+    { "bottom", "Bottom half",  PL_BL|PL_BR               },
+    { "tl",     "Top-left",     PL_TL                     },
+    { "tr",     "Top-right",    PL_TR                     },
+    { "bl",     "Bottom-left",  PL_BL                     },
+    { "br",     "Bottom-right", PL_BR                     },
+};
+#define PLACEMENT_COUNT ((int)(sizeof(PLACEMENTS) / sizeof(PLACEMENTS[0])))
+
+/* Human label for a stored token (falls back to the token itself if unknown). */
+static const char *placement_label(const char *token) {
+    for (int i = 0; i < PLACEMENT_COUNT; i++)
+        if (strcmp(PLACEMENTS[i].token, token) == 0) return PLACEMENTS[i].label;
+    return token;
+}
+
+/* True if token is among the partitions occupied by other apps. */
+static int placement_taken(const char *token, const char **taken, int taken_count) {
+    for (int i = 0; i < taken_count; i++)
+        if (strcmp(token, taken[i]) == 0) return 1;
+    return 0;
+}
+
+/* Prints one 9-wide quadrant cell: shaded with hl when filled, blank otherwise. */
+static void pl_cell(int on, const char *hl) {
+    if (on) printf("%s         " ANSI_RESET, hl);
+    else    printf("         ");
+}
+
+/* Full-screen visual grid; layout is in/out. Returns 1 on Enter (token written),
+   0 on Esc (unchanged). Partitions occupied by other apps (taken[]) are shown red
+   and cannot be selected. */
+static int run_placement_picker(const char *app_display, char *layout, size_t layout_size,
+                                const char **taken, int taken_count) {
+    int sel = 0;
+    for (int i = 0; i < PLACEMENT_COUNT; i++)
+        if (strcmp(PLACEMENTS[i].token, layout) == 0) { sel = i; break; }
+
+    int done = 0, confirmed = 0;
+    char title[128];
+    snprintf(title, sizeof(title), "Place \"%s\"", app_display);
+    const char *help = "\xe2\x86\x90/\xe2\x86\x92 choose   Enter place   Esc cancel";
+
+    printf(ANSI_CURSOR_HIDE);
+    while (!done) {
+        int cols, rows;
+        term_size(&cols, &rows);
+        printf(ANSI_CLEAR ANSI_RESET);
+
+        int block = 13;   /* title, gap, 7 box lines, gap, label, gap, help */
+        int top = (rows - block) / 2;
+        for (int i = 0; i < top; i++) printf("\n");
+
+        print_centered(cols, ANSI_BOLD, title, (int)strlen(title));
+        printf("\n");
+
+        int mask = PLACEMENTS[sel].mask;
+        int occupied = placement_taken(PLACEMENTS[sel].token, taken, taken_count);
+        const char *hl = occupied ? ANSI_DEL_HL : ANSI_APP_HL;   /* red vs blue */
+        int pad  = (cols - 21) / 2; if (pad < 0) pad = 0;
+        printf("%*s+---------+---------+\n", pad, "");
+        printf("%*s|", pad, ""); pl_cell(mask & PL_TL, hl); printf("|"); pl_cell(mask & PL_TR, hl); printf("|\n");
+        printf("%*s|", pad, ""); pl_cell(mask & PL_TL, hl); printf("|"); pl_cell(mask & PL_TR, hl); printf("|\n");
+        printf("%*s+---------+---------+\n", pad, "");
+        printf("%*s|", pad, ""); pl_cell(mask & PL_BL, hl); printf("|"); pl_cell(mask & PL_BR, hl); printf("|\n");
+        printf("%*s|", pad, ""); pl_cell(mask & PL_BL, hl); printf("|"); pl_cell(mask & PL_BR, hl); printf("|\n");
+        printf("%*s+---------+---------+\n", pad, "");
+        printf("\n");
+        char lbl[80];
+        if (occupied)
+            snprintf(lbl, sizeof(lbl), "%s - already occupied", PLACEMENTS[sel].label);
+        else
+            snprintf(lbl, sizeof(lbl), "%s", PLACEMENTS[sel].label);
+        print_centered(cols, occupied ? ANSI_RED : ANSI_CYAN, lbl, (int)strlen(lbl));
+        printf("\n");
+        print_centered(cols, ANSI_DIM, help, 37);
+        fflush(stdout);
+
+        int key = read_key();
+        switch (key) {
+        /* ↑/↓ are intentionally dead — reserved for cycling detected screens. */
+        case KEY_LEFT:  sel = (sel - 1 + PLACEMENT_COUNT) % PLACEMENT_COUNT; break;
+        case KEY_RIGHT: sel = (sel + 1) % PLACEMENT_COUNT;                   break;
+        case KEY_ENTER:
+            /* disallow placing onto a partition another app already holds */
+            if (!placement_taken(PLACEMENTS[sel].token, taken, taken_count)) {
+                confirmed = 1; done = 1;
+            }
+            break;
+        case KEY_ESC:                  done = 1; break;
+        }
+    }
+
+    if (confirmed) {
+        strncpy(layout, PLACEMENTS[sel].token, layout_size - 1);
+        layout[layout_size - 1] = '\0';
+    }
+    printf(ANSI_CURSOR_SHOW);
+    return confirmed;
+}
+
 /* ── Workspace editor picker (mn open edit) ────────────────────────────── */
 
 #define WADD_LIST      0
@@ -968,12 +1084,15 @@ static void render_workspace_edit(const char *ws_name,
         } else if (r->kind == ROW_APP) {
             const WsEditorApp *a = &apps[r->app];
             if (a->marked_delete) {
-                printf("  %s " ANSI_RED "- %s" ANSI_RESET "\n", arrow, a->display);
+                printf("  %s " ANSI_RED "- %s" ANSI_RESET, arrow, a->display);
             } else if (a->is_new) {
-                printf("  %s " ANSI_GREEN "+ %s" ANSI_RESET "\n", arrow, a->display);
+                printf("  %s " ANSI_GREEN "+ %s" ANSI_RESET, arrow, a->display);
             } else {
-                printf("  %s " ANSI_APP_HL " %s " ANSI_RESET "\n", arrow, a->display);
+                printf("  %s " ANSI_APP_HL " %s " ANSI_RESET, arrow, a->display);
             }
+            if (!a->marked_delete && a->layout[0])
+                printf("  " ANSI_APP_HL " {%s} " ANSI_RESET, placement_label(a->layout));
+            printf("\n");
         } else { /* ROW_LINK */
             const WsEditorApp *a = &apps[r->app];
             const EditLink *e = &a->links.items[r->link];
@@ -1029,7 +1148,7 @@ static void render_workspace_edit(const char *ws_name,
         } else if (r->kind == ROW_APP && apps[r->app].marked_delete) {
             printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  Backspace undo remove  \xe2\x80\xa2  Enter save  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
         } else if (r->kind == ROW_APP) {
-            printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  type to add link  \xe2\x80\xa2  Backspace remove  \xe2\x80\xa2  Enter save  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
+            printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  type to add link  \xe2\x80\xa2  \\ place  \xe2\x80\xa2  Backspace remove  \xe2\x80\xa2  Enter save  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
         } else { /* link row */
             if (reordering)
                 printf("\n" ANSI_DIM "\xe2\x86\x90/\xe2\x86\x92 reorder  \xe2\x80\xa2  Enter to place  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
@@ -1250,7 +1369,20 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                 /* ROW_DEL_WS: Backspace does nothing; use Enter to confirm removal. */
                 break;
             default:
-                if (key == 'e' && r->kind == ROW_LINK &&
+                if (key == '\\' && r->kind == ROW_APP && !apps[r->app].marked_delete) {
+                    /* '\' on an app → choose a screen placement. Partitions other
+                       (non-deleted) apps already hold are passed in so they can't
+                       be picked twice. */
+                    const char *taken[WORKSPACE_ENTRIES_MAX];
+                    int tk = 0;
+                    for (int a = 0; a < *count; a++) {
+                        if (a == r->app || apps[a].marked_delete) continue;
+                        if (apps[a].layout[0]) taken[tk++] = apps[a].layout;
+                    }
+                    run_placement_picker(apps[r->app].display, apps[r->app].layout,
+                                         sizeof(apps[r->app].layout), taken, tk);
+                    printf(ANSI_CURSOR_HIDE);   /* chooser re-showed the cursor */
+                } else if (key == 'e' && r->kind == ROW_LINK &&
                     !apps[r->app].links.items[r->link].deleted) {
                     /* 'e' on a link → edit its text in place */
                     edit_app  = r->app;

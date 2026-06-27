@@ -120,7 +120,14 @@ Workspace *workspace_load_all(int *count) {
                 ws[i].entries[j].targets      = NULL;
                 ws[i].entries[j].target_count = 0;
                 ws[i].entries[j].target_cap   = 0;
+                ws[i].entries[j].layout[0]     = '\0';
                 WorkspaceEntry *en = &ws[i].entries[j];
+
+                cJSON *lay = cJSON_GetObjectItem(e, "layout");
+                if (lay && lay->valuestring) {
+                    strncpy(en->layout, lay->valuestring, sizeof(en->layout) - 1);
+                    en->layout[sizeof(en->layout) - 1] = '\0';
+                }
 
                 cJSON *tgts = cJSON_GetObjectItem(e, "targets");
                 if (tgts && cJSON_IsArray(tgts)) {
@@ -175,6 +182,8 @@ int workspace_save_all(Workspace *ws, int count) {
             for (int k = 0; k < ws[i].entries[j].target_count; k++)
                 cJSON_AddItemToArray(tgts, cJSON_CreateString(ws[i].entries[j].targets[k]));
             cJSON_AddItemToObject(e, "targets", tgts);
+            if (ws[i].entries[j].layout[0])
+                cJSON_AddStringToObject(e, "layout", ws[i].entries[j].layout);
             cJSON_AddItemToArray(ents, e);
         }
         cJSON_AddItemToObject(obj, "entries", ents);
@@ -233,6 +242,7 @@ int workspace_add_entry_with_targets(const char *name, const char *app,
     en->targets      = NULL;
     en->target_count = 0;
     en->target_cap   = 0;
+    en->layout[0]    = '\0';
     for (int k = 0; k < target_count; k++)
         targetlist_push(&en->targets, &en->target_cap, &en->target_count, targets[k]);
     ws[idx].entry_count++;
