@@ -440,18 +440,12 @@ static void cmd_open_create(const char *name) {
         fprintf(stderr, "error: failed to create workspace\n");
 }
 
-/* Frees the heap lists each WsEditorApp owns, then the array (over full capacity;
+/* Frees the heap list each WsEditorApp owns, then the array (over full capacity;
    the no-op on NULL/zeroed slots makes this safe regardless of editor_count). */
 static void free_editor_apps(WsEditorApp *apps, int cap) {
     if (apps == NULL) return;
-    for (int i = 0; i < cap; i++) {
-        targetlist_free(&apps[i].existing_links.items, &apps[i].existing_links.cap,
-                        &apps[i].existing_links.count);
-        targetlist_free(&apps[i].new_links.items, &apps[i].new_links.cap,
-                        &apps[i].new_links.count);
-        free(apps[i].existing_del);
-        free(apps[i].existing_pos);
-    }
+    for (int i = 0; i < cap; i++)
+        editlink_free(&apps[i].links);
     free(apps);
 }
 
@@ -499,21 +493,29 @@ static void cmd_open_edit(void) {
         strncpy(e->app, src->app, WORKSPACE_APP_MAX - 1);
         ws_display_name(src->app, e->display, sizeof(e->display));
         for (int k = 0; k < src->target_count; k++)
-            targetlist_push(&e->existing_links.items, &e->existing_links.cap,
-                            &e->existing_links.count, src->targets[k]);
-        if (e->existing_links.count > 0) {
-            e->existing_del = calloc(e->existing_links.count, sizeof(int));
-            e->existing_pos = malloc(e->existing_links.count * sizeof(int));
-            if (e->existing_pos)
-                for (int k = 0; k < e->existing_links.count; k++)
-                    e->existing_pos[k] = k;
-        }
+            editlink_push(&e->links, src->targets[k], src->targets[k], k);
     }
 
-    /* Step 3: run the editor — Esc cancels, Enter confirms. */
+    /* Step 3: run the editor — Esc cancels, Enter confirms. ws_name is in/out so a
+       rename inside the editor updates it; taken_names lets the editor reject a
+       rename that collides with another workspace. */
+    char ws_name[WORKSPACE_NAME_MAX];
+    strncpy(ws_name, chosen_ws->name, sizeof(ws_name) - 1);
+    ws_name[sizeof(ws_name) - 1] = '\0';
+
+    const char **taken_names = malloc((size_t)count * sizeof(*taken_names));
+    int taken_count = 0;
+    if (taken_names)
+        for (int i = 0; i < count; i++)
+            if (i != ws_idx) taken_names[taken_count++] = ws[i].name;
+
     int delete_ws = 0;
-    if (!run_workspace_edit_picker(chosen_ws->name, editor_apps, &editor_count,
-                                   WORKSPACE_ENTRIES_MAX, &delete_ws)) {
+    int confirmed = run_workspace_edit_picker(ws_name, sizeof(ws_name),
+                                              taken_names, taken_count,
+                                              editor_apps, &editor_count,
+                                              WORKSPACE_ENTRIES_MAX, &delete_ws);
+    free(taken_names);
+    if (!confirmed) {
         printf(ANSI_CLEAR ANSI_RESET "Cancelled.\n");
         free_editor_apps(editor_apps, WORKSPACE_ENTRIES_MAX);
         workspace_free_all(ws, count);
@@ -522,9 +524,6 @@ static void cmd_open_edit(void) {
 
     /* Step 4: commit staged changes. */
     printf(ANSI_CLEAR ANSI_RESET);
-    char ws_name[WORKSPACE_NAME_MAX];
-    strncpy(ws_name, chosen_ws->name, sizeof(ws_name) - 1);
-    ws_name[sizeof(ws_name) - 1] = '\0';
 
     if (delete_ws) {
         int rc = workspace_remove(ws_name);
@@ -541,6 +540,10 @@ static void cmd_open_edit(void) {
        save the whole file. A full rebuild is index-safe and covers all four
        operations: adding/removing apps and adding/removing individual links. */
     Workspace *w = &ws[ws_idx];
+    /* Apply any rename done in the editor before saving (workspace_save_all writes
+       each workspace's name field, so this persists with the rest of the save). */
+    strncpy(w->name, ws_name, WORKSPACE_NAME_MAX - 1);
+    w->name[WORKSPACE_NAME_MAX - 1] = '\0';
     /* The loaded entries own heap targets — free them before overwriting. */
     for (int j = 0; j < w->entry_count; j++)
         targetlist_free(&w->entries[j].targets, &w->entries[j].target_cap,
@@ -554,13 +557,10 @@ static void cmd_open_edit(void) {
         e->app[WORKSPACE_APP_MAX - 1] = '\0';
         /* dest slot may be beyond the old count (garbage) → init before pushing. */
         e->targets = NULL; e->target_count = 0; e->target_cap = 0;
-        for (int k = 0; k < a->existing_links.count; k++)
-            if (!a->existing_del[k])
+        for (int k = 0; k < a->links.count; k++)
+            if (!a->links.items[k].deleted)
                 targetlist_push(&e->targets, &e->target_cap, &e->target_count,
-                                a->existing_links.items[k]);
-        for (int k = 0; k < a->new_links.count; k++)
-            targetlist_push(&e->targets, &e->target_cap, &e->target_count,
-                            a->new_links.items[k]);
+                                a->links.items[k].text);
     }
     w->entry_count = ec;
 
@@ -633,7 +633,7 @@ static void cmd_open_snap(void) {
                 ? "\033[33mthat name already exists — pick another.\033[0m"
                 : "Name for the new workspace.";
             if (!run_text_input("Snapshot workspace", subtitle, "Name",
-                                name, sizeof(name), 0)) {
+                                name, sizeof(name), 0, NULL)) {
                 state = SNAP_REVIEW;   /* Esc → back to the checklist */
                 name_taken = 0;
                 continue;
