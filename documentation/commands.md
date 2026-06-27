@@ -4,13 +4,14 @@ All commands are issued through the `mn` binary.
 
 ---
 
-## `mn add <file>`
+## `mn add <file-or-folder>`
 
-Ingests a file into the local index. The file's text is extracted, stored under `~/.mnemosyne/index/docs/`, and its metadata is recorded in `manifest.json`.
+Ingests a file (or every supported file inside a folder) into the local index. Each file's text is extracted, stored under `~/.mnemosyne/index/docs/`, and its metadata is recorded in `manifest.json`.
 
 **Usage**
 ```
 mn add <path-to-file>
+mn add <path-to-folder>
 ```
 
 **Examples**
@@ -18,6 +19,7 @@ mn add <path-to-file>
 mn add notes.txt
 mn add ~/Documents/thesis.pdf
 mn add project/design.md
+mn add ~/Documents/notes        # adds every supported file under notes/
 ```
 
 **Supported file types:** `.txt`, `.md`, `.pdf` (`.tex` is recognised but not yet parsed).
@@ -25,7 +27,8 @@ See [file-types.md](file-types.md) for how each format is parsed.
 
 **Behaviour**
 - If the file has already been indexed, it is re-indexed (content refreshed).
-- Unsupported file extensions print an error and exit with code 1.
+- When passed a folder, `mn add` walks it recursively (up to 8 levels deep) and indexes every file with a supported extension. Files with unsupported extensions inside the folder are silently skipped — no error noise from unrelated files like `.gitignore` or `.png`.
+- Unsupported file extensions on a *direct* `mn add <file>` print an error and exit with code 1.
 - Non-existent paths print an error and exit with code 1.
 - `.pdf` ingestion requires the `pdftotext` binary (poppler-utils). If it's not found, `mn add` prints a per-OS install hint and skips the file — all other file types continue to work. See [Enabling PDF support](../README.md#enabling-pdf-support).
 
@@ -112,24 +115,30 @@ Identical to `search`: if the file belongs to a git repository, VS Code and Curs
 
 ---
 
-## `mn remove [file]`
+## `mn remove [file-or-folder]`
 
-Removes a file from the index. Does not delete the original file — re-add it any time with `mn add`.
+Removes a file (or every indexed file under a folder) from the index. Does not delete the original file — re-add it any time with `mn add`.
 
 **Usage**
 ```
-mn remove                 # interactive picker over all indexed files
-mn remove <path-to-file>  # remove a specific file directly
+mn remove                   # interactive picker over all indexed files
+mn remove <path-to-file>    # remove a specific file directly
+mn remove <path-to-folder>  # remove every indexed file under that folder
 ```
 
 `mn remove` (no arguments) opens the same picker UI as `mn list` (titled "Remove a file"); arrow keys or `1`–`9` to select, **Enter to remove**, `Esc` to cancel. Removing drops both the index entry and the cached text copy.
 
-**Example**
+**Examples**
 ```
 mn remove notes.txt
+mn remove ~/Documents/notes       # drops every indexed file under notes/
 ```
 
-The picker removes by the stored path, so files that have been **deleted from disk** can still be selected and removed (they're also auto-pruned from the index on the next `mn search`). The direct `mn remove <file>` form prints an error if the path can't be resolved or isn't indexed.
+**Behaviour**
+- The picker form (no arguments) removes by the stored path, so files that have been **deleted from disk** can still be selected and removed (they're also auto-pruned from the index on the next `mn search`). The direct `mn remove <file>` form prints an error if the path can't be resolved or isn't indexed.
+- The folder form matches by **path prefix**: every manifest entry whose `original_path` starts with `<folder>/` (or `<folder>\` on Windows) is removed. A trailing-separator guard ensures `mn remove ~/foo` does **not** also wipe entries under `~/foo_archive/`.
+- The folder form does **not** walk the disk — it operates entirely on the manifest. So a folder that's been deleted from disk can still be cleaned out of the index in one call, as long as the path resolves (on Linux/macOS, deleted folders may fail to resolve via `realpath`; on Windows, `_fullpath` normalizes paths without requiring existence).
+- A summary is printed: `Removed N files under <folder>` (or `No indexed files under <folder>` if nothing matched).
 
 ---
 

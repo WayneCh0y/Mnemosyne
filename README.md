@@ -160,9 +160,10 @@ mingw32-make uninstall       # Windows
 On first run, Mnemosyne prompts you for a storage location and a default IDE. You can press Enter to accept the default storage path; the IDE is chosen from an interactive picker (arrow keys or type a number to jump to an option).
 
 ```bash
-# add some files
+# add some files (or a whole folder — recurses into subfolders)
 mn add notes.txt
 mn add ~/Documents/thesis.md
+mn add ~/Documents/notes      # indexes every supported file under notes/
 
 # search
 mn search simplex
@@ -175,6 +176,10 @@ mn config ide nvim
 
 # browse all indexed files interactively
 mn list
+
+# remove a file, or a whole folder's worth in one shot
+mn remove notes.txt
+mn remove ~/Documents/notes
 
 # create a workspace, then add/remove apps & links in it (code/cursor, or a full path to any .exe/app)
 mn open create work
