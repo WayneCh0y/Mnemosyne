@@ -143,23 +143,26 @@ Manages workspaces — named collections of apps, URLs, and paths to launch all 
 mn open                          # interactive picker to choose and launch a workspace
 mn open create <name>            # create a new empty workspace
 mn open snap                     # snapshot the apps you have open into a new workspace
-mn open add                      # interactive picker to add an app to a workspace
-mn open remove                   # interactive picker to remove a workspace or an app
+mn open edit                     # interactive picker to add/remove apps & links in a workspace
 ```
 
 **Creating and populating a workspace**
 
 ```
 mn open create work
-mn open add
+mn open edit
 ```
 
-`mn open add` is fully interactive (same picker UI as the rest of the app). It walks through three steps; pressing `Esc` steps **back** one step (and cancels at the first step):
-1. **Workspace** — pick which workspace to add to.
-2. **App** — a menu of `code`, or **Program name or full path…**. The last option lets you type a program name (e.g. `chrome`) or the full path to any app (e.g. `C:\Users\you\AppData\Local\Discord\app-1.0\Discord.exe`, `/Applications/Discord.app`, `/usr/bin/foo`); if that value doesn't exist on this machine you'll get a non-blocking warning.
-3. **URL or path** — opened as an argument to the app (press Enter to skip for standalone apps). For `code` / `cursor` you instead pick a path from your indexed files.
+`mn open edit` is fully interactive (same picker UI as the rest of the app) and is where you add **and** remove apps and links. First pick which workspace to edit; pressing `Esc` cancels.
 
-When typing an app/path, `Backspace` only deletes characters — it no longer jumps back a step; use `Esc` for that.
+Inside the editor you see the workspace's apps, each with its links beneath it. Changes are **staged** — nothing is written until you press `Enter` to save (`Esc` discards everything):
+
+- **Add an app** — navigate to `[+ Add a new app]` and type a program name (e.g. `chrome`) or a full path (e.g. `C:\Users\you\AppData\Local\Discord\app-1.0\Discord.exe`, `/Applications/Discord.app`, `/usr/bin/foo`); if that value doesn't exist on this machine you'll get a non-blocking warning. New apps show in **green** with a `+`.
+- **Add a link** — with the cursor on an app, press any printable key to type a URL/path inline. New links show in **green** with a `+`.
+- **Remove an app or a single link** — put the cursor on the app row or on an individual link row and press `Backspace`/`Delete`. An already-saved item is staged for removal and shown in **red** with a `-` (press `Backspace` again to undo); a not-yet-saved (green) item is simply dropped.
+- **Remove the whole workspace** — navigate to `[- Remove this workspace]` and press `Enter` or `Backspace`; it highlights red while staged and is deleted when you save.
+
+When typing an app/link, `Backspace` deletes characters and `Esc` cancels that inline edit (it does not exit the editor).
 
 **Snapshotting running apps**
 
@@ -168,13 +171,14 @@ mn open snap
 ```
 
 `mn open snap` builds a workspace from the applications you currently have open, so you don't have to add them one by one. The flow is interactive (`Esc` steps back, cancels at the first step):
-1. **Review** — a list of the detected apps, all pre-selected (shown in **green**; the cursor row is marked with a white `▶`). `↑`/`↓` move, `Space` toggles a row between selected (green) and deselected (dim), `Enter` confirms. Deselect anything you don't want (e.g. the terminal, file-explorer windows).
-   - **Add links/targets** — with the cursor on a **selected (green)** app, press any printable key to start typing inline: an `Add link for <app>:` field appears at the bottom of the list (seeded with the key you pressed), where you can type a URL, app link, repository, or file path. `Enter` adds it, `Esc` cancels the edit, `Backspace` deletes. You can repeat to add **several links to the same app** (up to 8); each one is shown on its own dim-yellow `→ link` line beneath the app, the same way the `mn open` workspace view displays entries. Deselected (dim) apps don't accept links. Each link becomes a separate launch entry, so the app opens once per link; remove an individual link later with `mn open remove`.
+1. **Review** — a list of the detected apps, all pre-selected (selected apps show **white text on a blue highlight**; the cursor row is marked with a green `▌` bar). `↑`/`↓` move, `Backspace` toggles the highlighted app between selected (blue) and deselected (dim), `Enter` confirms. Deselect anything you don't want (e.g. the terminal, file-explorer windows).
+   - **Add links/targets** — with the cursor on a **selected** app, press any printable key to start typing inline: an `Add link for <app>:` field appears at the bottom of the list (seeded with the key you pressed), where you can type a URL, app link, repository, or file path. `Enter` adds it, `Esc` cancels the edit, `Backspace` deletes. You can repeat to add **as many links to the same app** as you like; each one is shown on its own dim-yellow `→ link` line beneath the app. Deselected (dim) apps don't accept links.
+   - **Remove a link** — move the cursor onto a `→ link` line and press `Backspace`; that link is removed immediately. Each link becomes a separate launch entry, so the app opens once per link.
 2. **Name** — type a name for the new workspace. If the name already exists you're asked for another.
 
 Apart from any links you set manually, snapshots capture **apps only**, not document/tab state — each remaining entry is saved with no target:
 
-- **Browsers** (Edge/Chrome/…) are saved as the browser itself. Relaunching via `mn open` reopens the browser, which restores its own previous session if it's configured to "continue where you left off". Individual tab URLs are *not* captured (there's no reliable way to read them); add specific URLs by hand with `mn open add` if you need them pinned.
+- **Browsers** (Edge/Chrome/…) are saved as the browser itself. Relaunching via `mn open` reopens the browser, which restores its own previous session if it's configured to "continue where you left off". Individual tab URLs are *not* captured (there's no reliable way to read them); add specific URLs by hand with `mn open edit` if you need them pinned.
 - The terminal that launched `mn` is excluded automatically.
 
 Platform notes:
@@ -187,16 +191,7 @@ Platform notes:
 
 **Removing**
 
-```
-mn open remove
-```
-
-`mn open remove` is fully interactive. A menu first asks whether you want to remove **a whole workspace** or **an app from a workspace**:
-
-- *A whole workspace* → pick the workspace; it is removed immediately.
-- *An app from a workspace* → pick the workspace, then pick the app; it is removed immediately.
-
-As with `mn open add`, `Esc` steps back one level (app picker → workspace picker → menu), cancelling only at the first menu.
+Removal is handled inside `mn open edit` (see *Creating and populating a workspace* above): stage an app, an individual link, or the whole workspace for deletion with `Backspace`/`Delete` (shown in **red** with a `-`), then press `Enter` to save. Nothing is deleted until you save, and `Esc` discards all staged removals.
 
 **Opening a workspace**
 

@@ -10,13 +10,42 @@ static void workspace_path(char *out, size_t n) {
     snprintf(out, n, "%s/workspaces.json", get_data_path());
 }
 
-void workspace_ensure_file(void) {
-    char path[4096];
-    workspace_path(path, sizeof(path));
-    FILE *f = fopen(path, "r");
-    if (f != NULL) { fclose(f); return; }
-    f = fopen(path, "w");
-    if (f != NULL) { fprintf(f, "[]\n"); fclose(f); }
+/* ── Growable fixed-width string lists ─────────────────────────────────── */
+
+int targetlist_push(char (**arr)[WORKSPACE_TARGET_MAX], int *cap, int *count,
+                    const char *s) {
+    if (*count >= *cap) {
+        int ncap = *cap ? *cap * 2 : 4;
+        char (*p)[WORKSPACE_TARGET_MAX] = realloc(*arr, (size_t)ncap * sizeof(*p));
+        if (p == NULL) return -1;
+        *arr = p;
+        *cap = ncap;
+    }
+    strncpy((*arr)[*count], s, WORKSPACE_TARGET_MAX - 1);
+    (*arr)[*count][WORKSPACE_TARGET_MAX - 1] = '\0';
+    (*count)++;
+    return 0;
+}
+
+void targetlist_remove(char (*arr)[WORKSPACE_TARGET_MAX], int *count, int idx) {
+    if (idx < 0 || idx >= *count) return;
+    for (int j = idx; j < *count - 1; j++)
+        memcpy(arr[j], arr[j + 1], WORKSPACE_TARGET_MAX);
+    (*count)--;
+}
+
+void targetlist_swap(char (*arr)[WORKSPACE_TARGET_MAX], int idx1, int idx2) {
+    char tmp[WORKSPACE_TARGET_MAX];
+    memcpy(tmp,        arr[idx1], WORKSPACE_TARGET_MAX);
+    memcpy(arr[idx1],  arr[idx2], WORKSPACE_TARGET_MAX);
+    memcpy(arr[idx2],  tmp,       WORKSPACE_TARGET_MAX);
+}
+
+void targetlist_free(char (**arr)[WORKSPACE_TARGET_MAX], int *cap, int *count) {
+    free(*arr);
+    *arr   = NULL;
+    *cap   = 0;
+    *count = 0;
 }
 
 static cJSON *load_ws_json(void) {
@@ -87,31 +116,29 @@ Workspace *workspace_load_all(int *count) {
                 strncpy(ws[i].entries[j].app, app ? app->valuestring : "",
                         WORKSPACE_APP_MAX - 1);
                 ws[i].entries[j].app[WORKSPACE_APP_MAX - 1] = '\0';
+                /* malloc leaves these garbage; init before any push. */
+                ws[i].entries[j].targets      = NULL;
                 ws[i].entries[j].target_count = 0;
+                ws[i].entries[j].target_cap   = 0;
+                WorkspaceEntry *en = &ws[i].entries[j];
 
                 cJSON *tgts = cJSON_GetObjectItem(e, "targets");
                 if (tgts && cJSON_IsArray(tgts)) {
                     /* New format: "targets": ["url1", "url2", ...] */
                     int tc = cJSON_GetArraySize(tgts);
-                    if (tc > WORKSPACE_ENTRY_TARGETS_MAX) tc = WORKSPACE_ENTRY_TARGETS_MAX;
                     for (int k = 0; k < tc; k++) {
                         cJSON *t = cJSON_GetArrayItem(tgts, k);
-                        if (t && t->valuestring) {
-                            strncpy(ws[i].entries[j].targets[k], t->valuestring,
-                                    WORKSPACE_TARGET_MAX - 1);
-                            ws[i].entries[j].targets[k][WORKSPACE_TARGET_MAX - 1] = '\0';
-                            ws[i].entries[j].target_count++;
-                        }
+                        if (t && t->valuestring)
+                            targetlist_push(&en->targets, &en->target_cap,
+                                            &en->target_count, t->valuestring);
                     }
                 } else {
                     /* Backward compat: old format "target": "url" */
                     cJSON *tgt = cJSON_GetObjectItem(e, "target");
                     const char *tval = (tgt && tgt->valuestring) ? tgt->valuestring : "";
-                    if (tval[0] != '\0') {
-                        strncpy(ws[i].entries[j].targets[0], tval, WORKSPACE_TARGET_MAX - 1);
-                        ws[i].entries[j].targets[0][WORKSPACE_TARGET_MAX - 1] = '\0';
-                        ws[i].entries[j].target_count = 1;
-                    }
+                    if (tval[0] != '\0')
+                        targetlist_push(&en->targets, &en->target_cap,
+                                        &en->target_count, tval);
                 }
                 ws[i].entry_count++;
             }
@@ -121,6 +148,16 @@ Workspace *workspace_load_all(int *count) {
     cJSON_Delete(root);
     *count = n;
     return ws;
+}
+
+void workspace_free_all(Workspace *ws, int count) {
+    if (ws == NULL) return;
+    for (int i = 0; i < count; i++)
+        for (int j = 0; j < ws[i].entry_count; j++)
+            targetlist_free(&ws[i].entries[j].targets,
+                            &ws[i].entries[j].target_cap,
+                            &ws[i].entries[j].target_count);
+    free(ws);
 }
 
 int workspace_save_all(Workspace *ws, int count) {
@@ -185,23 +222,23 @@ int workspace_add_entry_with_targets(const char *name, const char *app,
     for (int i = 0; i < count; i++) {
         if (strcmp(ws[i].name, name) == 0) { idx = i; break; }
     }
-    if (idx == -1) { free(ws); return -1; }
-    if (ws[idx].entry_count >= WORKSPACE_ENTRIES_MAX) { free(ws); return -2; }
+    if (idx == -1) { workspace_free_all(ws, count); return -1; }
+    if (ws[idx].entry_count >= WORKSPACE_ENTRIES_MAX) { workspace_free_all(ws, count); return -2; }
 
     int j = ws[idx].entry_count;
-    strncpy(ws[idx].entries[j].app, app, WORKSPACE_APP_MAX - 1);
-    ws[idx].entries[j].app[WORKSPACE_APP_MAX - 1] = '\0';
-    if (target_count > WORKSPACE_ENTRY_TARGETS_MAX)
-        target_count = WORKSPACE_ENTRY_TARGETS_MAX;
-    ws[idx].entries[j].target_count = target_count;
-    for (int k = 0; k < target_count; k++) {
-        strncpy(ws[idx].entries[j].targets[k], targets[k], WORKSPACE_TARGET_MAX - 1);
-        ws[idx].entries[j].targets[k][WORKSPACE_TARGET_MAX - 1] = '\0';
-    }
+    WorkspaceEntry *en = &ws[idx].entries[j];
+    strncpy(en->app, app, WORKSPACE_APP_MAX - 1);
+    en->app[WORKSPACE_APP_MAX - 1] = '\0';
+    /* fresh slot beyond the loaded count → init before pushing. */
+    en->targets      = NULL;
+    en->target_count = 0;
+    en->target_cap   = 0;
+    for (int k = 0; k < target_count; k++)
+        targetlist_push(&en->targets, &en->target_cap, &en->target_count, targets[k]);
     ws[idx].entry_count++;
 
     int rc = workspace_save_all(ws, count);
-    free(ws);
+    workspace_free_all(ws, count);
     return rc;
 }
 
@@ -235,68 +272,4 @@ int workspace_remove(const char *name) {
     int rc = save_ws_json(root);
     cJSON_Delete(root);
     return rc;
-}
-
-int workspace_remove_entry(const char *name, int index) {
-    int count;
-    Workspace *ws = workspace_load_all(&count);
-    if (ws == NULL) return -3;
-
-    int idx = -1;
-    for (int i = 0; i < count; i++) {
-        if (strcmp(ws[i].name, name) == 0) { idx = i; break; }
-    }
-    if (idx == -1) { free(ws); return -1; }
-    if (index < 0 || index >= ws[idx].entry_count) { free(ws); return -2; }
-
-    for (int j = index; j < ws[idx].entry_count - 1; j++)
-        ws[idx].entries[j] = ws[idx].entries[j + 1];
-    ws[idx].entry_count--;
-
-    int rc = workspace_save_all(ws, count);
-    free(ws);
-    return rc;
-}
-
-int workspace_append_targets_to_entry(const char *name, int entry_idx,
-                                      const char targets[][WORKSPACE_TARGET_MAX],
-                                      int target_count) {
-    int count;
-    Workspace *ws = workspace_load_all(&count);
-    if (ws == NULL) return -3;
-
-    int idx = -1;
-    for (int i = 0; i < count; i++) {
-        if (strcmp(ws[i].name, name) == 0) { idx = i; break; }
-    }
-    if (idx == -1) { free(ws); return -1; }
-    if (entry_idx < 0 || entry_idx >= ws[idx].entry_count) { free(ws); return -2; }
-
-    WorkspaceEntry *e = &ws[idx].entries[entry_idx];
-    for (int k = 0; k < target_count; k++) {
-        if (e->target_count >= WORKSPACE_ENTRY_TARGETS_MAX) break;
-        strncpy(e->targets[e->target_count], targets[k], WORKSPACE_TARGET_MAX - 1);
-        e->targets[e->target_count][WORKSPACE_TARGET_MAX - 1] = '\0';
-        e->target_count++;
-    }
-
-    int rc = workspace_save_all(ws, count);
-    free(ws);
-    return rc;
-}
-
-int workspace_get(const char *name, Workspace *out) {
-    int count;
-    Workspace *ws = workspace_load_all(&count);
-    if (ws == NULL) return -1;
-
-    for (int i = 0; i < count; i++) {
-        if (strcmp(ws[i].name, name) == 0) {
-            *out = ws[i];
-            free(ws);
-            return 0;
-        }
-    }
-    free(ws);
-    return -1;
 }
