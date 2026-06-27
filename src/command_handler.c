@@ -33,7 +33,7 @@ static int is_valid_add(int argc) { return argc == 3; }
 
 static void cmd_add(int argc, char *argv[]) {
     if (!is_valid_add(argc)) { print_help(); return; }
-    ingest_file(argv[2]);
+    ingest_path(argv[2]);
 }
 
 static int is_valid_search(int argc) { return argc >= 3; }
@@ -219,6 +219,12 @@ static void handle_list_enter(IndexEntry *entries, int selected) {
     close_terminal();
 }
 
+static int compare_by_path(const void *a, const void *b) {
+    const IndexEntry *ea = (const IndexEntry *)a;
+    const IndexEntry *eb = (const IndexEntry *)b;
+    return strcmp(ea->original_path, eb->original_path);
+}
+
 static void cmd_list(int argc, char *argv[]) {
     (void)argc; (void)argv;
     int count;
@@ -228,6 +234,10 @@ static void cmd_list(int argc, char *argv[]) {
         free(entries);
         return;
     }
+
+    /* List folders first. */
+    qsort(entries, count, sizeof(IndexEntry), compare_by_path);
+    
     int chosen = run_list_picker(entries, count, "Browse indexed files",
                                  "Use the arrow keys to move, Enter to open, Esc to cancel.");
     printf(ANSI_CLEAR ANSI_RESET);
@@ -238,7 +248,7 @@ static void cmd_list(int argc, char *argv[]) {
 
 static void cmd_remove(int argc, char *argv[]) {
     /* Direct form: remove by path (scriptable, backward compatible). */
-    if (argc == 3) { remove_file(argv[2]); return; }
+    if (argc == 3) { remove_path(argv[2]); return; }
     if (argc != 2) { print_help(); return; }
 
     /* Interactive form: pick a file from the index to remove. */
