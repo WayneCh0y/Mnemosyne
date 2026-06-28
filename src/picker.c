@@ -123,6 +123,88 @@ static void handle_num_input(int key, int list_len,
     }
 }
 
+/* Visible column count of a UTF-8 string (counts code points, not bytes) so lines
+   with arrows/dashes centre correctly. */
+static int vis_cols(const char *s) {
+    int n = 0;
+    for (; *s; s++) if (((unsigned char)*s & 0xC0) != 0x80) n++;
+    return n;
+}
+
+/* ── In-place single-line text editing ──────────────────────────────────────
+   Applies one keypress to a text buffer with a cursor at *pos: ←/→ move the
+   cursor, Backspace deletes the char before it, and a printable key inserts at
+   it. *len tracks the length and buf stays NUL-terminated (size is its capacity).
+   Returns 1 if the key was consumed, 0 otherwise (so the caller still handles
+   Enter, Esc and the like). Shared by every workspace text-entry field. */
+static int edit_buffer_key(int key, char *buf, int *len, int *pos, size_t size) {
+    if (key == KEY_LEFT) {
+        if (*pos > 0) (*pos)--;
+    } else if (key == KEY_RIGHT) {
+        if (*pos < *len) (*pos)++;
+    } else if (key == KEY_BACKSPACE || key == 127) {
+        if (*pos > 0) {
+            memmove(&buf[*pos - 1], &buf[*pos],
+                    (size_t)(*len - *pos) + 1);   /* include NUL */
+            (*len)--; (*pos)--;
+        }
+    } else if (key >= 32 && key < 127) {
+        if (*len < (int)size - 1) {
+            memmove(&buf[*pos + 1], &buf[*pos],
+                    (size_t)(*len - *pos) + 1);    /* include NUL */
+            buf[*pos] = (char)key;
+            (*len)++; (*pos)++;
+        }
+    } else {
+        return 0;
+    }
+    return 1;
+}
+
+/* ── Generic indexed-list navigation loop ───────────────────────────────────
+   The menu, search, list and workspace pickers share one control flow: ↑/↓ move,
+   Enter selects, Esc cancels (returns -1), and 1-9 begins a numeric jump handled
+   by handle_num_input. Only the drawing differs, so each picker passes a render
+   callback (called with the live selection / jump state) plus its row count; this
+   loop owns cursor hide/show and key handling. Returns the chosen index, or -1. */
+typedef void (*PickerRender)(void *ctx, int selected, int num_input, int show_error);
+
+static int run_indexed_picker(int count, PickerRender render, void *ctx) {
+    int selected = 0, prev_selected = 0, num_input = -1, show_error = 0, done = 0;
+
+    printf(ANSI_CURSOR_HIDE);
+    render(ctx, selected, num_input, show_error);
+
+    while (!done) {
+        int key = read_key();
+        show_error = 0;
+
+        if (num_input >= 0) {
+            handle_num_input(key, count, &num_input, &selected,
+                             &prev_selected, &show_error, &done);
+        } else {
+            switch (key) {
+            case KEY_UP:    if (selected > 0)         selected--; break;
+            case KEY_DOWN:  if (selected < count - 1) selected++; break;
+            case KEY_ENTER: done = 1;                             break;
+            case KEY_ESC:   selected = -1; done = 1;              break;
+            default:
+                if (key >= '1' && key <= '9') {
+                    prev_selected = selected;
+                    num_input = key - '0';
+                }
+                break;
+            }
+        }
+
+        if (!done) render(ctx, selected, num_input, show_error);
+    }
+
+    printf(ANSI_CURSOR_SHOW);
+    fflush(stdout);
+    return selected;
+}
+
 /* ── Generic menu picker ───────────────────────────────────────────────── */
 
 static void print_picker_header(const char *title, const char *subtitle) {
@@ -158,46 +240,22 @@ static void render_menu_list(const char *title, const char *subtitle,
     print_picker_footer(num_input, show_error);
 }
 
+typedef struct {
+    const char *title, *subtitle;
+    const char **list;
+    int display;
+} MenuPickerCtx;
+
+static void render_menu_cb(void *ctx, int selected, int num_input, int show_error) {
+    const MenuPickerCtx *c = ctx;
+    render_menu_list(c->title, c->subtitle, c->list, c->display,
+                     selected, num_input, show_error);
+}
+
 int run_menu_picker(const char *title, const char *subtitle,
                     const char **list, int display) {
-    int selected = 0;
-    int prev_selected = 0;
-    int num_input = -1;
-    int show_error = 0;
-    int done = 0;
-
-    printf(ANSI_CURSOR_HIDE);
-    render_menu_list(title, subtitle, list, display, selected, num_input, show_error);
-
-    while (!done) {
-        int key = read_key();
-        show_error = 0;
-
-        if (num_input >= 0) {
-            handle_num_input(key, display, &num_input, &selected,
-                             &prev_selected, &show_error, &done);
-        } else {
-            switch (key) {
-            case KEY_UP:    if (selected > 0)           selected--; break;
-            case KEY_DOWN:  if (selected < display - 1) selected++; break;
-            case KEY_ENTER: done = 1;                               break;
-            case KEY_ESC:   selected = -1; done = 1;                break;
-            default:
-                if (key >= '1' && key <= '9') {
-                    prev_selected = selected;
-                    num_input = key - '0';
-                }
-                break;
-            }
-        }
-
-        if (!done)
-            render_menu_list(title, subtitle, list, display, selected, num_input, show_error);
-    }
-
-    printf(ANSI_CURSOR_SHOW);
-    fflush(stdout);
-    return selected;
+    MenuPickerCtx ctx = { title, subtitle, list, display };
+    return run_indexed_picker(display, render_menu_cb, &ctx);
 }
 
 int run_ide_picker(const char **list, int display) {
@@ -446,44 +504,16 @@ static void render_results(SearchResult *results, int count, int selected,
     print_picker_footer(num_input, show_error);
 }
 
+typedef struct { SearchResult *results; int count; } SearchPickerCtx;
+
+static void render_search_cb(void *ctx, int selected, int num_input, int show_error) {
+    const SearchPickerCtx *c = ctx;
+    render_results(c->results, c->count, selected, num_input, show_error);
+}
+
 int run_search_picker(SearchResult *results, int count) {
-    int selected = 0;
-    int prev_selected = 0;
-    int num_input = -1;
-    int show_error = 0;
-    int done = 0;
-
-    printf(ANSI_CURSOR_HIDE);
-    render_results(results, count, selected, num_input, show_error);
-
-    while (!done) {
-        int key = read_key();
-        show_error = 0;
-
-        if (num_input >= 0) {
-            handle_num_input(key, count, &num_input, &selected,
-                             &prev_selected, &show_error, &done);
-        } else {
-            switch (key) {
-            case KEY_UP:    if (selected > 0)         selected--; break;
-            case KEY_DOWN:  if (selected < count - 1) selected++; break;
-            case KEY_ENTER: done = 1;                             break;
-            case KEY_ESC:   selected = -1; done = 1;             break;
-            default:
-                if (key >= '1' && key <= '9') {
-                    prev_selected = selected;
-                    num_input = key - '0';
-                }
-                break;
-            }
-        }
-
-        if (!done) render_results(results, count, selected, num_input, show_error);
-    }
-
-    printf(ANSI_CURSOR_SHOW);
-    fflush(stdout);
-    return selected;
+    SearchPickerCtx ctx = { results, count };
+    return run_indexed_picker(count, render_search_cb, &ctx);
 }
 
 static void find_parent_dir(const char *path, char *out, size_t out_size) {
@@ -541,45 +571,22 @@ static void render_list(IndexEntry *entries, int count, int selected,
     print_picker_footer(num_input, show_error);
 }
 
+typedef struct {
+    IndexEntry *entries;
+    int count;
+    const char *title, *subtitle;
+} ListPickerCtx;
+
+static void render_list_cb(void *ctx, int selected, int num_input, int show_error) {
+    const ListPickerCtx *c = ctx;
+    render_list(c->entries, c->count, selected, num_input, show_error,
+                c->title, c->subtitle);
+}
+
 int run_list_picker(IndexEntry *entries, int count,
                     const char *title, const char *subtitle) {
-    int selected = 0;
-    int prev_selected = 0;
-    int num_input = -1;
-    int show_error = 0;
-    int done = 0;
-
-    printf(ANSI_CURSOR_HIDE);
-    render_list(entries, count, selected, num_input, show_error, title, subtitle);
-
-    while (!done) {
-        int key = read_key();
-        show_error = 0;
-
-        if (num_input >= 0) {
-            handle_num_input(key, count, &num_input, &selected,
-                             &prev_selected, &show_error, &done);
-        } else {
-            switch (key) {
-            case KEY_UP:    if (selected > 0)         selected--; break;
-            case KEY_DOWN:  if (selected < count - 1) selected++; break;
-            case KEY_ENTER: done = 1;                             break;
-            case KEY_ESC:   selected = -1; done = 1;             break;
-            default:
-                if (key >= '1' && key <= '9') {
-                    prev_selected = selected;
-                    num_input = key - '0';
-                }
-                break;
-            }
-        }
-
-        if (!done) render_list(entries, count, selected, num_input, show_error, title, subtitle);
-    }
-
-    printf(ANSI_CURSOR_SHOW);
-    fflush(stdout);
-    return selected;
+    ListPickerCtx ctx = { entries, count, title, subtitle };
+    return run_indexed_picker(count, render_list_cb, &ctx);
 }
 
 /* ── Workspace picker ──────────────────────────────────────────────────── */
@@ -646,46 +653,22 @@ static void render_workspace_list(Workspace *ws, int count, int selected,
     print_picker_footer(num_input, show_error);
 }
 
+typedef struct {
+    Workspace *ws;
+    int count;
+    const char *title, *subtitle;
+} WorkspacePickerCtx;
+
+static void render_workspace_cb(void *ctx, int selected, int num_input, int show_error) {
+    const WorkspacePickerCtx *c = ctx;
+    render_workspace_list(c->ws, c->count, selected, num_input, show_error,
+                          c->title, c->subtitle);
+}
+
 int run_workspace_picker(Workspace *ws, int count,
                          const char *title, const char *subtitle) {
-    int selected = 0;
-    int prev_selected = 0;
-    int num_input = -1;
-    int show_error = 0;
-    int done = 0;
-
-    printf(ANSI_CURSOR_HIDE);
-    render_workspace_list(ws, count, selected, num_input, show_error, title, subtitle);
-
-    while (!done) {
-        int key = read_key();
-        show_error = 0;
-
-        if (num_input >= 0) {
-            handle_num_input(key, count, &num_input, &selected,
-                             &prev_selected, &show_error, &done);
-        } else {
-            switch (key) {
-            case KEY_UP:    if (selected > 0)         selected--; break;
-            case KEY_DOWN:  if (selected < count - 1) selected++; break;
-            case KEY_ENTER: done = 1;                             break;
-            case KEY_ESC:   selected = -1; done = 1;             break;
-            default:
-                if (key >= '1' && key <= '9') {
-                    prev_selected = selected;
-                    num_input = key - '0';
-                }
-                break;
-            }
-        }
-
-        if (!done)
-            render_workspace_list(ws, count, selected, num_input, show_error, title, subtitle);
-    }
-
-    printf(ANSI_CURSOR_SHOW);
-    fflush(stdout);
-    return selected;
+    WorkspacePickerCtx ctx = { ws, count, title, subtitle };
+    return run_indexed_picker(count, render_workspace_cb, &ctx);
 }
 
 /* ── Centered yes/no confirmation ──────────────────────────────────────── */
@@ -764,13 +747,17 @@ static int run_text_input_centered(const char *title, const char *label,
                                    char *out, size_t out_size, const char *prefill) {
     char typed[4096] = {0};
     int  typed_len   = 0;
+    int  edit_pos    = 0;   /* cursor within typed[] */
     int  done = 0, cancelled = 0;
-    const char *help = "Enter confirm   Esc cancel   Backspace delete";
+    const char *help = "\xe2\x86\x90/\xe2\x86\x92 move   Enter confirm   Esc cancel   Backspace delete";
+    /* never let typing exceed the caller's buffer or our own */
+    size_t cap = out_size < sizeof(typed) ? out_size : sizeof(typed);
 
     if (prefill && prefill[0]) {
         strncpy(typed, prefill, sizeof(typed) - 1);
         typed[sizeof(typed) - 1] = '\0';
         typed_len = (int)strlen(typed);
+        edit_pos  = typed_len;
     }
 
     printf(ANSI_CURSOR_HIDE);
@@ -785,13 +772,16 @@ static int run_text_input_centered(const char *title, const char *label,
 
         print_centered(cols, ANSI_BOLD, title, (int)strlen(title));
         printf("\n");
-        /* field "label: value_" — centred by its visible width (cursor included) */
-        int vis = (int)strlen(label) + 2 + typed_len + 1;
+        /* field "label: value" with a highlight block cursor at edit_pos; only a
+           cursor parked past the end adds a trailing column to the visible width. */
+        char cur = typed[edit_pos] ? typed[edit_pos] : ' ';
+        const char *rest = typed[edit_pos] ? typed + edit_pos + 1 : "";
+        int vis = (int)strlen(label) + 2 + typed_len + (typed[edit_pos] ? 0 : 1);
         int pad = (cols - vis) / 2; if (pad < 0) pad = 0;
-        printf("%*s" ANSI_CYAN "%s: " ANSI_RESET "%s" ANSI_SEL "_" ANSI_RESET "\n",
-               pad, "", label, typed);
+        printf("%*s" ANSI_CYAN "%s: " ANSI_RESET "%.*s" ANSI_REVERSE "%c" ANSI_REVERSE_OFF "%s" ANSI_RESET "\n",
+               pad, "", label, edit_pos, typed, cur, rest);
         printf("\n");
-        print_centered(cols, ANSI_DIM, help, (int)strlen(help));
+        print_centered(cols, ANSI_DIM, help, vis_cols(help));
         fflush(stdout);
 
         int key = read_key();
@@ -803,13 +793,8 @@ static int run_text_input_centered(const char *title, const char *label,
             }
         } else if (key == KEY_ESC) {
             cancelled = 1; done = 1;
-        } else if (key == KEY_BACKSPACE || key == 127) {
-            if (typed_len > 0) typed[--typed_len] = '\0';
-        } else if (key >= 32 && key < 127) {
-            if (typed_len < (int)out_size - 1 && typed_len < (int)sizeof(typed) - 1) {
-                typed[typed_len++] = (char)key;
-                typed[typed_len]   = '\0';
-            }
+        } else {
+            edit_buffer_key(key, typed, &typed_len, &edit_pos, cap);
         }
     }
     printf(ANSI_CURSOR_SHOW);
@@ -861,18 +846,29 @@ static int placement_taken(int screen, const char *part,
     return 0;
 }
 
-/* Visible column count of a UTF-8 string (counts code points, not bytes) so lines
-   with arrows/dashes centre correctly. */
-static int vis_cols(const char *s) {
-    int n = 0;
-    for (; *s; s++) if (((unsigned char)*s & 0xC0) != 0x80) n++;
-    return n;
-}
-
 /* Prints one 9-wide quadrant cell: shaded with hl when filled, blank otherwise. */
 static void pl_cell(int on, const char *hl) {
     if (on) printf("%s         " ANSI_RESET, hl);
     else    printf("         ");
+}
+
+/* One quadrant row is two identical text lines of a left and right cell. */
+static void pl_row(int pad, int left_on, int right_on, const char *hl) {
+    for (int line = 0; line < 2; line++) {
+        printf("%*s|", pad, "");
+        pl_cell(left_on, hl);  printf("|");
+        pl_cell(right_on, hl); printf("|\n");
+    }
+}
+
+/* Draws the full 2x2 placement grid for `mask`, indented by `pad` columns and
+   shaded with `hl`. */
+static void print_placement_grid(int pad, int mask, const char *hl) {
+    printf("%*s+---------+---------+\n", pad, "");
+    pl_row(pad, mask & PL_TL, mask & PL_TR, hl);
+    printf("%*s+---------+---------+\n", pad, "");
+    pl_row(pad, mask & PL_BL, mask & PL_BR, hl);
+    printf("%*s+---------+---------+\n", pad, "");
 }
 
 /* Full-screen visual grid; layout is in/out. Returns 1 on Enter (token written),
@@ -929,13 +925,7 @@ static int run_placement_picker(const char *app_display, char *layout, size_t la
         int occupied = placement_taken(screen, PLACEMENTS[sel].token, taken, taken_count);
         const char *hl = occupied ? ANSI_DEL_HL : ANSI_APP_HL;   /* red vs blue */
         int pad  = (cols - 21) / 2; if (pad < 0) pad = 0;
-        printf("%*s+---------+---------+\n", pad, "");
-        printf("%*s|", pad, ""); pl_cell(mask & PL_TL, hl); printf("|"); pl_cell(mask & PL_TR, hl); printf("|\n");
-        printf("%*s|", pad, ""); pl_cell(mask & PL_TL, hl); printf("|"); pl_cell(mask & PL_TR, hl); printf("|\n");
-        printf("%*s+---------+---------+\n", pad, "");
-        printf("%*s|", pad, ""); pl_cell(mask & PL_BL, hl); printf("|"); pl_cell(mask & PL_BR, hl); printf("|\n");
-        printf("%*s|", pad, ""); pl_cell(mask & PL_BL, hl); printf("|"); pl_cell(mask & PL_BR, hl); printf("|\n");
-        printf("%*s+---------+---------+\n", pad, "");
+        print_placement_grid(pad, mask, hl);
         printf("\n");
         char lbl[80];
         if (occupied)
@@ -1182,10 +1172,15 @@ static void render_workspace_edit(const char *ws_name,
                apps[type_app].display, edit_pos, typed, cur, rest);
         printf("\n" ANSI_DIM "  \xe2\x86\x90/\xe2\x86\x92 move  \xe2\x80\xa2  Enter add  \xe2\x80\xa2  Esc cancel  \xe2\x80\xa2  Backspace delete" ANSI_RESET);
     } else if (mode == WADD_TYPE_APP) {
+        /* highlight block cursor at edit_pos (a space when parked past the end) */
+        char cur = typed[edit_pos] ? typed[edit_pos] : ' ';
+        const char *rest = typed[edit_pos] ? typed + edit_pos + 1 : "";
         if (app_error && app_error[0])
             printf("\n" ANSI_YELLOW "  %s" ANSI_RESET, app_error);
-        printf("\n" ANSI_CYAN "  New app: " ANSI_RESET "%s" ANSI_SEL "_" ANSI_RESET, typed);
-        printf("\n" ANSI_DIM "  Enter add  \xe2\x80\xa2  Esc cancel  \xe2\x80\xa2  Backspace delete" ANSI_RESET);
+        printf("\n" ANSI_CYAN "  New app: " ANSI_RESET
+               "%.*s" ANSI_REVERSE "%c" ANSI_REVERSE_OFF "%s",
+               edit_pos, typed, cur, rest);
+        printf("\n" ANSI_DIM "  \xe2\x86\x90/\xe2\x86\x92 move  \xe2\x80\xa2  Enter add  \xe2\x80\xa2  Esc cancel  \xe2\x80\xa2  Backspace delete" ANSI_RESET);
     } else if (mode == WADD_EDIT_LINK) {
         printf("\n" ANSI_DIM "\xe2\x86\x90/\xe2\x86\x92 move  \xe2\x80\xa2  type to edit  \xe2\x80\xa2  Enter save  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
     } else {
@@ -1254,23 +1249,8 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
             } else if (key == KEY_ESC) {
                 typed[0] = '\0'; typed_len = 0; edit_pos = 0;
                 mode = WADD_LIST;
-            } else if (key == KEY_LEFT) {
-                if (edit_pos > 0) edit_pos--;
-            } else if (key == KEY_RIGHT) {
-                if (edit_pos < typed_len) edit_pos++;
-            } else if (key == KEY_BACKSPACE || key == 127) {
-                if (edit_pos > 0) {
-                    memmove(&typed[edit_pos - 1], &typed[edit_pos],
-                            (size_t)(typed_len - edit_pos) + 1);   /* include NUL */
-                    typed_len--; edit_pos--;
-                }
-            } else if (key >= 32 && key < 127) {
-                if (typed_len < (int)sizeof(typed) - 1) {
-                    memmove(&typed[edit_pos + 1], &typed[edit_pos],
-                            (size_t)(typed_len - edit_pos) + 1);   /* include NUL */
-                    typed[edit_pos] = (char)key;
-                    typed_len++; edit_pos++;
-                }
+            } else {
+                edit_buffer_key(key, typed, &typed_len, &edit_pos, sizeof(typed));
             }
         } else if (mode == WADD_TYPE_APP) {
             if (key == KEY_ENTER) {
@@ -1286,7 +1266,7 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                         if (!app_value_exists(final_app)) {
                             snprintf(app_error, sizeof(app_error),
                                      "App not found: '%.60s'. Try a full path.", typed);
-                            typed[0] = '\0'; typed_len = 0;
+                            typed[0] = '\0'; typed_len = 0; edit_pos = 0;
                             valid = 0;
                         }
                     }
@@ -1297,7 +1277,7 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                         ws_display_name(final_app, na->display, sizeof(na->display));
                         na->is_new = 1;
                         (*count)++;
-                        typed[0] = '\0'; typed_len = 0;
+                        typed[0] = '\0'; typed_len = 0; edit_pos = 0;
                         mode = WADD_LIST;
                         /* park the cursor on the freshly added app row */
                         nrows = build_edit_rows(apps, *count, &rows, &rows_cap);
@@ -1306,15 +1286,10 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                     }
                 }
             } else if (key == KEY_ESC) {
-                typed[0] = '\0'; typed_len = 0;
+                typed[0] = '\0'; typed_len = 0; edit_pos = 0;
                 mode = WADD_LIST;
-            } else if (key == KEY_BACKSPACE || key == 127) {
-                if (typed_len > 0) typed[--typed_len] = '\0';
-            } else if (key >= 32 && key < 127) {
-                if (typed_len < (int)sizeof(typed) - 1) {
-                    typed[typed_len++] = (char)key;
-                    typed[typed_len]   = '\0';
-                }
+            } else {
+                edit_buffer_key(key, typed, &typed_len, &edit_pos, sizeof(typed));
             }
         } else if (mode == WADD_EDIT_LINK) {
             /* ── Inline edit mode ───────────────────────────────────────────
@@ -1331,23 +1306,8 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
             } else if (key == KEY_ESC) {
                 typed[0] = '\0'; typed_len = 0; edit_pos = 0;
                 mode = WADD_LIST;
-            } else if (key == KEY_LEFT) {
-                if (edit_pos > 0) edit_pos--;
-            } else if (key == KEY_RIGHT) {
-                if (edit_pos < typed_len) edit_pos++;
-            } else if (key == KEY_BACKSPACE || key == 127) {
-                if (edit_pos > 0) {
-                    memmove(&typed[edit_pos - 1], &typed[edit_pos],
-                            (size_t)(typed_len - edit_pos) + 1);   /* include NUL */
-                    typed_len--; edit_pos--;
-                }
-            } else if (key >= 32 && key < 127) {
-                if (typed_len < (int)sizeof(typed) - 1) {
-                    memmove(&typed[edit_pos + 1], &typed[edit_pos],
-                            (size_t)(typed_len - edit_pos) + 1);   /* include NUL */
-                    typed[edit_pos] = (char)key;
-                    typed_len++; edit_pos++;
-                }
+            } else {
+                edit_buffer_key(key, typed, &typed_len, &edit_pos, sizeof(typed));
             }
         } else if (reordering) {
             /* ── Move mode ──────────────────────────────────────────────────
@@ -1378,6 +1338,7 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
             case KEY_ENTER:
                 if (r->kind == ROW_ADD_APP) {
                     mode = WADD_TYPE_APP;
+                    edit_pos = 0;
                 } else if (r->kind == ROW_RENAME_WS) {
                     char newname[WORKSPACE_NAME_MAX];
                     if (run_text_input_centered("Rename workspace", "Name",
@@ -1474,6 +1435,7 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                         typed[0]  = (char)key;
                         typed[1]  = '\0';
                         typed_len = 1;
+                        edit_pos  = 1;
                     }
                 }
                 break;
@@ -1498,10 +1460,14 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
 /* ── Single styled text input box ──────────────────────────────────────── */
 
 static void render_text_input(const char *title, const char *subtitle,
-                              const char *label, const char *typed) {
+                              const char *label, const char *typed, int edit_pos) {
     print_picker_header(title, subtitle);
-    printf("\n" ANSI_CYAN "  %s: " ANSI_RESET "%s" ANSI_SEL "_" ANSI_RESET, label, typed);
-    printf("\n\n" ANSI_DIM "Enter confirm  •  Backspace delete  •  Esc cancel" ANSI_RESET);
+    /* highlight block cursor at edit_pos (a space when parked past the end) */
+    char cur = typed[edit_pos] ? typed[edit_pos] : ' ';
+    const char *rest = typed[edit_pos] ? typed + edit_pos + 1 : "";
+    printf("\n" ANSI_CYAN "  %s: " ANSI_RESET "%.*s" ANSI_REVERSE "%c" ANSI_REVERSE_OFF "%s",
+           label, edit_pos, typed, cur, rest);
+    printf("\n\n" ANSI_DIM "\xe2\x86\x90/\xe2\x86\x92 move  \xe2\x80\xa2  Enter confirm  \xe2\x80\xa2  Backspace delete  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
     fflush(stdout);
 }
 
@@ -1509,6 +1475,7 @@ int run_text_input(const char *title, const char *subtitle, const char *label,
                    char *out, size_t out_size, int allow_empty, const char *prefill) {
     char typed[4096] = {0};
     int  typed_len   = 0;
+    int  edit_pos    = 0;   /* cursor within typed[] */
     int  done        = 0;
     int  cancelled   = 0;
 
@@ -1516,10 +1483,11 @@ int run_text_input(const char *title, const char *subtitle, const char *label,
         strncpy(typed, prefill, sizeof(typed) - 1);
         typed[sizeof(typed) - 1] = '\0';
         typed_len = (int)strlen(typed);
+        edit_pos  = typed_len;
     }
 
     printf(ANSI_CURSOR_HIDE);
-    render_text_input(title, subtitle, label, typed);
+    render_text_input(title, subtitle, label, typed, edit_pos);
 
     while (!done) {
         int key = read_key();
@@ -1531,15 +1499,10 @@ int run_text_input(const char *title, const char *subtitle, const char *label,
             }
         } else if (key == KEY_ESC) {
             cancelled = 1; done = 1;
-        } else if (key == KEY_BACKSPACE || key == 127) {
-            if (typed_len > 0) typed[--typed_len] = '\0';
-        } else if (key >= 32 && key < 127) {
-            if (typed_len < (int)sizeof(typed) - 1) {
-                typed[typed_len++] = (char)key;
-                typed[typed_len]   = '\0';
-            }
+        } else {
+            edit_buffer_key(key, typed, &typed_len, &edit_pos, sizeof(typed));
         }
-        if (!done) render_text_input(title, subtitle, label, typed);
+        if (!done) render_text_input(title, subtitle, label, typed, edit_pos);
     }
 
     printf(ANSI_CURSOR_SHOW);
