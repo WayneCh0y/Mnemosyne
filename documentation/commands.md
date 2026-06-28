@@ -146,6 +146,25 @@ mn remove ~/Documents/notes       # drops every indexed file under notes/
 
 ---
 
+## `mn reindex`
+
+Re-parses every indexed file from disk and rewrites its cached plain-text copy. Useful after a parser change, after a `docs/` file has been manually deleted, or to refresh the whole index in one shot. Entries whose original file no longer exists on disk are dropped (same rule as the auto-prune that runs before every `mn search`).
+
+**Usage**
+```
+mn reindex
+```
+
+Takes no arguments.
+
+**Behaviour**
+- Walks every entry in `manifest.json`. For each: if the file is missing, the manifest entry and its cached doc are removed; otherwise the file is re-parsed and its entry is updated (same path → same hash, so the existing `docs/<hash>.txt` slot is overwritten).
+- Per-file parse failures print to stderr and leave that entry untouched — a transient error won't drop your data.
+- Prints a summary on exit: `Reindexed N files.` (with `(M missing files dropped)` appended when applicable).
+- If the index is empty, prints `No files indexed yet.` and exits 0.
+
+---
+
 ## `mn open`
 
 Manages workspaces — named collections of apps, URLs, and paths to launch all at once.

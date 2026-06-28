@@ -81,6 +81,7 @@ Routes `argv[1]` to the correct handler and implements all interactive UI logic:
 | `open` | `cmd_open()` → `run_workspace_picker()` → `launch_workspace()` |
 | `config` | `cmd_config()` → `set_ide()` |
 | `remove` | `cmd_remove()` → `remove_file()` |
+| `reindex` | `cmd_reindex()` → `reindex_all()` |
 | `help` | `print_help()` |
 
 It also implements the per-platform app/IDE launch logic and `close_terminal()`, which terminates the parent shell after a successful open/launch so the launcher window closes (skipped when stdin isn't a TTY).
@@ -131,6 +132,9 @@ Reads and writes `~/.mnemosyne.conf` — a plain-text file with two lines: the d
 ### `remove.c` — Index Removal
 Removes an entry from `manifest.json` and deletes the corresponding `docs/<hash>.txt` file.
 
+### `reindex.c` — Bulk Reindex
+Walks every entry in `manifest.json`. Missing files are dropped (entry + cached doc); present files are re-parsed via `ingest_file()`. Used by `mn reindex` to recover from parser changes or hand-deleted `docs/` files in one shot.
+
 ### `init.c` — First-time Setup
 Prompts for storage location and IDE on first run, creates the index directory structure, and writes the initial `~/.mnemosyne.conf`.
 
@@ -152,6 +156,8 @@ Mnemosyne/
 │   ├── search.h
 │   ├── remove.c
 │   ├── remove.h
+│   ├── reindex.c
+│   ├── reindex.h
 │   ├── config.c
 │   ├── config.h
 │   ├── init.c

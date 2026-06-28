@@ -22,6 +22,7 @@
 #include "search.h"
 #include "config.h"
 #include "remove.h"
+#include "reindex.h"
 #include "picker.h"
 #include "workspace.h"
 #include "app_resolve.h"
@@ -284,6 +285,12 @@ static void cmd_remove(int argc, char *argv[]) {
         /* rc == -1: index_remove already printed the error */
     }
     free(entries);
+}
+
+static void cmd_reindex(int argc, char *argv[]) {
+    (void)argv;
+    if (argc != 2) { print_help(); return; }
+    reindex_all();
 }
 
 static int is_valid_config(int argc, char *argv[]) {
@@ -692,6 +699,7 @@ void handle_command(int argc, char *argv[]) {
     if (strcmp(cmd, "search") == 0)      { cmd_search(argc, argv); return; }
     if (strcmp(cmd, "list") == 0)        { cmd_list(argc, argv);   return; }
     if (strcmp(cmd, "remove") == 0)      { cmd_remove(argc, argv); return; }
+    if (strcmp(cmd, "reindex") == 0)     { cmd_reindex(argc, argv); return; }
     if (strcmp(cmd, "open") == 0)        { cmd_open(argc, argv);   return; }
     if (strcmp(cmd, "config") == 0)      { cmd_config(argc, argv); return; }
     if (strcmp(cmd, "help") == 0)        { print_help();           return; }
