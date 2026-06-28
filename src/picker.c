@@ -1166,9 +1166,13 @@ static void render_workspace_edit(const char *ws_name,
     print_more_below(end, nrows);
 
     if (mode == WADD_TYPE_LINK) {
-        printf("\n" ANSI_CYAN "  Add link for %s: " ANSI_RESET "%s" ANSI_SEL "_" ANSI_RESET,
-               apps[type_app].display, typed);
-        printf("\n" ANSI_DIM "  Enter add  \xe2\x80\xa2  Esc cancel  \xe2\x80\xa2  Backspace delete" ANSI_RESET);
+        /* highlight block cursor at edit_pos (a space when parked past the end) */
+        char cur = typed[edit_pos] ? typed[edit_pos] : ' ';
+        const char *rest = typed[edit_pos] ? typed + edit_pos + 1 : "";
+        printf("\n" ANSI_CYAN "  Add link for %s: " ANSI_RESET
+               "%.*s" ANSI_REVERSE "%c" ANSI_REVERSE_OFF "%s",
+               apps[type_app].display, edit_pos, typed, cur, rest);
+        printf("\n" ANSI_DIM "  \xe2\x86\x90/\xe2\x86\x92 move  \xe2\x80\xa2  Enter add  \xe2\x80\xa2  Esc cancel  \xe2\x80\xa2  Backspace delete" ANSI_RESET);
     } else if (mode == WADD_TYPE_APP) {
         if (app_error && app_error[0])
             printf("\n" ANSI_YELLOW "  %s" ANSI_RESET, app_error);
@@ -1213,7 +1217,7 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
     char app_error[128] = {0};
     int  type_app  = 0;   /* app being given a new link in WADD_TYPE_LINK */
     int  reordering = 0;    /* 1 while a link is "lifted" for repositioning (move mode) */
-    int  edit_pos  = 0;   /* cursor within typed[] while in WADD_EDIT_LINK */
+    int  edit_pos  = 0;   /* cursor within typed[] while typing/editing a link */
     int  edit_app  = 0;   /* app whose link is being edited in WADD_EDIT_LINK */
     int  edit_link = 0;   /* link index being edited in WADD_EDIT_LINK */
     int  done      = 0;
@@ -1231,20 +1235,33 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
         app_error[0] = '\0';
 
         if (mode == WADD_TYPE_LINK) {
+            /* Keying in a new link's path/url. ←/→ move the in-string cursor,
+               printable keys insert at it, Backspace deletes the char before it
+               (same in-place editing as WADD_EDIT_LINK). */
             if (key == KEY_ENTER) {
                 if (typed_len > 0)
                     editlink_push(&apps[type_app].links, typed, "", -1);
-                typed[0] = '\0'; typed_len = 0;
+                typed[0] = '\0'; typed_len = 0; edit_pos = 0;
                 mode = WADD_LIST;
             } else if (key == KEY_ESC) {
-                typed[0] = '\0'; typed_len = 0;
+                typed[0] = '\0'; typed_len = 0; edit_pos = 0;
                 mode = WADD_LIST;
+            } else if (key == KEY_LEFT) {
+                if (edit_pos > 0) edit_pos--;
+            } else if (key == KEY_RIGHT) {
+                if (edit_pos < typed_len) edit_pos++;
             } else if (key == KEY_BACKSPACE || key == 127) {
-                if (typed_len > 0) typed[--typed_len] = '\0';
+                if (edit_pos > 0) {
+                    memmove(&typed[edit_pos - 1], &typed[edit_pos],
+                            (size_t)(typed_len - edit_pos) + 1);   /* include NUL */
+                    typed_len--; edit_pos--;
+                }
             } else if (key >= 32 && key < 127) {
                 if (typed_len < (int)sizeof(typed) - 1) {
-                    typed[typed_len++] = (char)key;
-                    typed[typed_len]   = '\0';
+                    memmove(&typed[edit_pos + 1], &typed[edit_pos],
+                            (size_t)(typed_len - edit_pos) + 1);   /* include NUL */
+                    typed[edit_pos] = (char)key;
+                    typed_len++; edit_pos++;
                 }
             }
         } else if (mode == WADD_TYPE_APP) {
@@ -1442,6 +1459,7 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                         typed[0]  = (char)key;
                         typed[1]  = '\0';
                         typed_len = 1;
+                        edit_pos  = 1;
                     } else if (r->kind == ROW_ADD_APP && *count < max) {
                         /* printable key on "[+ Add a new app]" → open app-type mode */
                         mode      = WADD_TYPE_APP;
