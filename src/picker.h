@@ -5,7 +5,7 @@
 #include "index.h"
 #include "workspace.h"
 
-#define CURSOR_TOKEN  "▌"
+#define CURSOR_TOKEN  "▸ "
 
 #define KEY_UP        1000
 #define KEY_DOWN      1001
