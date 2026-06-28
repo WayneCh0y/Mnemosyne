@@ -32,7 +32,91 @@ int is_url(const char *value) {
     return 0;
 }
 
+void layout_parse(const char *token, int *screen, char *part, size_t psize) {
+    int s = 1;
+    const char *p = (token != NULL) ? token : "";
+    const char *colon = strchr(p, ':');
+    if (colon != NULL) {
+        s = atoi(p);            /* leading digits before ':' */
+        if (s < 1) s = 1;
+        p = colon + 1;
+    }
+    if (p[0] == '\0') p = "full";
+    if (screen != NULL) *screen = s;
+    if (part != NULL && psize > 0) {
+        strncpy(part, p, psize - 1);
+        part[psize - 1] = '\0';
+    }
+}
+
+#ifndef _WIN32
+int screen_count(void) { return 1; }
+#endif
+
 #ifdef _WIN32
+/* ── Monitors ────────────────────────────────────────────────────────────── */
+
+typedef struct { RECT work; int x, y, primary; } MonInfo;
+typedef struct { MonInfo m[16]; int n; } MonList;
+
+static BOOL CALLBACK mon_cb(HMONITOR hm, HDC dc, LPRECT r, LPARAM lp) {
+    (void)dc; (void)r;
+    MonList *ml = (MonList *)lp;
+    if (ml->n >= 16) return TRUE;
+    MONITORINFO mi; mi.cbSize = sizeof(mi);
+    if (GetMonitorInfoA(hm, &mi)) {
+        MonInfo *e = &ml->m[ml->n++];
+        e->work    = mi.rcWork;
+        e->x       = mi.rcMonitor.left;
+        e->y       = mi.rcMonitor.top;
+        e->primary = (mi.dwFlags & MONITORINFOF_PRIMARY) ? 1 : 0;
+    }
+    return TRUE;
+}
+
+/* a before b? primary first, then left-to-right, then top-to-bottom. */
+static int mon_less(const MonInfo *a, const MonInfo *b) {
+    if (a->primary != b->primary) return a->primary > b->primary;
+    if (a->x != b->x)             return a->x < b->x;
+    return a->y < b->y;
+}
+
+static int enum_monitors(MonList *ml) {
+    ml->n = 0;
+    EnumDisplayMonitors(NULL, NULL, mon_cb, (LPARAM)ml);
+    for (int i = 0; i < ml->n; i++) {        /* selection sort, stable enough */
+        int best = i;
+        for (int k = i + 1; k < ml->n; k++)
+            if (mon_less(&ml->m[k], &ml->m[best])) best = k;
+        if (best != i) { MonInfo t = ml->m[i]; ml->m[i] = ml->m[best]; ml->m[best] = t; }
+    }
+    return ml->n;
+}
+
+int screen_count(void) {
+    MonList ml;
+    int n = enum_monitors(&ml);
+    return n > 0 ? n : 1;
+}
+
+/* Work area (taskbar-excluded) of the 1-based screen `index`; out-of-range falls
+   back to the primary (sorted first). */
+static void screen_work_area(int index, int *x, int *y, int *w, int *h) {
+    MonList ml;
+    int n = enum_monitors(&ml);
+    if (n > 0) {
+        int i = index - 1;
+        if (i < 0 || i >= n) i = 0;
+        RECT a = ml.m[i].work;
+        *x = a.left; *y = a.top; *w = a.right - a.left; *h = a.bottom - a.top;
+        return;
+    }
+    RECT a;
+    if (SystemParametersInfoA(SPI_GETWORKAREA, 0, &a, 0)) {
+        *x = a.left; *y = a.top; *w = a.right - a.left; *h = a.bottom - a.top;
+    } else { *x = 0; *y = 0; *w = 1280; *h = 720; }
+}
+
 /* ── Window placement ───────────────────────────────────────────────────────
    We can't reliably map a launched process to its window (apps launch through
    cmd.exe/explorer.exe brokers, browsers reuse an existing process). Instead we
@@ -85,27 +169,40 @@ static void win_frame_margins(HWND w, RECT *m) {
     m->bottom = wr.bottom - fr.bottom;
 }
 
-/* Moves w to the partition named by `layout` on the primary monitor's work area.
-   "" / "full" (or anything unrecognised) → maximize. */
+/* Moves w to the partition encoded by `layout` (screen:partition) on that screen's
+   work area. "" / "full" (or anything unrecognised) → maximize on that screen. */
 static void win_move(HWND w, const char *layout) {
-    const char *tok = (layout && layout[0]) ? layout : "full";
-    if (strcmp(tok, "full") == 0) { ShowWindow(w, SW_MAXIMIZE); return; }
+    int screen = 1;
+    char part[16];
+    layout_parse(layout, &screen, part, sizeof(part));
 
-    RECT wa;
-    if (!SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0)) return;
-    int L = wa.left, T = wa.top, W = wa.right - wa.left, H = wa.bottom - wa.top;
+    int L, T, W, H;
+    screen_work_area(screen, &L, &T, &W, &H);
     int hw = W / 2, hh = H / 2;
-    int x = L, y = T, ww = W, hgt = H;
 
-    if      (strcmp(tok, "left")   == 0) { ww = hw; }
-    else if (strcmp(tok, "right")  == 0) { x = L + hw; ww = W - hw; }
-    else if (strcmp(tok, "top")    == 0) { hgt = hh; }
-    else if (strcmp(tok, "bottom") == 0) { y = T + hh; hgt = H - hh; }
-    else if (strcmp(tok, "tl")     == 0) { ww = hw; hgt = hh; }
-    else if (strcmp(tok, "tr")     == 0) { x = L + hw; ww = W - hw; hgt = hh; }
-    else if (strcmp(tok, "bl")     == 0) { y = T + hh; ww = hw; hgt = H - hh; }
-    else if (strcmp(tok, "br")     == 0) { x = L + hw; y = T + hh; ww = W - hw; hgt = H - hh; }
-    else { ShowWindow(w, SW_MAXIMIZE); return; }
+    if (strcmp(part, "full") == 0) {
+        /* land on the target screen first, then maximize there */
+        ShowWindow(w, SW_RESTORE);
+        SetWindowPos(w, NULL, L, T, hw, hh, SWP_NOZORDER | SWP_NOACTIVATE);
+        ShowWindow(w, SW_MAXIMIZE);
+        return;
+    }
+
+    int x = L, y = T, ww = W, hgt = H;
+    if      (strcmp(part, "left")   == 0) { ww = hw; }
+    else if (strcmp(part, "right")  == 0) { x = L + hw; ww = W - hw; }
+    else if (strcmp(part, "top")    == 0) { hgt = hh; }
+    else if (strcmp(part, "bottom") == 0) { y = T + hh; hgt = H - hh; }
+    else if (strcmp(part, "tl")     == 0) { ww = hw; hgt = hh; }
+    else if (strcmp(part, "tr")     == 0) { x = L + hw; ww = W - hw; hgt = hh; }
+    else if (strcmp(part, "bl")     == 0) { y = T + hh; ww = hw; hgt = H - hh; }
+    else if (strcmp(part, "br")     == 0) { x = L + hw; y = T + hh; ww = W - hw; hgt = H - hh; }
+    else {   /* unknown partition → maximize on the target screen */
+        ShowWindow(w, SW_RESTORE);
+        SetWindowPos(w, NULL, L, T, hw, hh, SWP_NOZORDER | SWP_NOACTIVATE);
+        ShowWindow(w, SW_MAXIMIZE);
+        return;
+    }
 
     ShowWindow(w, SW_RESTORE);   /* a maximized window can't be freely sized */
     /* Expand the target by the invisible border so the *visible* frame lands flush

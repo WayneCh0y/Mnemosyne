@@ -1,6 +1,8 @@
 #ifndef APP_LAUNCH_H
 #define APP_LAUNCH_H
 
+#include <stddef.h>   /* size_t */
+
 /* Launches a workspace entry. `app` is either:
    - "code" / "cursor" — IDE launchers on PATH (uses --new-window + optional path)
    - a full executable path (e.g. C:\...\chrome.exe)
@@ -22,6 +24,15 @@ void app_launch(const char *app, const char *target, const char *layout);
 void *win_capture_before(void);
 void  win_place_new(void *before, const char *layout);
 #endif
+
+/* Number of monitors (always >= 1; 1 on non-Windows). Ordered primary-first,
+   then by position, so "screen N" is stable between the chooser and launch. */
+int screen_count(void);
+
+/* Splits a layout token "screen:partition" (e.g. "2:left") into its parts.
+   A bare partition ("left") or "" means screen 1; "" partition means "full".
+   *screen is 1-based; part is written bounded by psize. */
+void layout_parse(const char *token, int *screen, char *part, size_t psize);
 
 /* Returns 1 if `value` looks like an RFC-3986 protocol URI: a 2+ character
    scheme made of letters/digits/+/-/. followed by ':'. The 2-char minimum
