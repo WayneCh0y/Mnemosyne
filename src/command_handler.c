@@ -36,8 +36,6 @@ static void cmd_add(int argc, char *argv[]) {
     ingest_path(argv[2]);
 }
 
-static int is_valid_search(int argc) { return argc >= 3; }
-
 /* Updates the index if a file has been modified or deleted. */
 static void update_files(void) {
     int count;
@@ -55,14 +53,23 @@ static void update_files(void) {
     free(entries);
 }
 
-static char* build_query(int argc, char *argv[], char *raw_out, int raw_size) {
+static char* build_query(int argc, char *argv[], char *raw_out, int raw_size, int *is_case_sensitive) {
     static char query[256];
     query[0] = '\0';
+    *is_case_sensitive = 0;
 
     for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "-c") == 0) {
+            *is_case_sensitive = 1;
+            continue;
+        }
         strncat(query, argv[i], sizeof(query) - strlen(query) - 1);
         if (i < argc - 1) strncat(query, " ", sizeof(query) - strlen(query) - 1);
     }
+
+    /* trim trailing space if the last arg was the flag */
+    int qend = (int)strlen(query);
+    if (qend > 0 && query[qend - 1] == ' ') query[qend - 1] = '\0';
 
     if (raw_out) {
         strncpy(raw_out, query, raw_size - 1);
@@ -70,8 +77,10 @@ static char* build_query(int argc, char *argv[], char *raw_out, int raw_size) {
             if (raw_out[i] == '\\') raw_out[i] = '/';
     }
 
-    for (int i = 0; query[i]; i++)
-        query[i] = (char)tolower((unsigned char)query[i]);
+    if (!*is_case_sensitive) {
+        for (int i = 0; query[i]; i++)
+            query[i] = (char)tolower((unsigned char)query[i]);
+    }
 
     return query;
 }
@@ -129,7 +138,7 @@ static void close_terminal(void) {
 #endif
 }
 
-static void handle_enter(SearchResult *results, int selected, const char *query) {
+static void handle_enter(SearchResult *results, int selected, const char *query, int is_case_sensitive) {
     const char *file_path = results[selected].original_path;
 
     /* Open PDFs with the OS's default PDF viewer instead of the IDE. */
@@ -152,7 +161,7 @@ static void handle_enter(SearchResult *results, int selected, const char *query)
         }
     }
     const char *ide_name = get_ide();
-    int line = search_find_line(file_path, query);
+    int line = search_find_line(file_path, query, is_case_sensitive);
     char launch[32 + 4096 + 4096 + 64];
 
     if (repo_path && (strcmp(ide_name, "code") == 0 || strcmp(ide_name, "cursor") == 0)) {
@@ -174,13 +183,14 @@ static void handle_enter(SearchResult *results, int selected, const char *query)
 static void cmd_search(int argc, char *argv[]) {
     update_files();
 
-    if (!is_valid_search(argc)) { print_help(); return; }
-
     char raw_query[256] = {0};
-    char *query = build_query(argc, argv, raw_query, sizeof(raw_query));
+    int is_case_sensitive = 0;
+    char *query = build_query(argc, argv, raw_query, sizeof(raw_query), &is_case_sensitive);
+
+    if (query[0]=='\0') { print_help(); return; }
 
     int count;
-    SearchResult *results = search(query, raw_query, &count);
+    SearchResult *results = search(query, raw_query, &count, is_case_sensitive);
 
     if (count == 0) {
         printf("No results found.\n");
@@ -191,7 +201,7 @@ static void cmd_search(int argc, char *argv[]) {
     int chosen = run_search_picker(results, count);
     printf(ANSI_CLEAR ANSI_RESET);
     if (chosen != -1)
-        handle_enter(results, chosen, query);
+        handle_enter(results, chosen, query, is_case_sensitive);
     free(results);
 }
 

@@ -16,7 +16,7 @@ static FileType file_type_from_string(const char *s) {
     return FILE_TYPE_UNKNOWN;
 }
 
-int search_find_line(const char *path, const char *query) {
+int search_find_line(const char *path, const char *query, int is_case_sensitive) {
     FILE *f = fopen(path, "r");
     if (f == NULL) return 1;
 
@@ -26,8 +26,10 @@ int search_find_line(const char *path, const char *query) {
 
     while (fgets(line, sizeof(line), f) != NULL) {
         line_num++;
-        for (int i = 0; line[i] != '\0'; i++)
-            line[i] = (char)tolower((unsigned char)line[i]);
+        if (!is_case_sensitive) {
+            for (char *c = line; *c; c++)
+                *c = (char)tolower((unsigned char)*c);
+        }
         const char *p = line;
         while ((p = strstr(p, query)) != NULL) {
             if (is_word_match(line, p, query)) {
@@ -133,7 +135,7 @@ static char *read_file_buf(const char *path) {
 
 static int scan_file_txt(const char *path, const char *query, const char *raw_query,
                           char *context, int ctx_size,
-                          int *match_start_out, int *match_len_out) {
+                          int *match_start_out, int *match_len_out, int is_case_sensitive) {
     char *buf = read_file_buf(path);
     if (buf == NULL) return 0;
 
@@ -142,8 +144,10 @@ static int scan_file_txt(const char *path, const char *query, const char *raw_qu
 
     /* Lowercase content so strstr can match a lowercased query case-insensitively.
        stored_path was already copied out and keeps its original case. */
-    for (char *c = (char *)content_start; *c; c++)
-        *c = (char)tolower((unsigned char)*c);
+    if (!is_case_sensitive) {
+        for (char *c = (char *)content_start; *c; c++)
+            *c = (char)tolower((unsigned char)*c);
+    }
 
     int match_count = 0;
     int qlen = (int)strlen(query);
@@ -184,15 +188,17 @@ static int scan_file_txt(const char *path, const char *query, const char *raw_qu
 
 static int scan_file_md(const char *path, const char *query, const char *raw_query,
                          char *context, int ctx_size,
-                         int *match_start_out, int *match_len_out) {
+                         int *match_start_out, int *match_len_out, int is_case_sensitive) {
     char *buf = read_file_buf(path);
     if (buf == NULL) return 0;
 
     char stored_path[4096] = {0};
     const char *content_start = extract_path_line(buf, stored_path, sizeof(stored_path));
 
-    for (char *c = (char *)content_start; *c; c++)
-        *c = (char)tolower((unsigned char)*c);
+    if (!is_case_sensitive) {
+        for (char *c = (char *)content_start; *c; c++)
+            *c = (char)tolower((unsigned char)*c);
+    }
 
     int match_count = 0;
     int qlen = (int)strlen(query);
@@ -238,14 +244,14 @@ static int scan_file_tex(const char *path, const char *query, char *context, int
 
 static int scan_file_pdf(const char *path, const char *query, const char *raw_query,
                           char *context, int ctx_size,
-                          int *match_start_out, int *match_len_out) {
+                          int *match_start_out, int *match_len_out, int is_case_sensitive) {
     /* Extracted PDF text is stored in the same doc .txt format, so reuse the
        text scanner (including word-boundary highlighting). */
     return scan_file_txt(path, query, raw_query, context, ctx_size,
-                         match_start_out, match_len_out);
+                         match_start_out, match_len_out, is_case_sensitive);
 }
 
-SearchResult *search(const char *query, const char *raw_query, int *count) {
+SearchResult *search(const char *query, const char *raw_query, int *count, int is_case_sensitive) {
     int total;
     IndexEntry *entries = index_get_entries(&total);
     if (entries == NULL) { *count = 0; return NULL; }
@@ -264,10 +270,10 @@ SearchResult *search(const char *query, const char *raw_query, int *count) {
         int  match_count;
         int  match_start = -1, match_len = 0;
         switch (file_type_from_string(entries[i].file_type)) {
-            case FILE_TYPE_MD:  match_count = scan_file_md(doc_path, query, raw_query, context, sizeof(context), &match_start, &match_len);  break;
-            case FILE_TYPE_TEX: match_count = scan_file_tex(doc_path, query, context, sizeof(context));                                       break;
-            case FILE_TYPE_PDF: match_count = scan_file_pdf(doc_path, query, raw_query, context, sizeof(context), &match_start, &match_len);  break;
-            default:            match_count = scan_file_txt(doc_path, query, raw_query, context, sizeof(context), &match_start, &match_len);  break;
+            case FILE_TYPE_MD:  match_count = scan_file_md(doc_path, query, raw_query, context, sizeof(context), &match_start, &match_len, is_case_sensitive);    break;
+            case FILE_TYPE_TEX: match_count = scan_file_tex(doc_path, query, context, sizeof(context));                                                           break;
+            case FILE_TYPE_PDF: match_count = scan_file_pdf(doc_path, query, raw_query, context, sizeof(context), &match_start, &match_len, is_case_sensitive);   break;
+            default:            match_count = scan_file_txt(doc_path, query, raw_query, context, sizeof(context), &match_start, &match_len, is_case_sensitive);   break;
         }
 
         if (match_count > 0) {

@@ -86,7 +86,7 @@ static void process_inline(const char *text, char *out, int out_size) {
             i += 2;
             while (i < len) {
                 if (text[i] == '$' && i + 1 < len && text[i + 1] == '$') { i += 2; break; }
-                if (j < out_size - 1) out[j++] = (char)tolower((unsigned char)text[i]);
+                if (j < out_size - 1) out[j++] = text[i];
                 i++;
             }
             continue;
@@ -96,7 +96,7 @@ static void process_inline(const char *text, char *out, int out_size) {
         if (text[i] == '$') {
             i++;
             while (i < len && text[i] != '$') {
-                if (j < out_size - 1) out[j++] = (char)tolower((unsigned char)text[i]);
+                if (j < out_size - 1) out[j++] = text[i];
                 i++;
             }
             if (i < len) i++;
@@ -110,7 +110,7 @@ static void process_inline(const char *text, char *out, int out_size) {
             i += 2;
             while (i < len) {
                 if (text[i] == d && i + 1 < len && text[i + 1] == d) { i += 2; break; }
-                if (j < out_size - 1) out[j++] = (char)tolower((unsigned char)text[i]);
+                if (j < out_size - 1) out[j++] = text[i];
                 i++;
             }
             continue;
@@ -121,7 +121,7 @@ static void process_inline(const char *text, char *out, int out_size) {
             char d = text[i];
             i++;
             while (i < len && text[i] != d) {
-                if (j < out_size - 1) out[j++] = (char)tolower((unsigned char)text[i]);
+                if (j < out_size - 1) out[j++] = text[i];
                 i++;
             }
             if (i < len) i++;
@@ -132,14 +132,14 @@ static void process_inline(const char *text, char *out, int out_size) {
         if (text[i] == '`') {
             i++;
             while (i < len && text[i] != '`') {
-                if (j < out_size - 1) out[j++] = (char)tolower((unsigned char)text[i]);
+                if (j < out_size - 1) out[j++] = text[i];
                 i++;
             }
             if (i < len) i++;
             continue;
         }
 
-        out[j++] = (char)tolower((unsigned char)text[i]);
+        out[j++] = text[i];
         i++;
     }
     out[j] = '\0';
@@ -208,7 +208,7 @@ char *parse_md(const char *path) {
                 in_code_block = 0;
             } else {
                 for (int i = 0; i < llen; i++)
-                    EMIT_CHAR((char)tolower((unsigned char)line[i]));
+                    EMIT_CHAR(line[i]);
                 EMIT_CHAR('\n');
             }
             continue;
@@ -222,7 +222,7 @@ char *parse_md(const char *path) {
                 in_math_block = 0;
             } else {
                 for (int i = 0; i < llen; i++)
-                    EMIT_CHAR((char)tolower((unsigned char)line[i]));
+                    EMIT_CHAR(line[i]);
                 EMIT_CHAR('\n');
             }
             continue;
