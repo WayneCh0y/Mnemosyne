@@ -142,8 +142,9 @@ static int scan_file_txt(const char *path, const char *query, const char *raw_qu
     char stored_path[4096] = {0};
     const char *content_start = extract_path_line(buf, stored_path, sizeof(stored_path));
 
-    /* Lowercase content so strstr can match a lowercased query case-insensitively.
-       stored_path was already copied out and keeps its original case. */
+    /* Case-insensitive search: lowercase the content so strstr matches against
+       the already-lowercased query. stored_path is lowercased separately below
+       (only when the path-match block runs), keeping the two concerns isolated. */
     if (!is_case_sensitive) {
         for (char *c = (char *)content_start; *c; c++)
             *c = (char)tolower((unsigned char)*c);
@@ -167,8 +168,19 @@ static int scan_file_txt(const char *path, const char *query, const char *raw_qu
 
     if (stored_path[0] != '\0' && raw_query[0] != '\0') {
         int rqlen = (int)strlen(raw_query);
+        const char *needle = raw_query;
+        char lc_needle[256];
+        if (!is_case_sensitive) {
+            for (char *c = stored_path; *c; c++)
+                *c = (char)tolower((unsigned char)*c);
+            int n = rqlen < (int)sizeof(lc_needle) - 1 ? rqlen : (int)sizeof(lc_needle) - 1;
+            for (int i = 0; i < n; i++)
+                lc_needle[i] = (char)tolower((unsigned char)raw_query[i]);
+            lc_needle[n] = '\0';
+            needle = lc_needle;
+        }
         const char *rp = stored_path;
-        while ((rp = strstr(rp, raw_query)) != NULL) {
+        while ((rp = strstr(rp, needle)) != NULL) {
             if (is_path_match(stored_path, rp, rqlen)) {
                 if (match_count == 0) {
                     build_context_start(content_start, context, ctx_size);
@@ -218,8 +230,19 @@ static int scan_file_md(const char *path, const char *query, const char *raw_que
 
     if (stored_path[0] != '\0' && raw_query[0] != '\0') {
         int rqlen = (int)strlen(raw_query);
+        const char *needle = raw_query;
+        char lc_needle[256];
+        if (!is_case_sensitive) {
+            for (char *c = stored_path; *c; c++)
+                *c = (char)tolower((unsigned char)*c);
+            int n = rqlen < (int)sizeof(lc_needle) - 1 ? rqlen : (int)sizeof(lc_needle) - 1;
+            for (int i = 0; i < n; i++)
+                lc_needle[i] = (char)tolower((unsigned char)raw_query[i]);
+            lc_needle[n] = '\0';
+            needle = lc_needle;
+        }
         const char *rp = stored_path;
-        while ((rp = strstr(rp, raw_query)) != NULL) {
+        while ((rp = strstr(rp, needle)) != NULL) {
             if (is_path_match(stored_path, rp, rqlen)) {
                 if (match_count == 0) {
                     build_context_start(content_start, context, ctx_size);
