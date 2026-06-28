@@ -595,9 +595,14 @@ int run_list_picker(IndexEntry *entries, int count,
    into a "⋯ K more" line, so a large workspace can't overflow. */
 #define WS_FRAME_MAX_ENTRIES 8
 
+/* Formats a layout token as "{Left half}" / "{Left half · S2}"; defined with the
+   placement chooser below. */
+static void placement_brief(const char *layout, char *out, size_t n);
+
 /* Render the selected workspace's entries along a left rail (a dimmed-yellow
-   vertical bar per line, no right border so long paths/URLs are never
-   truncated). */
+   vertical bar, no right border so long paths/URLs are never truncated). Apps
+   match the editor's blue highlight and show their placement label; each
+   target/link sits on its own yellow line beneath its app. */
 static void render_workspace_frame(const Workspace *w) {
     if (w->entry_count == 0) return;
     int lines = 0;
@@ -608,25 +613,22 @@ static void render_workspace_frame(const Workspace *w) {
         }
         char disp[256];
         ws_display_name(w->entries[j].app, disp, sizeof(disp));
+
+        /* App row: dim-yellow rail, blue-highlighted name, optional placement. */
+        char place[80];
+        placement_brief(w->entries[j].layout, place, sizeof(place));
+        printf(ANSI_DIM_YELLOW "    │ " ANSI_RESET ANSI_APP_HL " %s " ANSI_RESET, disp);
+        if (place[0])
+            printf(" " ANSI_APP_HL " %s " ANSI_RESET, place);
+        printf("\n");
+        lines++;
+
+        /* Each target on its own line (single target included). */
         int tc = w->entries[j].target_count;
-        if (tc == 0) {
-            printf(ANSI_DIM_YELLOW "    │ %s" ANSI_RESET "\n", disp);
+        for (int k = 0; k < tc && lines < WS_FRAME_MAX_ENTRIES; k++) {
+            printf(ANSI_DIM_YELLOW "    │    \xe2\x86\x92 %s" ANSI_RESET "\n",
+                   w->entries[j].targets[k]);
             lines++;
-        } else if (tc == 1) {
-            printf(ANSI_DIM_YELLOW "    │ %s \xe2\x86\x92 %s" ANSI_RESET "\n",
-                   disp, w->entries[j].targets[0]);
-            lines++;
-        } else {
-            /* Show app name on its own line, then each target indented. */
-            if (lines < WS_FRAME_MAX_ENTRIES) {
-                printf(ANSI_DIM_YELLOW "    │ %s" ANSI_RESET "\n", disp);
-                lines++;
-            }
-            for (int k = 0; k < tc && lines < WS_FRAME_MAX_ENTRIES; k++) {
-                printf(ANSI_DIM_YELLOW "    │    \xe2\x86\x92 %s" ANSI_RESET "\n",
-                       w->entries[j].targets[k]);
-                lines++;
-            }
         }
     }
 }
@@ -832,6 +834,19 @@ static const char *placement_label(const char *token) {
     for (int i = 0; i < PLACEMENT_COUNT; i++)
         if (strcmp(PLACEMENTS[i].token, token) == 0) return PLACEMENTS[i].label;
     return token;
+}
+
+/* Bracketed human placement for a layout token: "{Left half}" or
+   "{Left half · S2}" (screen suffix only when > 1); "" for no layout. Shared by
+   the workspace picker frame and the editor so both render placement identically. */
+static void placement_brief(const char *layout, char *out, size_t n) {
+    if (layout == NULL || layout[0] == '\0') { out[0] = '\0'; return; }
+    int s; char p[16];
+    layout_parse(layout, &s, p, sizeof(p));
+    if (s > 1)
+        snprintf(out, n, "{%s \xc2\xb7 S%d}", placement_label(p), s);
+    else
+        snprintf(out, n, "{%s}", placement_label(p));
 }
 
 /* True if (screen, part) is occupied by another app. Each taken[] token is parsed
@@ -1124,12 +1139,9 @@ static void render_workspace_edit(const char *ws_name,
                 printf("  %s " ANSI_APP_HL " %s " ANSI_RESET, arrow, a->display);
             }
             if (!a->marked_delete && a->layout[0]) {
-                int s; char p[16];
-                layout_parse(a->layout, &s, p, sizeof(p));
-                if (s > 1)
-                    printf("  " ANSI_APP_HL " {%s \xc2\xb7 S%d} " ANSI_RESET, placement_label(p), s);
-                else
-                    printf("  " ANSI_APP_HL " {%s} " ANSI_RESET, placement_label(p));
+                char place[80];
+                placement_brief(a->layout, place, sizeof(place));
+                printf("  " ANSI_APP_HL " %s " ANSI_RESET, place);
             }
             printf("\n");
         } else { /* ROW_LINK */
