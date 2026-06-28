@@ -828,6 +828,8 @@ static int run_text_input_centered(const char *title, const char *label,
 #define PL_BR 8
 typedef struct { const char *token; const char *label; int mask; } Placement;
 static const Placement PLACEMENTS[] = {
+    /* Empty token = no placement: the app launches wherever it likes (default). */
+    { "",       "No choice (app decides)", 0              },
     { "full",   "Full screen",  PL_TL|PL_TR|PL_BL|PL_BR   },
     { "left",   "Left half",    PL_TL|PL_BL               },
     { "right",  "Right half",   PL_TR|PL_BR               },
@@ -875,8 +877,10 @@ static void pl_cell(int on, const char *hl) {
 
 /* Full-screen visual grid; layout is in/out. Returns 1 on Enter (token written),
    0 on Esc (unchanged). ←/→ pick the partition, ↑/↓ cycle the detected screens
-   (dead when only one). Partitions another app already holds on the same screen
-   (taken[]) are shown red and cannot be selected. */
+   (dead when only one). The first option, "No choice", clears the layout so the
+   app decides its own placement (empty token; the screen is ignored). Partitions
+   another app already holds on the same screen (taken[]) are shown red and cannot
+   be selected. */
 static int run_placement_picker(const char *app_display, char *layout, size_t layout_size,
                                 const char **taken, int taken_count) {
     int screens = screen_count();
@@ -902,8 +906,10 @@ static int run_placement_picker(const char *app_display, char *layout, size_t la
         term_size(&cols, &rows);
         printf(ANSI_CLEAR ANSI_RESET);
 
+        /* "No choice" ignores the screen, so don't show a per-screen title for it. */
+        int is_none = (PLACEMENTS[sel].token[0] == '\0');
         char title[160], subtitle[160];
-        if (screens > 1) {
+        if (screens > 1 && !is_none) {
             snprintf(title, sizeof(title), "Screen %d", screen);
             snprintf(subtitle, sizeof(subtitle), "Place \"%s\"", app_display);
         } else {
@@ -958,7 +964,9 @@ static int run_placement_picker(const char *app_display, char *layout, size_t la
     }
 
     if (confirmed) {
-        if (screen <= 1)
+        if (PLACEMENTS[sel].token[0] == '\0')
+            layout[0] = '\0';                   /* no choice — let the app decide */
+        else if (screen <= 1)
             snprintf(layout, layout_size, "%s", PLACEMENTS[sel].token);
         else
             snprintf(layout, layout_size, "%d:%s", screen, PLACEMENTS[sel].token);
