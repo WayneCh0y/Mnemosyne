@@ -140,6 +140,11 @@ static int scan_file_txt(const char *path, const char *query, const char *raw_qu
     char stored_path[4096] = {0};
     const char *content_start = extract_path_line(buf, stored_path, sizeof(stored_path));
 
+    /* Lowercase content so strstr can match a lowercased query case-insensitively.
+       stored_path was already copied out and keeps its original case. */
+    for (char *c = (char *)content_start; *c; c++)
+        *c = (char)tolower((unsigned char)*c);
+
     int match_count = 0;
     int qlen = (int)strlen(query);
     const char *p = content_start;
@@ -185,6 +190,9 @@ static int scan_file_md(const char *path, const char *query, const char *raw_que
 
     char stored_path[4096] = {0};
     const char *content_start = extract_path_line(buf, stored_path, sizeof(stored_path));
+
+    for (char *c = (char *)content_start; *c; c++)
+        *c = (char)tolower((unsigned char)*c);
 
     int match_count = 0;
     int qlen = (int)strlen(query);
