@@ -165,8 +165,11 @@ mn add notes.txt
 mn add ~/Documents/thesis.md
 mn add ~/Documents/notes      # indexes every supported file under notes/
 
-# search
+# search (case-insensitive)
 mn search simplex
+# search (case-sensitive)
+mn search Chapter -c
+mn search -c Chapter
 
 # change your default IDE later (opens a picker)
 mn config ide
