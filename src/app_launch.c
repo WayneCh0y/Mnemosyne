@@ -49,6 +49,23 @@ void layout_parse(const char *token, int *screen, char *part, size_t psize) {
     }
 }
 
+int partition_rect(const char *part, int X, int Y, int W, int H,
+                   int *x, int *y, int *w, int *h) {
+    int hw = W / 2, hh = H / 2;        /* right/bottom take the odd-pixel remainder */
+    int rx = X, ry = Y, rw = W, rh = H;
+    if      (strcmp(part, "left")   == 0) { rw = hw; }
+    else if (strcmp(part, "right")  == 0) { rx = X + hw; rw = W - hw; }
+    else if (strcmp(part, "top")    == 0) { rh = hh; }
+    else if (strcmp(part, "bottom") == 0) { ry = Y + hh; rh = H - hh; }
+    else if (strcmp(part, "tl")     == 0) { rw = hw; rh = hh; }
+    else if (strcmp(part, "tr")     == 0) { rx = X + hw; rw = W - hw; rh = hh; }
+    else if (strcmp(part, "bl")     == 0) { ry = Y + hh; rw = hw; rh = H - hh; }
+    else if (strcmp(part, "br")     == 0) { rx = X + hw; ry = Y + hh; rw = W - hw; rh = H - hh; }
+    else return 0;                     /* "full" / unknown → caller maximizes */
+    *x = rx; *y = ry; *w = rw; *h = rh;
+    return 1;
+}
+
 #ifndef _WIN32
 int screen_count(void) { return 1; }
 #endif
@@ -169,49 +186,85 @@ static void win_frame_margins(HWND w, RECT *m) {
     m->bottom = wr.bottom - fr.bottom;
 }
 
-/* Moves w to the partition encoded by `layout` (screen:partition) on that screen's
-   work area. "" / "full" (or anything unrecognised) → maximize on that screen. */
-static void win_move(HWND w, const char *layout) {
+/* Sends one Win+<vk> chord (press LWIN+vk, release vk+LWIN) to the focused
+   window — i.e. the OS snap shortcuts the user already uses by hand. */
+static void send_win_chord(WORD vk) {
+    INPUT in[4];
+    memset(in, 0, sizeof(in));
+    in[0].type = INPUT_KEYBOARD; in[0].ki.wVk = VK_LWIN;
+    in[1].type = INPUT_KEYBOARD; in[1].ki.wVk = vk;
+    in[2].type = INPUT_KEYBOARD; in[2].ki.wVk = vk;      in[2].ki.dwFlags = KEYEVENTF_KEYUP;
+    in[3].type = INPUT_KEYBOARD; in[3].ki.wVk = VK_LWIN; in[3].ki.dwFlags = KEYEVENTF_KEYUP;
+    SendInput(4, in, sizeof(INPUT));
+}
+
+/* Brings w to the foreground so the chords land on it. SetForegroundWindow is
+   restricted to the current foreground thread, so we briefly attach input to it
+   (the standard workaround). */
+static void focus_window(HWND w) {
+    DWORD me  = GetCurrentThreadId();
+    DWORD fgt = GetWindowThreadProcessId(GetForegroundWindow(), NULL);
+    if (fgt != me) AttachThreadInput(me, fgt, TRUE);
+    ShowWindow(w, SW_RESTORE);
+    BringWindowToTop(w);
+    SetForegroundWindow(w);
+    SetFocus(w);
+    if (fgt != me) AttachThreadInput(me, fgt, FALSE);
+}
+
+/* Sizes w to an explicit rect, expanding by the invisible DWM border so the
+   *visible* frame lands flush on the grid. Used only for partitions the snap
+   shortcuts can't express (top/bottom halves). */
+static void win_pixel_place(HWND w, int x, int y, int ww, int hgt) {
+    ShowWindow(w, SW_RESTORE);   /* a maximized window can't be freely sized */
+    RECT m;
+    win_frame_margins(w, &m);
+    SetWindowPos(w, NULL, x - m.left, y - m.top,
+                 ww + m.left + m.right, hgt + m.top + m.bottom,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+/* Places w into the partition encoded by `layout` (screen:partition) by driving
+   the OS snap keyboard shortcuts, so the window manager owns the exact geometry
+   instead of us hard-sizing it:
+     left/right     → Win+←/→
+     tl/tr/bl/br    → Win+←/→ then Win+↑/↓
+     full / unknown → maximize on the target screen
+     top/bottom     → pixel fallback (Windows has no horizontal-half shortcut)
+   For screen N>1 the window is relocated (move only, no resize) onto that monitor
+   first, so the OS snaps within it. Snapping briefly focuses the window and may
+   surface Snap Assist for single-half snaps. */
+static void win_snap(HWND w, const char *layout) {
     int screen = 1;
     char part[16];
     layout_parse(layout, &screen, part, sizeof(part));
 
     int L, T, W, H;
     screen_work_area(screen, &L, &T, &W, &H);
-    int hw = W / 2, hh = H / 2;
 
-    if (strcmp(part, "full") == 0) {
-        /* land on the target screen first, then maximize there */
-        ShowWindow(w, SW_RESTORE);
-        SetWindowPos(w, NULL, L, T, hw, hh, SWP_NOZORDER | SWP_NOACTIVATE);
-        ShowWindow(w, SW_MAXIMIZE);
+    /* Park the window on the target monitor first (move only, no resize) so a
+       maximize or OS snap acts on the right screen — the app may have opened on a
+       different monitor. The subsequent Win+Arrow snaps within this monitor. */
+    ShowWindow(w, SW_RESTORE);
+    SetWindowPos(w, NULL, L, T, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+    if (strcmp(part, "full") == 0) { ShowWindow(w, SW_MAXIMIZE); return; }
+
+    if (strcmp(part, "top") == 0 || strcmp(part, "bottom") == 0) {
+        int x, y, ww, hgt;
+        if (partition_rect(part, L, T, W, H, &x, &y, &ww, &hgt))
+            win_pixel_place(w, x, y, ww, hgt);
         return;
     }
 
-    int x = L, y = T, ww = W, hgt = H;
-    if      (strcmp(part, "left")   == 0) { ww = hw; }
-    else if (strcmp(part, "right")  == 0) { x = L + hw; ww = W - hw; }
-    else if (strcmp(part, "top")    == 0) { hgt = hh; }
-    else if (strcmp(part, "bottom") == 0) { y = T + hh; hgt = H - hh; }
-    else if (strcmp(part, "tl")     == 0) { ww = hw; hgt = hh; }
-    else if (strcmp(part, "tr")     == 0) { x = L + hw; ww = W - hw; hgt = hh; }
-    else if (strcmp(part, "bl")     == 0) { y = T + hh; ww = hw; hgt = H - hh; }
-    else if (strcmp(part, "br")     == 0) { x = L + hw; y = T + hh; ww = W - hw; hgt = H - hh; }
-    else {   /* unknown partition → maximize on the target screen */
-        ShowWindow(w, SW_RESTORE);
-        SetWindowPos(w, NULL, L, T, hw, hh, SWP_NOZORDER | SWP_NOACTIVATE);
-        ShowWindow(w, SW_MAXIMIZE);
-        return;
-    }
-
-    ShowWindow(w, SW_RESTORE);   /* a maximized window can't be freely sized */
-    /* Expand the target by the invisible border so the *visible* frame lands flush
-       on the grid (query after restoring — margins differ when maximized). */
-    RECT m;
-    win_frame_margins(w, &m);
-    SetWindowPos(w, NULL, x - m.left, y - m.top,
-                 ww + m.left + m.right, hgt + m.top + m.bottom,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
+    focus_window(w);
+    if      (strcmp(part, "left")  == 0) { send_win_chord(VK_LEFT); }
+    else if (strcmp(part, "right") == 0) { send_win_chord(VK_RIGHT); }
+    else if (strcmp(part, "tl")    == 0) { send_win_chord(VK_LEFT);  Sleep(120); send_win_chord(VK_UP); }
+    else if (strcmp(part, "tr")    == 0) { send_win_chord(VK_RIGHT); Sleep(120); send_win_chord(VK_UP); }
+    else if (strcmp(part, "bl")    == 0) { send_win_chord(VK_LEFT);  Sleep(120); send_win_chord(VK_DOWN); }
+    else if (strcmp(part, "br")    == 0) { send_win_chord(VK_RIGHT); Sleep(120); send_win_chord(VK_DOWN); }
+    else { ShowWindow(w, SW_MAXIMIZE); }   /* unknown → maximize on the target screen */
 }
 
 void *win_capture_before(void) {
@@ -230,7 +283,7 @@ void win_place_new(void *before_v, const char *layout) {
         w = c.found;
         if (w == NULL) Sleep(75);
     }
-    if (w) win_move(w, layout);
+    if (w) win_snap(w, layout);
     free(before);
 }
 
@@ -297,6 +350,62 @@ static void launch_app_win(const char *app, const char *target, const char *layo
     }
 
     win_place_new(before, layout);   /* move the new window into its partition */
+}
+#endif
+
+#if defined(__APPLE__)
+/* Positions the front window of `app` into the partition `layout` via System
+   Events. Reads the main display's size from Finder, reuses partition_rect for
+   the geometry, then waits for the app's window and sets its position + size.
+   Main display only (screen prefix > 1 is ignored). Needs Accessibility access
+   for the controlling terminal; prints a neutral hint and is otherwise harmless
+   if it can't position the window. */
+void mac_place_window(const char *app, const char *layout) {
+    int screen = 1;
+    char part[16];
+    layout_parse(layout, &screen, part, sizeof(part));
+    if (screen != 1) return;   /* main display only for now */
+
+    /* "bounds of window of desktop" → "0, 0, W, H" for the main display */
+    FILE *fp = popen("osascript -e 'tell application \"Finder\" to get bounds "
+                     "of window of desktop' 2>/dev/null", "r");
+    if (fp == NULL) return;
+    char out[128] = {0};
+    char *got = fgets(out, sizeof(out), fp);
+    pclose(fp);
+    if (got == NULL) return;
+
+    int W = 0, H = 0;
+    if (sscanf(out, "%*d, %*d, %d, %d", &W, &H) != 2 || W <= 0 || H <= 0) return;
+
+    int x, y, w, h;
+    if (!partition_rect(part, 0, 0, W, H, &x, &y, &w, &h)) {
+        x = 0; y = 0; w = W; h = H;   /* "full" / unknown → whole display */
+    }
+
+    char cmd[WORKSPACE_APP_MAX + 512];
+    snprintf(cmd, sizeof(cmd),
+        "osascript"
+        " -e 'tell application \"System Events\"'"
+        " -e 'tell process \"%s\"'"
+        " -e 'set frontmost to true'"
+        " -e 'repeat 40 times'"
+        " -e 'if (count of windows) > 0 then exit repeat'"
+        " -e 'delay 0.1'"
+        " -e 'end repeat'"
+        " -e 'if (count of windows) > 0 then'"
+        " -e 'set position of front window to {%d, %d}'"
+        " -e 'set size of front window to {%d, %d}'"
+        " -e 'end if'"
+        " -e 'end tell'"
+        " -e 'end tell' 2>/dev/null",
+        app, x, y, w, h);
+
+    if (system(cmd) != 0)
+        fprintf(stderr,
+            "note: couldn't position '%s'. If workspace windows aren't being "
+            "placed, grant Accessibility access to your terminal in System "
+            "Settings > Privacy & Security > Accessibility.\n", app);
 }
 #endif
 

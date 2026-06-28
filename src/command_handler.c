@@ -362,6 +362,7 @@ static void launch_workspace(const Workspace *ws) {
         int tc = ws->entries[i].target_count;
 
 #if defined(__APPLE__)
+        const char *layout = ws->entries[i].layout;
         if (is_new_window_app(app)) {
             /* IDEs: one launch per target (or once standalone). */
             if (tc == 0) {
@@ -388,6 +389,11 @@ static void launch_workspace(const Workspace *ws) {
             system(cmd);
             free(cmd);
         }
+        /* Snap into the assigned partition. IDEs are skipped: their System Events
+           process name doesn't match the "code"/"cursor" launcher, so positioning
+           there can't reliably target the right window. */
+        if (layout[0] && !is_new_window_app(app))
+            mac_place_window(app, layout);
 #else
         if (is_new_window_app(app)) {
             /* IDEs: one launch per target (or once standalone). */
