@@ -158,7 +158,7 @@ static void render_menu_list(const char *title, const char *subtitle,
     print_picker_header(title, subtitle);
     for (int i = 0; i < display; i++) {
         if (num_input < 0 && i == selected) {
-            printf("   " ANSI_GREEN CURSOR_TOKEN ANSI_SEL_HL "[%d] %s" ANSI_RESET "\n", i + 1, list[i]);
+            printf("  " ANSI_ACCENT CURSOR_TOKEN ANSI_RESET " " ANSI_BOLD "[%d] %s" ANSI_RESET "\n", i + 1, list[i]);
         } else {
             printf(ANSI_DIM "    [%d] %s" ANSI_RESET "\n", i + 1, list[i]);
         }
@@ -264,7 +264,7 @@ static void render_multiselect(const char *title, const char *subtitle,
     print_more_above(start);
     for (int i = start; i < end; i++) {
         const MsRow *r = &rows[i];
-        const char *cur = (i == cursor) ? ANSI_GREEN CURSOR_TOKEN ANSI_RESET : " ";
+        const char *cur = (i == cursor) ? ANSI_ACCENT CURSOR_TOKEN ANSI_RESET : " ";
         if (r->kind == MS_ROW_APP) {
             if (selected[r->app])
                 printf("  %s " ANSI_APP_HL " %s " ANSI_RESET "\n", cur, labels[r->app]);
@@ -440,7 +440,7 @@ static void render_results(SearchResult *results, int count, int selected,
     for (int i = start; i < end; i++) {
         if (i > start) print_result_divider(i != selected || num_input >= 0);
         if (num_input < 0 && i == selected) {
-            printf("   " ANSI_GREEN CURSOR_TOKEN ANSI_SEL_HL "[%d] %s" ANSI_RESET "\n", i + 1, results[i].original_path);
+            printf("  " ANSI_ACCENT CURSOR_TOKEN ANSI_RESET " " ANSI_BOLD "[%d] %s" ANSI_RESET "\n", i + 1, results[i].original_path);
             print_context(&results[i], 0);
         } else {
             printf(ANSI_DIM "    [%d] %s" ANSI_RESET "\n", i + 1, results[i].original_path);
@@ -556,11 +556,11 @@ static void render_folder_frame(IndexEntry *entries, const FolderGroup *g) {
     int lines = 0;
     for (int k = 0; k < g->count; k++) {
         if (lines >= FOLDER_FRAME_MAX_ENTRIES) {
-            printf(ANSI_DIM_YELLOW "    \xe2\x94\x82 \xe2\x8b\xaf \xe2\x80\xa6" ANSI_RESET "\n");
+            printf(ANSI_DIM ANSI_BRIGHT_YELLOW "    \xe2\x94\x82 \xe2\x8b\xaf \xe2\x80\xa6" ANSI_RESET "\n");
             break;
         }
         const char *base = path_basename(entries[g->start + k].original_path);
-        printf(ANSI_DIM_YELLOW "    \xe2\x94\x82 %s" ANSI_RESET "\n", base);
+        printf(ANSI_DIM ANSI_BRIGHT_YELLOW "    \xe2\x94\x82 %s" ANSI_RESET "\n", base);
         lines++;
     }
 }
@@ -580,7 +580,7 @@ static void render_folder_list(IndexEntry *entries,
         const char *sep = "/";
 #endif
         if (num_input < 0 && i == selected) {
-            printf("   " ANSI_GREEN CURSOR_TOKEN ANSI_SEL_HL "[%d] %s%s  (%d file%s)" ANSI_RESET "\n",
+            printf("  " ANSI_ACCENT CURSOR_TOKEN ANSI_RESET " " ANSI_BOLD "[%d] %s%s" ANSI_RESET "  " ANSI_DIM "(%d file%s)" ANSI_RESET "\n",
                    i + 1, groups[i].dir, sep,
                    groups[i].count, groups[i].count == 1 ? "" : "s");
             render_folder_frame(entries, &groups[i]);
@@ -644,7 +644,7 @@ static void render_file_list(IndexEntry *entries, const FolderGroup *g, int sele
     for (int i = start; i < end; i++) {
         const char *base = path_basename(entries[g->start + i].original_path);
         if (num_input < 0 && i == selected)
-            printf("   " ANSI_GREEN CURSOR_TOKEN ANSI_SEL_HL "[%d] %s" ANSI_RESET "\n", i + 1, base);
+            printf("  " ANSI_ACCENT CURSOR_TOKEN ANSI_RESET " " ANSI_BOLD "[%d] %s" ANSI_RESET "\n", i + 1, base);
         else
             printf(ANSI_DIM "    [%d] %s" ANSI_RESET "\n", i + 1, base);
     }
@@ -732,27 +732,27 @@ static void render_workspace_frame(const Workspace *w) {
     int lines = 0;
     for (int j = 0; j < w->entry_count; j++) {
         if (lines >= WS_FRAME_MAX_ENTRIES) {
-            printf(ANSI_DIM_YELLOW "    │ \xe2\x8b\xaf \xe2\x80\xa6" ANSI_RESET "\n");
+            printf(ANSI_DIM ANSI_BRIGHT_YELLOW "    │ \xe2\x8b\xaf \xe2\x80\xa6" ANSI_RESET "\n");
             break;
         }
         char disp[256];
         ws_display_name(w->entries[j].app, disp, sizeof(disp));
         int tc = w->entries[j].target_count;
         if (tc == 0) {
-            printf(ANSI_DIM_YELLOW "    │ %s" ANSI_RESET "\n", disp);
+            printf(ANSI_DIM ANSI_BRIGHT_YELLOW "    │ %s" ANSI_RESET "\n", disp);
             lines++;
         } else if (tc == 1) {
-            printf(ANSI_DIM_YELLOW "    │ %s \xe2\x86\x92 %s" ANSI_RESET "\n",
+            printf(ANSI_DIM ANSI_BRIGHT_YELLOW "    │ %s \xe2\x86\x92 %s" ANSI_RESET "\n",
                    disp, w->entries[j].targets[0]);
             lines++;
         } else {
             /* Show app name on its own line, then each target indented. */
             if (lines < WS_FRAME_MAX_ENTRIES) {
-                printf(ANSI_DIM_YELLOW "    │ %s" ANSI_RESET "\n", disp);
+                printf(ANSI_DIM ANSI_BRIGHT_YELLOW "    │ %s" ANSI_RESET "\n", disp);
                 lines++;
             }
             for (int k = 0; k < tc && lines < WS_FRAME_MAX_ENTRIES; k++) {
-                printf(ANSI_DIM_YELLOW "    │    \xe2\x86\x92 %s" ANSI_RESET "\n",
+                printf(ANSI_DIM ANSI_BRIGHT_YELLOW "    │    \xe2\x86\x92 %s" ANSI_RESET "\n",
                        w->entries[j].targets[k]);
                 lines++;
             }
@@ -769,7 +769,7 @@ static void render_workspace_list(Workspace *ws, int count, int selected,
     print_more_above(start);
     for (int i = start; i < end; i++) {
         if (num_input < 0 && i == selected) {
-            printf("   " ANSI_GREEN CURSOR_TOKEN ANSI_SEL_HL "[%d] %s (%d app%s)" ANSI_RESET "\n",
+            printf("  " ANSI_ACCENT CURSOR_TOKEN ANSI_RESET " " ANSI_BOLD "[%d] %s" ANSI_RESET " " ANSI_DIM "(%d app%s)" ANSI_RESET "\n",
                    i + 1, ws[i].name, ws[i].entry_count, ws[i].entry_count == 1 ? "" : "s");
             /* Expand the apps of the selected workspace only. */
             render_workspace_frame(&ws[i]);
@@ -984,38 +984,41 @@ static void render_workspace_edit(const char *ws_name,
     print_more_above(start);
     for (int i = start; i < end; i++) {
         const WeditRow *r = &rows[i];
-        const char *arrow = (i == cursor) ? ANSI_GREEN "\xe2\x96\x8c" ANSI_RESET : " ";
+        const char *arrow = (i == cursor) ? ANSI_ACCENT CURSOR_TOKEN ANSI_RESET : " ";
+        /* Bold the cursor row, dim every other row — mirrors the contrast model
+           used by the list/workspace pickers so the selection pops. */
+        const char *style = (i == cursor) ? ANSI_BOLD : ANSI_DIM;
         if (r->kind == ROW_ADD_APP) {
-            printf("  %s " ANSI_ADD_HL " + Add a new app " ANSI_RESET "\n", arrow);
+            printf("  %s %s" ANSI_BRIGHT_GREEN "+ Add a new app" ANSI_RESET "\n", arrow, style);
         } else if (r->kind == ROW_DEL_WS) {
-            printf("  %s " ANSI_DEL_HL " - Remove this workspace " ANSI_RESET "\n", arrow);
+            printf("  %s %s" ANSI_BRIGHT_RED "- Remove this workspace" ANSI_RESET "\n", arrow, style);
         } else if (r->kind == ROW_APP) {
             const WsEditorApp *a = &apps[r->app];
             if (a->marked_delete) {
-                printf("  %s " ANSI_RED "- %s" ANSI_RESET "\n", arrow, a->display);
+                printf("  %s %s" ANSI_BRIGHT_RED "- %s" ANSI_RESET "\n", arrow, style, a->display);
             } else if (a->is_new) {
-                printf("  %s " ANSI_GREEN "+ %s" ANSI_RESET "\n", arrow, a->display);
+                printf("  %s %s" ANSI_BRIGHT_GREEN "+ %s" ANSI_RESET "\n", arrow, style, a->display);
             } else {
-                printf("  %s " ANSI_APP_HL " %s " ANSI_RESET "\n", arrow, a->display);
+                printf("  %s %s%s" ANSI_RESET "\n", arrow, style, a->display);
             }
         } else if (r->kind == ROW_LINK_EXISTING) {
             const WsEditorApp *a = &apps[r->app];
             const char *link = a->existing_links.items[r->link];
             if (a->existing_del[r->link])
-                printf("  %s    " ANSI_RED "- %s" ANSI_RESET "\n", arrow, link);
+                printf("  %s    %s" ANSI_BRIGHT_RED "- %s" ANSI_RESET "\n", arrow, style, link);
             else if (i == cursor && reordering)
                 printf("  %s    " ANSI_LIFT_HL " \xe2\x86\x94 %s " ANSI_RESET "\n", arrow, link);
             else if (a->existing_pos && a->existing_pos[r->link] != r->link)
-                printf("  %s    " ANSI_CYAN "\xe2\x86\x95 %s" ANSI_RESET "\n", arrow, link);
+                printf("  %s    %s" ANSI_ACCENT "\xe2\x86\x95 %s" ANSI_RESET "\n", arrow, style, link);
             else
-                printf("  %s    " ANSI_DIM_YELLOW "\xe2\x86\x92 %s" ANSI_RESET "\n", arrow, link);
+                printf("  %s    %s" ANSI_BRIGHT_YELLOW "\xe2\x86\x92 %s" ANSI_RESET "\n", arrow, style, link);
         } else { /* ROW_LINK_NEW */
             const WsEditorApp *a = &apps[r->app];
             const char *link = a->new_links.items[r->link];
             if (i == cursor && reordering)
                 printf("  %s    " ANSI_LIFT_HL " \xe2\x86\x94 %s " ANSI_RESET "\n", arrow, link);
             else
-                printf("  %s    " ANSI_GREEN "+ %s" ANSI_RESET "\n", arrow, link);
+                printf("  %s    %s" ANSI_BRIGHT_GREEN "+ %s" ANSI_RESET "\n", arrow, style, link);
         }
     }
     print_more_below(end, nrows);
