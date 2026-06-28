@@ -977,8 +977,7 @@ static void render_workspace_edit(const char *ws_name,
                                   int type_app, int reordering) {
     char title[140];
     snprintf(title, sizeof(title), "Edit '%s'", ws_name);
-    print_picker_header(title,
-                        "Type to add a link, Backspace to remove, Enter to save.");
+    print_picker_header(title, NULL);
 
     int start = picker_window_start(cursor, nrows);
     int end   = start + (nrows < PICKER_WINDOW ? nrows : PICKER_WINDOW);
