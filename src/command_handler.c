@@ -13,6 +13,7 @@
 #else
 #include <unistd.h>
 #include <signal.h>
+#include <fcntl.h>
 #endif
 
 #include "command_handler.h"
@@ -115,12 +116,19 @@ static void close_terminal(void) {
     if (!isatty(STDIN_FILENO)) return;
     const char *tty = ttyname(STDIN_FILENO);
     if (tty) {
-        /* Ask Terminal.app to close the window hosting this tty via AppleScript.
-           This works regardless of the "close if shell exited cleanly" preference,
-           which would otherwise keep the window open after a SIGKILL. */
+        /* Close the Terminal window hosting this tty via AppleScript, working
+           regardless of the "close if shell exited cleanly" preference (which
+           would otherwise keep the window open after a SIGKILL).
+
+           Doing the close while mn is still running makes Terminal prompt
+           "terminate running processes in this window?". So we hand it to a
+           detached helper: setsid() + /dev/null fds drop the controlling tty so
+           Terminal no longer counts it as a window process; it waits briefly for
+           mn and the shell to exit, then closes the now-idle window with no
+           prompt. */
         char script[512];
         snprintf(script, sizeof(script),
-            "osascript"
+            "sleep 0.4; osascript"
             " -e 'tell application \"Terminal\"'"
             " -e 'repeat with w in windows'"
             " -e 'if tty of front tab of w is \"%s\" then close w'"
@@ -128,7 +136,19 @@ static void close_terminal(void) {
             " -e 'end tell'"
             " 2>/dev/null",
             tty);
-        system(script);
+        pid_t helper = fork();
+        if (helper == 0) {
+            setsid();
+            int devnull = open("/dev/null", O_RDWR);
+            if (devnull >= 0) {
+                dup2(devnull, STDIN_FILENO);
+                dup2(devnull, STDOUT_FILENO);
+                dup2(devnull, STDERR_FILENO);
+                if (devnull > STDERR_FILENO) close(devnull);
+            }
+            execl("/bin/sh", "sh", "-c", script, (char *)NULL);
+            _exit(127);
+        }
     }
     pid_t ppid = getppid();
     if (ppid > 1) kill(ppid, SIGKILL);
@@ -326,23 +346,29 @@ static void launch_workspace(const Workspace *ws) {
     for (int i = 0; i < ws->entry_count; i++) {
         const char *app = ws->entries[i].app;
         int tc = ws->entries[i].target_count;
+        const char *layout = ws->entries[i].layout;
 
         if (is_uwp_app(app) || is_new_window_app(app)) {
             /* UWP and IDE apps: launch once per target (or once standalone). */
             if (tc == 0) {
-                app_launch(app, "");
+                app_launch(app, "", layout);
             } else {
                 for (int k = 0; k < tc; k++)
-                    app_launch(app, ws->entries[i].targets[k]);
+                    app_launch(app, ws->entries[i].targets[k], layout);
             }
         } else {
             /* Regular executable / .lnk (e.g. browsers): each entry is one window.
-               Single target: plain launch. Multiple targets: --new-window url1 url2 ...
-               so the browser opens them all as tabs in one new window. */
+               A single non-web target opens directly in the app. Web URLs (one or
+               many) go through `app --new-window <urls>` so each entry gets its OWN
+               window we can position — otherwise a URL opened via the OS handler
+               becomes a tab in an existing window, ignoring app + layout, and two
+               URL entries can't occupy two partitions. */
+            const char *t0 = (tc >= 1) ? ws->entries[i].targets[0] : "";
+            int web = (strncmp(t0, "http://", 7) == 0 || strncmp(t0, "https://", 8) == 0);
             if (tc == 0) {
-                app_launch(app, "");
-            } else if (tc == 1) {
-                app_launch(app, ws->entries[i].targets[0]);
+                app_launch(app, "", layout);
+            } else if (tc == 1 && !web) {
+                app_launch(app, ws->entries[i].targets[0], layout);
             } else {
                 size_t cap = (size_t)tc * (WORKSPACE_TARGET_MAX + 4) + 16;
                 char *params = malloc(cap);
@@ -351,6 +377,7 @@ static void launch_workspace(const Workspace *ws) {
                 for (int k = 0; k < tc && pos < (int)cap - 1; k++)
                     pos += snprintf(params + pos, cap - pos,
                                     " \"%s\"", ws->entries[i].targets[k]);
+                void *before = win_capture_before();
                 SHELLEXECUTEINFOA sei = {0};
                 sei.cbSize       = sizeof(sei);
                 sei.lpVerb       = "open";
@@ -359,6 +386,7 @@ static void launch_workspace(const Workspace *ws) {
                 sei.nShow        = SW_SHOWNORMAL;
                 if (!ShellExecuteExA(&sei))
                     fprintf(stderr, "error: failed to launch '%s'\n", app);
+                win_place_new(before, layout);
                 free(params);
             }
         }
@@ -371,6 +399,7 @@ static void launch_workspace(const Workspace *ws) {
         int tc = ws->entries[i].target_count;
 
 #if defined(__APPLE__)
+        const char *layout = ws->entries[i].layout;
         if (is_new_window_app(app)) {
             /* IDEs: one launch per target (or once standalone). */
             if (tc == 0) {
@@ -397,6 +426,11 @@ static void launch_workspace(const Workspace *ws) {
             system(cmd);
             free(cmd);
         }
+        /* Snap into the assigned partition. IDEs are skipped: their System Events
+           process name doesn't match the "code"/"cursor" launcher, so positioning
+           there can't reliably target the right window. */
+        if (layout[0] && !is_new_window_app(app))
+            mac_place_window(app, layout);
 #else
         if (is_new_window_app(app)) {
             /* IDEs: one launch per target (or once standalone). */
@@ -456,18 +490,12 @@ static void cmd_open_create(const char *name) {
         fprintf(stderr, "error: failed to create workspace\n");
 }
 
-/* Frees the heap lists each WsEditorApp owns, then the array (over full capacity;
+/* Frees the heap list each WsEditorApp owns, then the array (over full capacity;
    the no-op on NULL/zeroed slots makes this safe regardless of editor_count). */
 static void free_editor_apps(WsEditorApp *apps, int cap) {
     if (apps == NULL) return;
-    for (int i = 0; i < cap; i++) {
-        targetlist_free(&apps[i].existing_links.items, &apps[i].existing_links.cap,
-                        &apps[i].existing_links.count);
-        targetlist_free(&apps[i].new_links.items, &apps[i].new_links.cap,
-                        &apps[i].new_links.count);
-        free(apps[i].existing_del);
-        free(apps[i].existing_pos);
-    }
+    for (int i = 0; i < cap; i++)
+        editlink_free(&apps[i].links);
     free(apps);
 }
 
@@ -513,22 +541,32 @@ static void cmd_open_edit(void) {
         const WorkspaceEntry *src = &chosen_ws->entries[i];
         strncpy(e->app, src->app, WORKSPACE_APP_MAX - 1);
         ws_display_name(src->app, e->display, sizeof(e->display));
+        strncpy(e->layout, src->layout, sizeof(e->layout) - 1);
+        e->layout[sizeof(e->layout) - 1] = '\0';
         for (int k = 0; k < src->target_count; k++)
-            targetlist_push(&e->existing_links.items, &e->existing_links.cap,
-                            &e->existing_links.count, src->targets[k]);
-        if (e->existing_links.count > 0) {
-            e->existing_del = calloc(e->existing_links.count, sizeof(int));
-            e->existing_pos = malloc(e->existing_links.count * sizeof(int));
-            if (e->existing_pos)
-                for (int k = 0; k < e->existing_links.count; k++)
-                    e->existing_pos[k] = k;
-        }
+            editlink_push(&e->links, src->targets[k], src->targets[k], k);
     }
 
-    /* Step 3: run the editor — Esc cancels, Enter confirms. */
+    /* Step 3: run the editor — Esc cancels, Enter confirms. ws_name is in/out so a
+       rename inside the editor updates it; taken_names lets the editor reject a
+       rename that collides with another workspace. */
+    char ws_name[WORKSPACE_NAME_MAX];
+    strncpy(ws_name, chosen_ws->name, sizeof(ws_name) - 1);
+    ws_name[sizeof(ws_name) - 1] = '\0';
+
+    const char **taken_names = malloc((size_t)count * sizeof(*taken_names));
+    int taken_count = 0;
+    if (taken_names)
+        for (int i = 0; i < count; i++)
+            if (i != ws_idx) taken_names[taken_count++] = ws[i].name;
+
     int delete_ws = 0;
-    if (!run_workspace_edit_picker(chosen_ws->name, editor_apps, &editor_count,
-                                   WORKSPACE_ENTRIES_MAX, &delete_ws)) {
+    int confirmed = run_workspace_edit_picker(ws_name, sizeof(ws_name),
+                                              taken_names, taken_count,
+                                              editor_apps, &editor_count,
+                                              WORKSPACE_ENTRIES_MAX, &delete_ws);
+    free(taken_names);
+    if (!confirmed) {
         printf(ANSI_CLEAR ANSI_RESET "Cancelled.\n");
         free_editor_apps(editor_apps, WORKSPACE_ENTRIES_MAX);
         workspace_free_all(ws, count);
@@ -537,9 +575,6 @@ static void cmd_open_edit(void) {
 
     /* Step 4: commit staged changes. */
     printf(ANSI_CLEAR ANSI_RESET);
-    char ws_name[WORKSPACE_NAME_MAX];
-    strncpy(ws_name, chosen_ws->name, sizeof(ws_name) - 1);
-    ws_name[sizeof(ws_name) - 1] = '\0';
 
     if (delete_ws) {
         int rc = workspace_remove(ws_name);
@@ -556,6 +591,10 @@ static void cmd_open_edit(void) {
        save the whole file. A full rebuild is index-safe and covers all four
        operations: adding/removing apps and adding/removing individual links. */
     Workspace *w = &ws[ws_idx];
+    /* Apply any rename done in the editor before saving (workspace_save_all writes
+       each workspace's name field, so this persists with the rest of the save). */
+    strncpy(w->name, ws_name, WORKSPACE_NAME_MAX - 1);
+    w->name[WORKSPACE_NAME_MAX - 1] = '\0';
     /* The loaded entries own heap targets — free them before overwriting. */
     for (int j = 0; j < w->entry_count; j++)
         targetlist_free(&w->entries[j].targets, &w->entries[j].target_cap,
@@ -567,15 +606,14 @@ static void cmd_open_edit(void) {
         WorkspaceEntry *e = &w->entries[ec++];
         strncpy(e->app, a->app, WORKSPACE_APP_MAX - 1);
         e->app[WORKSPACE_APP_MAX - 1] = '\0';
+        strncpy(e->layout, a->layout, sizeof(e->layout) - 1);
+        e->layout[sizeof(e->layout) - 1] = '\0';
         /* dest slot may be beyond the old count (garbage) → init before pushing. */
         e->targets = NULL; e->target_count = 0; e->target_cap = 0;
-        for (int k = 0; k < a->existing_links.count; k++)
-            if (!a->existing_del[k])
+        for (int k = 0; k < a->links.count; k++)
+            if (!a->links.items[k].deleted)
                 targetlist_push(&e->targets, &e->target_cap, &e->target_count,
-                                a->existing_links.items[k]);
-        for (int k = 0; k < a->new_links.count; k++)
-            targetlist_push(&e->targets, &e->target_cap, &e->target_count,
-                            a->new_links.items[k]);
+                                a->links.items[k].text);
     }
     w->entry_count = ec;
 
@@ -648,7 +686,7 @@ static void cmd_open_snap(void) {
                 ? "\033[33mthat name already exists — pick another.\033[0m"
                 : "Name for the new workspace.";
             if (!run_text_input("Snapshot workspace", subtitle, "Name",
-                                name, sizeof(name), 0)) {
+                                name, sizeof(name), 0, NULL)) {
                 state = SNAP_REVIEW;   /* Esc → back to the checklist */
                 name_taken = 0;
                 continue;
