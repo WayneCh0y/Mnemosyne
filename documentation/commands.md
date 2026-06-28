@@ -36,20 +36,24 @@ See [file-types.md](file-types.md) for how each format is parsed.
 
 ## `mn search <query>`
 
-Searches all indexed documents for the given keyword or phrase. The query is case-insensitive and matches whole words only — `"for"` will not match `"format"` or `"before"`. Modified files are automatically re-indexed before searching.
+Searches all indexed documents for the given keyword or phrase. The query is case-insensitive by default and matches whole words only — `"for"` will not match `"format"` or `"before"`. Pass `-c` to require an exact-case match. Modified files are automatically re-indexed before searching.
 
-Searches also match file paths using case-sensitive segment matching — `"README.md"`, `"Mnemosyne/"`, and `"C:/Users/Wayne"` each return matching files, but `"Proj"` does not match `"Projects"` and `"README"` does not match `"README.md"`. When a file is found by path, the start of the document is shown as the preview. Up to 5 results are shown, ranked by recency then match count.
+Searches also match file paths using segment matching — `"README.md"`, `"Mnemosyne/"`, and `"C:/Users/Wayne"` each return matching files, but `"Proj"` does not match `"Projects"` and `"README"` does not match `"README.md"`. Path matching follows the same case rule as content matching: insensitive by default, exact case with `-c`. When a file is found by path, the start of the document is shown as the preview. Up to 5 results are shown, ranked by recency then match count.
 
 **Usage**
 ```
-mn search <query>
+mn search [-c] <query>
 ```
+
+The flag can appear anywhere in the command — before, after, or between query words.
 
 **Examples**
 ```
 mn search simplex
 mn search "linear programming"
 mn search docker compose
+mn search -c TODO                  # only matches "TODO", not "todo" or "Todo"
+mn search "linear programming" -c
 ```
 
 **Output format**
@@ -139,6 +143,25 @@ mn remove ~/Documents/notes       # drops every indexed file under notes/
 - The folder form matches by **path prefix**: every manifest entry whose `original_path` starts with `<folder>/` (or `<folder>\` on Windows) is removed. A trailing-separator guard ensures `mn remove ~/foo` does **not** also wipe entries under `~/foo_archive/`.
 - The folder form does **not** walk the disk — it operates entirely on the manifest. So a folder that's been deleted from disk can still be cleaned out of the index in one call, as long as the path resolves (on Linux/macOS, deleted folders may fail to resolve via `realpath`; on Windows, `_fullpath` normalizes paths without requiring existence).
 - A summary is printed: `Removed N files under <folder>` (or `No indexed files under <folder>` if nothing matched).
+
+---
+
+## `mn reindex`
+
+Re-parses every indexed file from disk and rewrites its cached plain-text copy. Useful after a parser change, after a `docs/` file has been manually deleted, or to refresh the whole index in one shot. Entries whose original file no longer exists on disk are dropped (same rule as the auto-prune that runs before every `mn search`).
+
+**Usage**
+```
+mn reindex
+```
+
+Takes no arguments.
+
+**Behaviour**
+- Walks every entry in `manifest.json`. For each: if the file is missing, the manifest entry and its cached doc are removed; otherwise the file is re-parsed and its entry is updated (same path → same hash, so the existing `docs/<hash>.txt` slot is overwritten).
+- Per-file parse failures print to stderr and leave that entry untouched — a transient error won't drop your data.
+- Prints a summary on exit: `Reindexed N files.` (with `(M missing files dropped)` appended when applicable).
+- If the index is empty, prints `No files indexed yet.` and exits 0.
 
 ---
 

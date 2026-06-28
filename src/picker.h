@@ -39,6 +39,10 @@
 #define ANSI_REN_HL      "\033[30;43m"    /* black on yellow — rename workspace button */
 #define ANSI_REVERSE     "\033[7m"        /* reverse video — highlight block cursor */
 #define ANSI_REVERSE_OFF "\033[27m"
+#define ANSI_ACCENT      "\033[96m"        /* bright cyan — selection bar */
+#define ANSI_BRIGHT_RED    "\033[91m"
+#define ANSI_BRIGHT_GREEN  "\033[92m"
+#define ANSI_BRIGHT_YELLOW "\033[93m"
 
 int read_key(void);
 /* Generic numbered string-list picker. Returns the chosen index, or -1 (Esc). */

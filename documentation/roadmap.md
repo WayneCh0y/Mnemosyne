@@ -15,6 +15,7 @@ Mnemosyne is designed to grow incrementally. Each version builds directly on the
 - `mn search` — case-insensitive whole-word content search and case-sensitive path segment search, with interactive result picker
 - `mn list` — interactive picker over all indexed files
 - `mn remove` — remove a file from the index
+- `mn reindex` — re-parse every indexed file from disk
 - `mn config ide` — configure which IDE to open files in
 - Results ranked by recency, then match count
 - 256-character context snippet centred on the first match
@@ -37,7 +38,7 @@ Mnemosyne is designed to grow incrementally. Each version builds directly on the
 - `.pdf` ingestion via `pdftotext` (poppler-utils) — bundled on Windows via `make fetch-poppler`, installed via package manager on macOS/Linux. See [file-types.md](file-types.md#pdf--pdf) for details.
 - Case-insensitive search by default
 - `-c` / `--case-sensitive` flag to opt back in
-- `mn reindex` command to rebuild the inverted index from stored docs
+- `mn reindex` extended to also rebuild the inverted index from stored docs (the v1 command re-parses originals into `docs/`; v2 adds the inverted-index rebuild on top)
 - Index stored as a compact binary file (`~/.mnemosyne/index/inverted.bin`)
 
 **Breaking changes:** none — same commands, faster results.
