@@ -354,58 +354,95 @@ static void launch_app_win(const char *app, const char *target, const char *layo
 #endif
 
 #if defined(__APPLE__)
+/* Main display pixel size via Finder's desktop bounds ("0, 0, W, H"), cached so a
+   multi-app workspace queries it only once. Returns 1 on success. */
+static int mac_main_display_size(int *W, int *H) {
+    static int cw = 0, ch = 0;   /* 0 until resolved */
+    if (cw <= 0 || ch <= 0) {
+        FILE *fp = popen("osascript -e 'tell application \"Finder\" to get bounds "
+                         "of window of desktop' 2>/dev/null", "r");
+        if (fp == NULL) return 0;
+        char out[128] = {0};
+        char *got = fgets(out, sizeof(out), fp);
+        pclose(fp);
+        if (got == NULL) return 0;
+        if (sscanf(out, "%*d, %*d, %d, %d", &cw, &ch) != 2 || cw <= 0 || ch <= 0) {
+            cw = ch = 0;
+            return 0;
+        }
+    }
+    *W = cw; *H = ch;
+    return 1;
+}
+
 /* Positions the front window of `app` into the partition `layout` via System
-   Events. Reads the main display's size from Finder, reuses partition_rect for
-   the geometry, then waits for the app's window and sets its position + size.
-   Main display only (screen prefix > 1 is ignored). Needs Accessibility access
-   for the controlling terminal; prints a neutral hint and is otherwise harmless
-   if it can't position the window. */
+   Events. Main display only (screen prefix > 1 is ignored).
+
+   The window is matched by *case-insensitive* process name (AppleScript `whose
+   name is` ignores case, so "mail" matches "Mail"), and we poll until that
+   process exists AND owns a window before moving/sizing it — so a slow-launching
+   app (e.g. Discord) is awaited rather than missed. The script reports back:
+   "ok" placed, "perm" assistive access denied, "timeout" never appeared. The
+   Accessibility hint is printed once; after a denial the rest of the run skips
+   (retrying would only nag). */
 void mac_place_window(const char *app, const char *layout) {
+    static int perm_denied = 0;
+    if (perm_denied) return;
+
     int screen = 1;
     char part[16];
     layout_parse(layout, &screen, part, sizeof(part));
     if (screen != 1) return;   /* main display only for now */
 
-    /* "bounds of window of desktop" → "0, 0, W, H" for the main display */
-    FILE *fp = popen("osascript -e 'tell application \"Finder\" to get bounds "
-                     "of window of desktop' 2>/dev/null", "r");
-    if (fp == NULL) return;
-    char out[128] = {0};
-    char *got = fgets(out, sizeof(out), fp);
-    pclose(fp);
-    if (got == NULL) return;
-
-    int W = 0, H = 0;
-    if (sscanf(out, "%*d, %*d, %d, %d", &W, &H) != 2 || W <= 0 || H <= 0) return;
+    int W, H;
+    if (!mac_main_display_size(&W, &H)) return;
 
     int x, y, w, h;
     if (!partition_rect(part, 0, 0, W, H, &x, &y, &w, &h)) {
         x = 0; y = 0; w = W; h = H;   /* "full" / unknown → whole display */
     }
 
-    char cmd[WORKSPACE_APP_MAX + 512];
+    char cmd[WORKSPACE_APP_MAX + 1024];
     snprintf(cmd, sizeof(cmd),
         "osascript"
+        " -e 'set appName to \"%s\"'"
         " -e 'tell application \"System Events\"'"
-        " -e 'tell process \"%s\"'"
-        " -e 'set frontmost to true'"
-        " -e 'repeat 40 times'"
-        " -e 'if (count of windows) > 0 then exit repeat'"
-        " -e 'delay 0.1'"
-        " -e 'end repeat'"
-        " -e 'if (count of windows) > 0 then'"
-        " -e 'set position of front window to {%d, %d}'"
-        " -e 'set size of front window to {%d, %d}'"
+        " -e 'repeat 50 times'"               /* ~10s; returns as soon as ready */
+        " -e 'try'"
+        " -e 'set ps to (every process whose name is appName)'"
+        " -e 'if (count of ps) > 0 then'"
+        " -e 'set p to item 1 of ps'"
+        " -e 'if (count of windows of p) > 0 then'"
+        " -e 'set frontmost of p to true'"
+        " -e 'set position of front window of p to {%d, %d}'"
+        " -e 'try'"
+        " -e 'set size of front window of p to {%d, %d}'"
+        " -e 'end try'"
+        " -e 'return \"ok\"'"
         " -e 'end if'"
-        " -e 'end tell'"
+        " -e 'end if'"
+        " -e 'on error number errNum'"
+        " -e 'if errNum is -1719 then return \"perm\"'"
+        " -e 'end try'"
+        " -e 'delay 0.2'"
+        " -e 'end repeat'"
+        " -e 'return \"timeout\"'"
         " -e 'end tell' 2>/dev/null",
         app, x, y, w, h);
 
-    if (system(cmd) != 0)
+    FILE *fp = popen(cmd, "r");
+    if (fp == NULL) return;
+    char res[32] = {0};
+    char *got = fgets(res, sizeof(res), fp);
+    pclose(fp);
+
+    if (got != NULL && strncmp(res, "perm", 4) == 0) {
+        perm_denied = 1;   /* skip the remaining apps this run */
         fprintf(stderr,
-            "note: couldn't position '%s'. If workspace windows aren't being "
-            "placed, grant Accessibility access to your terminal in System "
-            "Settings > Privacy & Security > Accessibility.\n", app);
+            "note: Mnemosyne can't position windows until you grant Accessibility "
+            "access to your terminal (System Settings > Privacy & Security > "
+            "Accessibility), then reopen the workspace.\n");
+    }
 }
 #endif
 
