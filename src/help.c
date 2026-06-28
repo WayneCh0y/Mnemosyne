@@ -25,7 +25,7 @@ void print_help(void) {
 
     print_section("COMMANDS");
     printf("  " CYAN "add" RESET "        Index a file (.txt .md .tex .pdf)\n");
-    printf("  " CYAN "search" RESET "     Search indexed files\n");
+    printf("  " CYAN "search" RESET "     Search indexed files (add " CYAN "-c" RESET " for case-sensitive)\n");
     printf("  " CYAN "list" RESET "       Browse all indexed files\n");
     printf("  " CYAN "remove" RESET "     Remove a file from the index (picker)\n");
     printf("  " CYAN "open" RESET "       Open a workspace (launch apps)\n");
