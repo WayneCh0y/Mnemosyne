@@ -5,7 +5,7 @@
 #include "index.h"
 #include "workspace.h"
 
-#define CURSOR_TOKEN  "▸ "
+#define CURSOR_TOKEN  "▌"
 
 #define KEY_UP        1000
 #define KEY_DOWN      1001
@@ -35,6 +35,10 @@
 #define ANSI_ADD_HL      "\033[30;42m"
 #define ANSI_APP_HL      "\033[37;44m"
 #define ANSI_LIFT_HL     "\033[1;37;46m"  /* bold white on cyan — lifted/reordering link */
+#define ANSI_ACCENT      "\033[96m"        /* bright cyan — selection bar */
+#define ANSI_BRIGHT_RED    "\033[91m"
+#define ANSI_BRIGHT_GREEN  "\033[92m"
+#define ANSI_BRIGHT_YELLOW "\033[93m"
 
 int read_key(void);
 /* Generic numbered string-list picker. Returns the chosen index, or -1 (Esc). */
