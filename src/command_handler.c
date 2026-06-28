@@ -238,8 +238,7 @@ static void cmd_list(int argc, char *argv[]) {
     /* List folders first. */
     qsort(entries, count, sizeof(IndexEntry), compare_by_path);
     
-    int chosen = run_list_picker(entries, count, "Browse indexed files",
-                                 "Use the arrow keys to move, Enter to open, Esc to cancel.");
+    int chosen = run_list_picker(entries, count, "Browse indexed files", NULL);
     printf(ANSI_CLEAR ANSI_RESET);
     if (chosen != -1)
         handle_list_enter(entries, chosen);
@@ -262,8 +261,7 @@ static void cmd_remove(int argc, char *argv[]) {
 
     qsort(entries, count, sizeof(IndexEntry), compare_by_path);
 
-    int chosen = run_list_picker(entries, count, "Remove a file",
-                                 "Use the arrow keys to move, Enter to remove, Esc to cancel.");
+    int chosen = run_list_picker(entries, count, "Remove a file", NULL);
     printf(ANSI_CLEAR ANSI_RESET);
     if (chosen != -1) {
         /* Remove by stored absolute path (no realpath), so it works even if the
@@ -424,8 +422,7 @@ static void cmd_open_run(void) {
         workspace_free_all(ws, count);
         return;
     }
-    int chosen = run_workspace_picker(ws, count, "Open a workspace",
-                                      "Use the arrow keys to move, Enter to open, Esc to cancel.");
+    int chosen = run_workspace_picker(ws, count, "Open a workspace", NULL);
     printf(ANSI_CLEAR ANSI_RESET);
     if (chosen != -1)
         launch_workspace(&ws[chosen]);
@@ -475,8 +472,7 @@ static void cmd_open_edit(void) {
     }
 
     /* Step 1: pick workspace */
-    int ws_idx = run_workspace_picker(ws, count, "Edit which workspace?",
-                                      "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  Enter choose  \xe2\x80\xa2  Esc cancel");
+    int ws_idx = run_workspace_picker(ws, count, "Edit which workspace?", NULL);
     if (ws_idx == -1) {
         printf(ANSI_CLEAR ANSI_RESET "Cancelled.\n");
         workspace_free_all(ws, count);

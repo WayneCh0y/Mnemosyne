@@ -128,10 +128,14 @@ static void handle_num_input(int key, int list_len,
 static void print_picker_header(const char *title, const char *subtitle) {
     printf(ANSI_CLEAR ANSI_RESET);
     printf(ANSI_BOLD ANSI_CYAN "▶ %s" ANSI_RESET "\n", title);
-    printf(ANSI_DIM "%s" ANSI_RESET "\n\n", subtitle);
+    if (subtitle && subtitle[0])
+        printf(ANSI_DIM "%s" ANSI_RESET "\n", subtitle);
+    printf("\n");
 }
 
-static void print_picker_footer(int num_input, int show_error) {
+/* extra_hint, if non-NULL, is injected between "Enter select" and "Esc cancel"
+   (e.g. "Backspace back" for the drill-in file picker). */
+static void print_picker_footer(int num_input, int show_error, const char *extra_hint) {
     if (show_error) {
         printf("\n" ANSI_YELLOW "That index doesn't exist." ANSI_RESET);
     } else if (num_input >= 0) {
@@ -140,7 +144,11 @@ static void print_picker_footer(int num_input, int show_error) {
         else
             printf("\n" ANSI_YELLOW "Jump target: %d" ANSI_RESET, num_input);
     }
-    printf("\n" ANSI_DIM "↑/↓ move  •  Enter select  •  Esc cancel  •  1-9 jump" ANSI_RESET);
+    if (extra_hint && extra_hint[0])
+        printf("\n" ANSI_DIM "↑/↓ move  •  Enter select  •  %s  •  Esc cancel  •  1-9 jump" ANSI_RESET,
+               extra_hint);
+    else
+        printf("\n" ANSI_DIM "↑/↓ move  •  Enter select  •  Esc cancel  •  1-9 jump" ANSI_RESET);
     fflush(stdout);
 }
 
@@ -155,7 +163,7 @@ static void render_menu_list(const char *title, const char *subtitle,
             printf(ANSI_DIM "    [%d] %s" ANSI_RESET "\n", i + 1, list[i]);
         }
     }
-    print_picker_footer(num_input, show_error);
+    print_picker_footer(num_input, show_error, NULL);
 }
 
 int run_menu_picker(const char *title, const char *subtitle,
@@ -201,9 +209,7 @@ int run_menu_picker(const char *title, const char *subtitle,
 }
 
 int run_ide_picker(const char **list, int display) {
-    return run_menu_picker("Choose a default IDE",
-                           "Use the arrow keys to move, Enter to confirm, Esc to cancel.",
-                           list, display);
+    return run_menu_picker("Choose a default IDE", NULL, list, display);
 }
 
 /* ── Multi-select checklist picker ─────────────────────────────────────── */
@@ -427,7 +433,7 @@ static void print_result_divider(int dimmed) {
 
 static void render_results(SearchResult *results, int count, int selected,
                            int num_input, int show_error) {
-    print_picker_header("Search results", "Use the arrow keys to move, Enter to open, Esc to cancel.");
+    print_picker_header("Search results", NULL);
     int start = picker_window_start(selected, count);
     int end   = start + (count < PICKER_WINDOW ? count : PICKER_WINDOW);
     print_more_above(start);
@@ -443,7 +449,7 @@ static void render_results(SearchResult *results, int count, int selected,
         printf("\n");
     }
     print_more_below(end, count);
-    print_picker_footer(num_input, show_error);
+    print_picker_footer(num_input, show_error, NULL);
 }
 
 int run_search_picker(SearchResult *results, int count) {
@@ -585,7 +591,7 @@ static void render_folder_list(IndexEntry *entries,
         }
     }
     print_more_below(end, count);
-    print_picker_footer(num_input, show_error);
+    print_picker_footer(num_input, show_error, NULL);
 }
 
 /* Folder-level picker. Returns the chosen group index, or -1 (Esc). */
@@ -643,7 +649,7 @@ static void render_file_list(IndexEntry *entries, const FolderGroup *g, int sele
             printf(ANSI_DIM "    [%d] %s" ANSI_RESET "\n", i + 1, base);
     }
     print_more_below(end, g->count);
-    print_picker_footer(num_input, show_error);
+    print_picker_footer(num_input, show_error, "Backspace back");
 }
 
 /* File-level picker drilled into one folder. Returns the chosen offset within
@@ -773,7 +779,7 @@ static void render_workspace_list(Workspace *ws, int count, int selected,
         }
     }
     print_more_below(end, count);
-    print_picker_footer(num_input, show_error);
+    print_picker_footer(num_input, show_error, NULL);
 }
 
 int run_workspace_picker(Workspace *ws, int count,
