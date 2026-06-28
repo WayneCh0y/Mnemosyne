@@ -28,6 +28,7 @@ void print_help(void) {
     printf("  " CYAN "search" RESET "     Search indexed files (add " CYAN "-c" RESET " for case-sensitive)\n");
     printf("  " CYAN "list" RESET "       Browse all indexed files\n");
     printf("  " CYAN "remove" RESET "     Remove a file from the index (picker)\n");
+    printf("  " CYAN "reindex" RESET "    Re-parse every indexed file from disk\n");
     printf("  " CYAN "open" RESET "       Open a workspace (launch apps)\n");
     printf("  " CYAN "config ide" RESET " Set the default IDE\n\n");
 
