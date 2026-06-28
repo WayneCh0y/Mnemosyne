@@ -354,24 +354,46 @@ static void launch_app_win(const char *app, const char *target, const char *layo
 #endif
 
 #if defined(__APPLE__)
-/* Main display pixel size via Finder's desktop bounds ("0, 0, W, H"), cached so a
-   multi-app workspace queries it only once. Returns 1 on success. */
-static int mac_main_display_size(int *W, int *H) {
-    static int cw = 0, ch = 0;   /* 0 until resolved */
-    if (cw <= 0 || ch <= 0) {
-        FILE *fp = popen("osascript -e 'tell application \"Finder\" to get bounds "
-                         "of window of desktop' 2>/dev/null", "r");
-        if (fp == NULL) return 0;
-        char out[128] = {0};
-        char *got = fgets(out, sizeof(out), fp);
-        pclose(fp);
-        if (got == NULL) return 0;
-        if (sscanf(out, "%*d, %*d, %d, %d", &cw, &ch) != 2 || cw <= 0 || ch <= 0) {
-            cw = ch = 0;
-            return 0;
+/* Visible frame of the main display — the usable area with the menu bar and Dock
+   excluded — in System Events' top-left coordinates: *X,*Y is the top-left corner
+   and *W,*H the size. Cached so a multi-app workspace resolves it only once.
+
+   Primary source is AppKit's NSScreen.visibleFrame via JXA (converted from Cocoa's
+   bottom-left origin to top-left). If that's unavailable we fall back to Finder's
+   full desktop bounds (origin 0,0) — placement then ignores the menu bar, the old
+   behaviour, but at least still works. Returns 1 on success. */
+static int mac_visible_frame(int *X, int *Y, int *W, int *H) {
+    static int rx = 0, ry = 0, rw = 0, rh = 0, done = 0;
+    if (!done) {
+        FILE *fp = popen(
+            "osascript -l JavaScript -e 'ObjC.import(\"AppKit\");"
+            "var s=$.NSScreen.mainScreen,v=s.visibleFrame,f=s.frame;"
+            "function R(n){return Math.round(n)}"
+            "[R(v.origin.x),R(f.size.height-(v.origin.y+v.size.height)),"
+            "R(v.size.width),R(v.size.height)].join(\" \")' 2>/dev/null", "r");
+        if (fp != NULL) {
+            char out[160] = {0};
+            char *got = fgets(out, sizeof(out), fp);
+            pclose(fp);
+            if (got != NULL && sscanf(out, "%d %d %d %d", &rx, &ry, &rw, &rh) == 4
+                && rw > 0 && rh > 0)
+                done = 1;
+        }
+        if (!done) {   /* fallback: full desktop bounds "0, 0, W, H" */
+            FILE *fp2 = popen("osascript -e 'tell application \"Finder\" to get "
+                              "bounds of window of desktop' 2>/dev/null", "r");
+            if (fp2 == NULL) return 0;
+            char out[128] = {0};
+            char *got = fgets(out, sizeof(out), fp2);
+            pclose(fp2);
+            if (got == NULL) return 0;
+            rx = 0; ry = 0;
+            if (sscanf(out, "%*d, %*d, %d, %d", &rw, &rh) != 2 || rw <= 0 || rh <= 0)
+                return 0;
+            done = 1;
         }
     }
-    *W = cw; *H = ch;
+    *X = rx; *Y = ry; *W = rw; *H = rh;
     return 1;
 }
 
@@ -394,12 +416,12 @@ void mac_place_window(const char *app, const char *layout) {
     layout_parse(layout, &screen, part, sizeof(part));
     if (screen != 1) return;   /* main display only for now */
 
-    int W, H;
-    if (!mac_main_display_size(&W, &H)) return;
+    int X, Y, W, H;
+    if (!mac_visible_frame(&X, &Y, &W, &H)) return;
 
     int x, y, w, h;
-    if (!partition_rect(part, 0, 0, W, H, &x, &y, &w, &h)) {
-        x = 0; y = 0; w = W; h = H;   /* "full" / unknown → whole display */
+    if (!partition_rect(part, X, Y, W, H, &x, &y, &w, &h)) {
+        x = X; y = Y; w = W; h = H;   /* "full" / unknown → whole visible area */
     }
 
     char cmd[WORKSPACE_APP_MAX + 1024];

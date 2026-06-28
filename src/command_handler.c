@@ -13,6 +13,7 @@
 #else
 #include <unistd.h>
 #include <signal.h>
+#include <fcntl.h>
 #endif
 
 #include "command_handler.h"
@@ -105,12 +106,19 @@ static void close_terminal(void) {
     if (!isatty(STDIN_FILENO)) return;
     const char *tty = ttyname(STDIN_FILENO);
     if (tty) {
-        /* Ask Terminal.app to close the window hosting this tty via AppleScript.
-           This works regardless of the "close if shell exited cleanly" preference,
-           which would otherwise keep the window open after a SIGKILL. */
+        /* Close the Terminal window hosting this tty via AppleScript, working
+           regardless of the "close if shell exited cleanly" preference (which
+           would otherwise keep the window open after a SIGKILL).
+
+           Doing the close while mn is still running makes Terminal prompt
+           "terminate running processes in this window?". So we hand it to a
+           detached helper: setsid() + /dev/null fds drop the controlling tty so
+           Terminal no longer counts it as a window process; it waits briefly for
+           mn and the shell to exit, then closes the now-idle window with no
+           prompt. */
         char script[512];
         snprintf(script, sizeof(script),
-            "osascript"
+            "sleep 0.4; osascript"
             " -e 'tell application \"Terminal\"'"
             " -e 'repeat with w in windows'"
             " -e 'if tty of front tab of w is \"%s\" then close w'"
@@ -118,7 +126,19 @@ static void close_terminal(void) {
             " -e 'end tell'"
             " 2>/dev/null",
             tty);
-        system(script);
+        pid_t helper = fork();
+        if (helper == 0) {
+            setsid();
+            int devnull = open("/dev/null", O_RDWR);
+            if (devnull >= 0) {
+                dup2(devnull, STDIN_FILENO);
+                dup2(devnull, STDOUT_FILENO);
+                dup2(devnull, STDERR_FILENO);
+                if (devnull > STDERR_FILENO) close(devnull);
+            }
+            execl("/bin/sh", "sh", "-c", script, (char *)NULL);
+            _exit(127);
+        }
     }
     pid_t ppid = getppid();
     if (ppid > 1) kill(ppid, SIGKILL);
