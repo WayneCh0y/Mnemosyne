@@ -500,57 +500,105 @@ static void find_parent_dir(const char *path, char *out, size_t out_size) {
 
 /* ── Index list picker ─────────────────────────────────────────────────── */
 
-static void render_list(IndexEntry *entries, int count, int selected,
-                        int num_input, int show_error,
-                        const char *title, const char *subtitle) {
+/* Max files to preview under the selected folder before collapsing the rest. */
+#define FOLDER_FRAME_MAX_ENTRIES 8
+
+/* Contiguous run of entries[] that share the same parent directory. Built from
+   a path-sorted entries[] so each group's files are stored back-to-back. */
+typedef struct {
+    char dir[4096];
+    int  start;   /* index into entries[] of the first file in this folder */
+    int  count;   /* number of files in this folder */
+} FolderGroup;
+
+/* Groups a path-sorted entries[] by parent directory. Returns a malloc'd array
+   sized to the resulting group count. Caller frees. */
+static FolderGroup *group_by_folder(IndexEntry *entries, int count, int *group_count) {
+    FolderGroup *groups = malloc(sizeof(FolderGroup) * (size_t)count);
+    if (!groups) { *group_count = 0; return NULL; }
+    int g = 0;
+    for (int i = 0; i < count; i++) {
+        char dir[4096];
+        find_parent_dir(entries[i].original_path, dir, sizeof(dir));
+        if (g > 0 && strcmp(groups[g - 1].dir, dir) == 0) {
+            groups[g - 1].count++;
+        } else {
+            strncpy(groups[g].dir, dir, sizeof(groups[g].dir) - 1);
+            groups[g].dir[sizeof(groups[g].dir) - 1] = '\0';
+            groups[g].start = i;
+            groups[g].count = 1;
+            g++;
+        }
+    }
+    *group_count = g;
+    return groups;
+}
+
+static const char *path_basename(const char *path) {
+#ifdef _WIN32
+    const char *base = strrchr(path, '\\');
+#else
+    const char *base = strrchr(path, '/');
+#endif
+    return base ? base + 1 : path;
+}
+
+/* Dim-yellow rail listing the files of the selected folder, capped so a large
+   folder can't overflow. Mirrors render_workspace_frame. */
+static void render_folder_frame(IndexEntry *entries, const FolderGroup *g) {
+    if (g->count == 0) return;
+    int lines = 0;
+    for (int k = 0; k < g->count; k++) {
+        if (lines >= FOLDER_FRAME_MAX_ENTRIES) {
+            printf(ANSI_DIM_YELLOW "    \xe2\x94\x82 \xe2\x8b\xaf \xe2\x80\xa6" ANSI_RESET "\n");
+            break;
+        }
+        const char *base = path_basename(entries[g->start + k].original_path);
+        printf(ANSI_DIM_YELLOW "    \xe2\x94\x82 %s" ANSI_RESET "\n", base);
+        lines++;
+    }
+}
+
+static void render_folder_list(IndexEntry *entries,
+                               FolderGroup *groups, int count, int selected,
+                               int num_input, int show_error,
+                               const char *title, const char *subtitle) {
     print_picker_header(title, subtitle);
     int start = picker_window_start(selected, count);
     int end   = start + (count < PICKER_WINDOW ? count : PICKER_WINDOW);
     print_more_above(start);
-    
-    char prev_dir[4096] = "";
     for (int i = start; i < end; i++) {
-        char dir[4096];
-        find_parent_dir(entries[i].original_path, dir, sizeof(dir));
-
-        /* Print a dim header only when the directory changes from the previous row. */
-        if (strcmp(dir, prev_dir) != 0) {
 #ifdef _WIN32
-            printf(ANSI_DIM "%s\\" ANSI_RESET "\n", dir);
+        const char *sep = "\\";
 #else
-            printf(ANSI_DIM "%s/" ANSI_RESET "\n", dir);
+        const char *sep = "/";
 #endif
-            strcpy(prev_dir, dir);
+        if (num_input < 0 && i == selected) {
+            printf("   " ANSI_GREEN CURSOR_TOKEN ANSI_SEL_HL "[%d] %s%s  (%d file%s)" ANSI_RESET "\n",
+                   i + 1, groups[i].dir, sep,
+                   groups[i].count, groups[i].count == 1 ? "" : "s");
+            render_folder_frame(entries, &groups[i]);
+        } else {
+            printf(ANSI_DIM "    [%d] %s%s  (%d file%s)" ANSI_RESET "\n",
+                   i + 1, groups[i].dir, sep,
+                   groups[i].count, groups[i].count == 1 ? "" : "s");
         }
-
-        /* Then the existing row, but show just the basename now since the dir is in the header. */
-#ifdef _WIN32
-        const char *base = strrchr(entries[i].original_path, '\\');
-#else
-        const char *base = strrchr(entries[i].original_path, '/');
-#endif
-        base = base ? base + 1 : entries[i].original_path;
-
-        if (num_input < 0 && i == selected)
-            printf("   " ANSI_GREEN CURSOR_TOKEN ANSI_SEL_HL "[%d] %s" ANSI_RESET "\n", i + 1, base);
-        else
-            printf(ANSI_DIM "    [%d] %s" ANSI_RESET "\n", i + 1, base);
     }
-
     print_more_below(end, count);
     print_picker_footer(num_input, show_error);
 }
 
-int run_list_picker(IndexEntry *entries, int count,
-                    const char *title, const char *subtitle) {
+/* Folder-level picker. Returns the chosen group index, or -1 (Esc). */
+static int run_folder_select(IndexEntry *entries, FolderGroup *groups, int count,
+                             const char *title, const char *subtitle) {
     int selected = 0;
     int prev_selected = 0;
     int num_input = -1;
     int show_error = 0;
     int done = 0;
 
-    printf(ANSI_CURSOR_HIDE);
-    render_list(entries, count, selected, num_input, show_error, title, subtitle);
+    render_folder_list(entries, groups, count, selected, num_input, show_error,
+                       title, subtitle);
 
     while (!done) {
         int key = read_key();
@@ -574,12 +622,94 @@ int run_list_picker(IndexEntry *entries, int count,
             }
         }
 
-        if (!done) render_list(entries, count, selected, num_input, show_error, title, subtitle);
+        if (!done)
+            render_folder_list(entries, groups, count, selected, num_input, show_error,
+                               title, subtitle);
+    }
+    return selected;
+}
+
+static void render_file_list(IndexEntry *entries, const FolderGroup *g, int selected,
+                             int num_input, int show_error, const char *title) {
+    print_picker_header(title, g->dir);
+    int start = picker_window_start(selected, g->count);
+    int end   = start + (g->count < PICKER_WINDOW ? g->count : PICKER_WINDOW);
+    print_more_above(start);
+    for (int i = start; i < end; i++) {
+        const char *base = path_basename(entries[g->start + i].original_path);
+        if (num_input < 0 && i == selected)
+            printf("   " ANSI_GREEN CURSOR_TOKEN ANSI_SEL_HL "[%d] %s" ANSI_RESET "\n", i + 1, base);
+        else
+            printf(ANSI_DIM "    [%d] %s" ANSI_RESET "\n", i + 1, base);
+    }
+    print_more_below(end, g->count);
+    print_picker_footer(num_input, show_error);
+}
+
+/* File-level picker drilled into one folder. Returns the chosen offset within
+   the group (0..count-1), -1 to cancel the whole flow (Esc), or -2 to go back
+   to the folder picker (Backspace). */
+static int run_file_select(IndexEntry *entries, const FolderGroup *g, const char *title) {
+    int selected = 0;
+    int prev_selected = 0;
+    int num_input = -1;
+    int show_error = 0;
+    int done = 0;
+
+    render_file_list(entries, g, selected, num_input, show_error, title);
+
+    while (!done) {
+        int key = read_key();
+        show_error = 0;
+
+        if (num_input >= 0) {
+            handle_num_input(key, g->count, &num_input, &selected,
+                             &prev_selected, &show_error, &done);
+        } else {
+            switch (key) {
+            case KEY_UP:        if (selected > 0)            selected--; break;
+            case KEY_DOWN:      if (selected < g->count - 1) selected++; break;
+            case KEY_ENTER:     done = 1;                                break;
+            case KEY_ESC:       selected = -1; done = 1;                 break;
+            case KEY_BACKSPACE:
+            case 127:           selected = -2; done = 1;                 break;
+            default:
+                if (key >= '1' && key <= '9') {
+                    prev_selected = selected;
+                    num_input = key - '0';
+                }
+                break;
+            }
+        }
+
+        if (!done) render_file_list(entries, g, selected, num_input, show_error, title);
+    }
+    return selected;
+}
+
+int run_list_picker(IndexEntry *entries, int count,
+                    const char *title, const char *subtitle) {
+    int gcount = 0;
+    FolderGroup *groups = group_by_folder(entries, count, &gcount);
+    if (!groups || gcount == 0) { free(groups); return -1; }
+
+    printf(ANSI_CURSOR_HIDE);
+
+    int result = -1;
+    while (1) {
+        int g = run_folder_select(entries, groups, gcount, title, subtitle);
+        if (g == -1) break;
+        int f = run_file_select(entries, &groups[g], title);
+        if (f == -2) continue;   /* Backspace — back to folder picker */
+        if (f == -1) break;      /* Esc — cancel the whole flow */
+        result = groups[g].start + f;
+        break;
     }
 
     printf(ANSI_CURSOR_SHOW);
     fflush(stdout);
-    return selected;
+    free(groups);
+    return result;
 }
 
 /* ── Workspace picker ──────────────────────────────────────────────────── */

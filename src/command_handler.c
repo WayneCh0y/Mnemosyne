@@ -260,6 +260,8 @@ static void cmd_remove(int argc, char *argv[]) {
         return;
     }
 
+    qsort(entries, count, sizeof(IndexEntry), compare_by_path);
+
     int chosen = run_list_picker(entries, count, "Remove a file",
                                  "Use the arrow keys to move, Enter to remove, Esc to cancel.");
     printf(ANSI_CLEAR ANSI_RESET);
