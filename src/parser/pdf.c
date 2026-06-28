@@ -98,7 +98,7 @@ static int run_pdftotext(const char *exe, const char *input, const char *output)
 }
 #endif
 
-static char* read_and_lowercase_file(const char *path) {
+static char* read_file(const char *path) {
     FILE *f = fopen(path, "rb");
     if (f == NULL) return NULL;
 
@@ -112,9 +112,6 @@ static char* read_and_lowercase_file(const char *path) {
     fread(buf, 1, size, f);
     buf[size] = '\0';
     fclose(f);
-
-    for (long i = 0; i < size; i++)
-        buf[i] = (char)tolower((unsigned char)buf[i]);
 
     return buf;
 }
@@ -144,7 +141,7 @@ char *parse_pdf(const char *path) {
         return NULL;
     }
 
-    char *text = read_and_lowercase_file(temp_path);
+    char *text = read_file(temp_path);
     remove(temp_path);
 
     return text;

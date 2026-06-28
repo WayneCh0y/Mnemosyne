@@ -20,8 +20,5 @@ char *parse_txt(const char *path) {
     buf[size] = '\0';
     fclose(f);
 
-    for (long i = 0; i < size; i++)
-        buf[i] = (char)tolower((unsigned char)buf[i]);
-
     return buf;
 }
