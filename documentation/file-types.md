@@ -20,16 +20,16 @@ Read directly with `fread`. No transformation applied. The raw byte content is s
 
 **Parser:** `src/parser/md.c`
 
-Markdown is converted to a structured plain-text format. All output is lowercased. Inline formatting delimiters are stripped; block structure is captured with lightweight tokens used by the search display layer.
+Markdown is converted to a structured plain-text format. Inline formatting delimiters are stripped; block structure is captured with lightweight tokens used by the search display layer. Original casing is preserved so `mn search -c` works correctly against `.md` files.
 
 **Transformation table**
 
 | Input | Stored as |
 |---|---|
-| `# Heading` / `## Heading` | `# heading` / `## heading` (hash markers preserved) |
+| `# Heading` / `## Heading` | `# Heading` / `## Heading` (hash markers preserved) |
 | `**bold**`, `*italic*`, `__bold__`, `_italic_` | plain text (delimiters stripped) |
 | `` `inline code` `` | content kept |
-| ` ```fenced block``` ` | content kept (lowercased) |
+| ` ```fenced block``` ` | content kept |
 | `[text](url)` links | `[LINK]` token |
 | `![alt](url)` images | _(removed entirely)_ |
 | `> blockquote` | content only, `>` stripped |
@@ -61,7 +61,7 @@ The tokens in the stored doc are interpreted by `print_context` in `command_hand
 
 PDF support is **optional** and requires the `pdftotext` binary from poppler-utils. Without it, `mn add` on a `.pdf` prints an install hint and skips the file — all other file types continue to work. See [Enabling PDF support](../README.md#enabling-pdf-support) in the README for per-OS setup.
 
-**Strategy.** `parse_pdf` shells out to `pdftotext` via `posix_spawnp` (POSIX) or `_spawnvp` (Windows), writes plain text to a temp file (`$TEMP/mn_pdf_<time>_<pid>.txt` on Windows, `/tmp/mn_pdf_*` on POSIX), reads it back, lowercases it, and deletes the temp file. Flags: `-raw -nopgbrk -enc UTF-8` — raw stream order (no column reconstruction), no page-break markers, UTF-8 output.
+**Strategy.** `parse_pdf` shells out to `pdftotext` via `posix_spawnp` (POSIX) or `_spawnvp` (Windows), writes plain text to a temp file (`$TEMP/mn_pdf_<time>_<pid>.txt` on Windows, `/tmp/mn_pdf_*` on POSIX), reads it back, and deletes the temp file. Original casing is preserved. Flags: `-raw -nopgbrk -enc UTF-8` — raw stream order (no column reconstruction), no page-break markers, UTF-8 output.
 
 **Why shell out instead of linking a library?** Text-extraction quality is roughly equivalent to libmupdf for search indexing, and a runtime binary keeps the build simple — no vendored ~120 MB MuPDF source tree, no per-platform link wiring. The tradeoff is one external dependency on macOS/Linux and one bundled folder on Windows.
 
