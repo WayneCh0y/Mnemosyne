@@ -4,17 +4,19 @@
 
 ### Windows
 
-Run the build script from the project root:
+Build via the Makefile using MinGW's `make` (prerequisites are in [README → Windows](../README.md#windows)):
 
-```bat
-.\build.bat
+```powershell
+mingw32-make
 ```
 
 This produces `mn.exe` in the project root. Run it with:
 
-```bat
+```powershell
 .\mn.exe
 ```
+
+> The legacy `build.bat` in the project root is kept for reference but is no longer maintained — it lists an outdated subset of source files. Use `mingw32-make` instead.
 
 ### Linux / WSL
 
@@ -60,14 +62,8 @@ Not supported on Windows with MinGW. Use WSL to run sanitizer builds.
 
 ## Adding a New Source File
 
-When you create a new module (e.g. `src/config.c`), register it in both build systems:
+When you create a new module (e.g. `src/config.c`), register it in the `SRCS` variable of the Makefile:
 
-**build.bat** — add the file to the `gcc` line:
-```bat
-gcc -Wall -Wextra -std=c11 -Isrc src/main.c src/help.c src/config.c -o mn.exe
-```
-
-**Makefile** — add it to the `SRCS` variable:
 ```makefile
 SRCS = src/main.c \
        src/help.c \
@@ -82,7 +78,6 @@ SRCS = src/main.c \
 Mnemosyne/
 ├── src/          # all source files (.c and .h)
 ├── documentation/
-├── build.bat     # Windows build script
-├── Makefile      # Linux/WSL build script
+├── Makefile      # build script (Linux/macOS/WSL: make; Windows: mingw32-make)
 └── mn.exe / mn                 # compiled binary (not committed to git)
 ```

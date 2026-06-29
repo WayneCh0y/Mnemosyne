@@ -148,7 +148,7 @@ mn remove ~/Documents/notes       # drops every indexed file under notes/
 
 ## `mn reindex`
 
-Re-parses every indexed file from disk and rewrites its cached plain-text copy. Useful after a parser change, after a `docs/` file has been manually deleted, or to refresh the whole index in one shot. Before re-parsing, it also runs the move-tracking pass: entries whose file is missing at the recorded path are searched for elsewhere and either relocated or dropped (same step that runs silently before every `mn search`).
+Re-parses every indexed file from disk and rewrites its cached plain-text copy. Useful after a parser change, after upgrading `mn` (so previously-indexed files pick up new parsing behaviour), after a `docs/` file has been manually deleted, or to refresh the whole index in one shot. Before re-parsing, it also runs the move-tracking pass: entries whose file is missing at the recorded path are searched for elsewhere and either relocated or dropped (same step that runs silently before every `mn search`).
 
 **Usage**
 ```

@@ -37,6 +37,7 @@ SRCS = src/main.c \
        src/parser/md.c \
 	   src/parser/pdf.c \
        src/parser/parser.c \
+	   src/parser/normalise.c \
        src/ingest.c \
        src/index.c \
        src/search.c \

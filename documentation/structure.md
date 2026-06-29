@@ -108,7 +108,7 @@ Each parser receives a file path and returns a heap-allocated `char *` of plain 
 | File | Handles | Strategy |
 |---|---|---|
 | `txt.c` | `.txt` | `fread` directly |
-| `md.c` | `.md` | strip formatting markers; lowercase output; emit `[LIST]`, `[LINK]` tokens |
+| `md.c` | `.md` | strip formatting markers; emit `[LIST]`, `[LINK]` tokens; preserve original casing |
 | `pdf.c` | `.pdf` | shell out to `pdftotext` (poppler-utils); on Windows, prefer a bundled copy next to `mn.exe` before falling back to PATH |
 | `parser.c` | dispatch | routes to the correct parser by `FileType` |
 
