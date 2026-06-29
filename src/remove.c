@@ -7,6 +7,7 @@
 #include "config.h"
 #include "sha256.h"
 #include "index.h"
+#include "inverted.h"
 
 int remove_entry_by_abs_path(const char *abs_path) {
     char hash[65];
@@ -43,6 +44,8 @@ void remove_file(const char *path) {
         fprintf(stderr, "warning: %s was not indexed\n", abs_path);
     }
     /* rc == -1: index_remove already printed the error */
+
+    if (rc == 1) inverted_rebuild();
 }
 
 void remove_folder(const char *path) {
@@ -77,11 +80,13 @@ void remove_folder(const char *path) {
 
     free(entries);
 
-    if (removed == 0)
+    if (removed == 0) {
         printf("No indexed files under %s.\n", abs_folder);
-    else
+    } else {
         printf("Removed %d file%s under %s.\n",
                removed, removed == 1 ? "" : "s", abs_folder);
+        inverted_rebuild();
+    }
 }
 
 void remove_path(const char *path) {

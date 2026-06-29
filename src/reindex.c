@@ -5,6 +5,7 @@
 #include "reindex.h"
 #include "index.h"
 #include "ingest.h"
+#include "inverted.h"
 #include "remove.h"
 #include "relocate.h"
 
@@ -38,6 +39,11 @@ void reindex_all(void) {
 
     int removed = initial_count - count;
     free(entries);
+
+    /* Canonicalize inverted.bin once at the end — the per-file ingest_file
+       calls above have been updating it incrementally, but a single rebuild
+       guarantees a clean final state. */
+    inverted_rebuild();
 
     printf("Reindexed %d file%s", reindexed, reindexed == 1 ? "" : "s");
     if (removed > 0)

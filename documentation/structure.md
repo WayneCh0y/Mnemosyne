@@ -26,12 +26,14 @@ graph TD
     subgraph Storage ["Index Store (~/.mnemosyne/)"]
         MANIFEST[manifest.json\nfile registry]
         DOCS[docs/\nhashed plain-text copies]
+        INV[inverted.bin\nword → postings]
         CONF[~/.mnemosyne.conf\nuser settings]
         WS[workspaces.json\nsaved workspaces]
     end
 
     subgraph Search ["Search Engine"]
         SE[Keyword Matcher\nsearch.c]
+        IDX[Inverted Index\ninverted.c]
     end
 
     User -- "mn add file" --> CMD
@@ -41,9 +43,12 @@ graph TD
     ING -- ".pdf" --> P_PDF
     P_TXT & P_MD & P_PDF --> MANIFEST
     P_TXT & P_MD & P_PDF --> DOCS
+    ING -- words --> IDX
+    IDX -- reads/writes --> INV
 
     User -- "mn search query" --> CMD
     CMD --> SE
+    SE -- "lookup candidates" --> IDX
     SE -- reads --> DOCS
     SE -- reads --> MANIFEST
     CMD -- "user picks result" --> CMD
@@ -93,7 +98,7 @@ The interactive pickers (ANSI rendering, raw-mode arrow-key input, `1`–`9` num
 Reads and writes `workspaces.json` (via `cJSON`). A workspace is a named list of entries, each an `app` (either `code`/`cursor`, or a full path to an executable) plus optional `targets` (URLs or file paths). Functions: `workspace_create()`, `workspace_add_entry()`, `workspace_add_entry_with_targets()`, `workspace_remove()`, `workspace_load_all()`, `workspace_save_all()`.
 
 ### `ingest.c` — Ingestor
-Detects file extension, delegates to the correct parser, then writes the resulting plain text into `~/.mnemosyne/index/docs/<sha256>.txt` and updates `manifest.json`.
+Detects file extension, delegates to the correct parser, then writes the resulting plain text into `~/.mnemosyne/index/docs/<sha256>.txt`, updates `manifest.json`, and feeds the parsed text into the inverted index. To avoid rewriting `inverted.bin` once per file in a bulk add, `ingest_path()` loads the index once at the start, accumulates additions in memory across the whole directory walk via the private `ingest_file_impl()`, and saves once at the end.
 
 Currently supports: `.txt`, `.md`, `.pdf`. `.tex` is recognised by extension but not yet parsed.
 
@@ -125,17 +130,22 @@ Functions: `index_add()`, `index_remove()`, `index_get_entries()`, `find_outermo
 
 `find_outermost_git_root()` walks up from a starting directory and returns the outermost ancestor containing `.git` (writes `"none"` if no ancestor has one). Used at ingest time to populate `repository`, and by `relocate.c` to widen the scan root when locating moved files — picking the outermost rather than innermost root handles nested git repos / submodules cleanly.
 
-### `search.c` — Keyword Matcher (v1)
-Iterates over all `docs/<hash>.txt` files. For each, counts occurrences of the (already-lowercased) query string using `strstr()`. Builds a result list sorted by recency then match count. Provides a 256-character context snippet centred on the first match.
+### `search.c` — Keyword Matcher
+Asks `inverted.c` for the candidate doc set first (via `inverted_query()`), then iterates only those manifest entries — plus any whose `original_path` substring-matches the raw query — and runs the per-file scanner to count occurrences via `strstr()`, build a 256-character context snippet, and verify case for `-c`. Results are sorted by recency then match count. If `inverted.bin` is missing or unreadable (e.g. first run after upgrading from v1), `search.c` triggers a rebuild via `inverted_rebuild()` before querying.
+
+### `inverted.c` — Inverted Index
+Owns `~/.mnemosyne/index/inverted.bin`. Tokenises text into lowercased alphanumeric runs and stores `word → [(doc_id, position), …]` postings, with a doc table mapping small integer `doc_id`s back to the sha256 hashes used by the manifest. Phrase queries (`"simplex algorithm"`) are handled by intersecting postings and then checking that the positions are consecutive within the same doc.
+
+Public API: `inverted_load()`, `inverted_save()`, `inverted_free()`, `inverted_add_doc()`, `inverted_query()`, `inverted_exists()`, `inverted_doc_count()`, `inverted_rebuild()`. The rebuild walks every manifest entry and re-tokenises its stored doc; used by `mn remove`, `mn reindex`, and the auto-recovery path in `search.c`.
 
 ### `config.c` — Config Manager
 Reads and writes `~/.mnemosyne.conf` — a plain-text file with two lines: the data directory path and the IDE key.
 
 ### `remove.c` — Index Removal
-Removes an entry from `manifest.json` and deletes the corresponding `docs/<hash>.txt` file.
+Removes an entry from `manifest.json` and deletes the corresponding `docs/<hash>.txt` file. After a successful removal (single file or whole folder), calls `inverted_rebuild()` so `inverted.bin` no longer references the removed doc.
 
 ### `reindex.c` — Bulk Reindex
-Walks every entry in `manifest.json`. First runs `relocate_scan_all()` so missing files are relocated where possible; remaining present files are re-parsed via `ingest_file()`. Used by `mn reindex` to recover from parser changes or hand-deleted `docs/` files in one shot.
+Walks every entry in `manifest.json`. First runs `relocate_scan_all()` so missing files are relocated where possible; remaining present files are re-parsed via `ingest_file()`. Finishes with a `inverted_rebuild()` to canonicalise `inverted.bin` against the new manifest state. Used by `mn reindex` to recover from parser changes or hand-deleted `docs/` files in one shot.
 
 ### `relocate.c` — Moved-File Tracking
 For each indexed entry whose file is no longer at `original_path`, scans the entry's git repository (widened via `find_outermost_git_root()`) for a file with the same basename. A single match is re-ingested at the new location; zero or multiple matches drop the stale entry.
@@ -163,6 +173,8 @@ Mnemosyne/
 │   ├── index.h
 │   ├── search.c
 │   ├── search.h
+│   ├── inverted.c
+│   ├── inverted.h
 │   ├── remove.c
 │   ├── remove.h
 │   ├── reindex.c
@@ -218,6 +230,7 @@ Mnemosyne/
 ├── workspaces.json        ← saved workspaces (apps, targets)
 └── index/
     ├── manifest.json
+    ├── inverted.bin
     └── docs/
         ├── a3f5c9d2....txt
         ├── b81e04f7....txt
@@ -227,4 +240,5 @@ Mnemosyne/
 - Each `docs/<hash>.txt` contains the extracted plain-text of one document.
 - The hash is SHA-256 of the original file's absolute path (not its content), so re-indexing the same path overwrites the same slot.
 - `manifest.json` is the only file that maps hashes back to original paths and metadata.
+- `inverted.bin` is the word-to-postings lookup used by `mn search`. It stores a small integer `doc_id` per file (mapping back to the manifest's sha256 hash via a doc table at the top of the file) and a list of `(doc_id, position)` postings per word. Rebuilt on demand from `docs/` by `mn remove`, `mn reindex`, and `mn search` when the file is missing or unreadable.
 - `workspaces.json` holds the named workspaces managed by `mn open`.

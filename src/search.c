@@ -6,6 +6,7 @@
 #include "search.h"
 #include "index.h"
 #include "config.h"
+#include "inverted.h"
 #include "types.h"
 
 static FileType file_type_from_string(const char *s) {
@@ -274,17 +275,63 @@ static int scan_file_pdf(const char *path, const char *query, const char *raw_qu
                          match_start_out, match_len_out, is_case_sensitive);
 }
 
+/* Returns 1 if `hash` is in the candidate list, 0 otherwise. */
+static int hash_in_candidates(const InvertedMatch *cands, int n, const char *hash) {
+    for (int i = 0; i < n; i++) {
+        if (strcmp(cands[i].hash, hash) == 0) return 1;
+    }
+    return 0;
+}
+
+/* Returns 1 if `path` contains `needle` as a substring (case-insensitive when
+   the global search is case-insensitive). Cheap — paths are short. */
+static int path_contains(const char *path, const char *needle, int is_case_sensitive) {
+    if (needle == NULL || needle[0] == '\0') return 0;
+    if (is_case_sensitive) return strstr(path, needle) != NULL;
+
+    char lc_path[4096], lc_needle[256];
+    int i;
+    for (i = 0; path[i] && i < (int)sizeof(lc_path) - 1; i++)
+        lc_path[i] = (char)tolower((unsigned char)path[i]);
+    lc_path[i] = '\0';
+    for (i = 0; needle[i] && i < (int)sizeof(lc_needle) - 1; i++)
+        lc_needle[i] = (char)tolower((unsigned char)needle[i]);
+    lc_needle[i] = '\0';
+    return strstr(lc_path, lc_needle) != NULL;
+}
+
 SearchResult *search(const char *query, const char *raw_query, int *count, int is_case_sensitive) {
     int total;
     IndexEntry *entries = index_get_entries(&total);
     if (entries == NULL) { *count = 0; return NULL; }
 
+    /* If inverted.bin is missing (e.g. first run after upgrading from a
+       pre-v2 install) or unreadable / corrupt (doc_count of 0 while the
+       manifest has entries), rebuild it from the stored docs before
+       querying. */
+    if (!inverted_exists()) inverted_rebuild();
+
+    InvertedIndex *idx = inverted_load();
+    if (total > 0 && inverted_doc_count(idx) == 0) {
+        inverted_free(idx);
+        inverted_rebuild();
+        idx = inverted_load();
+    }
+
+    int cand_count = 0;
+    InvertedMatch *cands = inverted_query(idx, query, &cand_count);
+    inverted_free(idx);
+
     SearchResult *results = malloc(total * sizeof(SearchResult));
-    if (results == NULL) { free(entries); *count = 0; return NULL; }
+    if (results == NULL) { free(entries); free(cands); *count = 0; return NULL; }
 
     int found = 0;
 
     for (int i = 0; i < total; i++) {
+        int is_content_candidate = hash_in_candidates(cands, cand_count, entries[i].hash);
+        int is_path_candidate    = path_contains(entries[i].original_path, raw_query, is_case_sensitive);
+        if (!is_content_candidate && !is_path_candidate) continue;
+
         char doc_path[4096];
         snprintf(doc_path, sizeof(doc_path), "%s/index/docs/%s.txt",
                  get_data_path(), entries[i].hash);
@@ -317,6 +364,7 @@ SearchResult *search(const char *query, const char *raw_query, int *count, int i
     }
 
     free(entries);
+    free(cands);
     qsort(results, found, sizeof(SearchResult), cmp);
     *count = found;
     return results;

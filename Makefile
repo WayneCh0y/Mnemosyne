@@ -48,6 +48,7 @@ SRCS = src/main.c \
        src/app_launch.c \
        src/app_enum.c \
        src/tokenizer.c \
+       src/inverted.c \
        src/cJSON.c
 
 ifeq ($(OS), Windows_NT)

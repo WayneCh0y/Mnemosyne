@@ -4,7 +4,7 @@ Mnemosyne is designed to grow incrementally. Each version builds directly on the
 
 ---
 
-## v1 — Direct Match (current)
+## v1 — Direct Match
 
 **Goal:** A working, useful tool with the simplest possible search.
 
@@ -21,17 +21,16 @@ Mnemosyne is designed to grow incrementally. Each version builds directly on the
 - 256-character context snippet centred on the first match
 
 **Limitations**
-- `.tex` and `.pdf` ingestion not yet implemented
-- Linear scan: slow at very large index sizes (thousands of large documents)
+- `.tex` ingestion not yet implemented
 - No stemming: `"run"` does not match `"running"` or `"runs"`
 
 ---
 
-## v2 — Inverted Index
+## v2 — Inverted Index (current)
 
 **Goal:** Make search fast regardless of index size.
 
-**Search strategy:** Pre-built inverted index: `word → [doc_id, ...]`. Lookup is O(1) per term instead of O(n × file_size).
+**Search strategy:** Pre-built inverted index stored at `~/.mnemosyne/index/inverted.bin`. At ingest time each word is recorded with `(doc_id, position)` postings; at search time the query is tokenised, postings are looked up per token, and (for multi-word queries) positions are checked for adjacency so phrase queries still work. `mn search` then only opens the candidate docs — instead of scanning every file — to build the result snippet and verify case for `-c`.
 
 **New features**
 - `mn open` — workspaces: named sets of apps/files/URLs launched together, managed and opened via interactive pickers
@@ -39,6 +38,8 @@ Mnemosyne is designed to grow incrementally. Each version builds directly on the
 - Case-insensitive search by default
 - `-c` / `--case-sensitive` flag to opt back in
 - `mn reindex` extended to also rebuild the inverted index from stored docs (the v1 command re-parses originals into `docs/`; v2 adds the inverted-index rebuild on top)
+- `mn remove` keeps `inverted.bin` in sync by rebuilding after a removal
+- `mn search` rebuilds `inverted.bin` automatically the first time it is missing or unreadable (e.g. upgrading from v1)
 - Index stored as a compact binary file (`~/.mnemosyne/index/inverted.bin`)
 
 **Breaking changes:** none — same commands, faster results.
