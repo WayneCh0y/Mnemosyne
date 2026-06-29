@@ -7,6 +7,40 @@
 #include "config.h"
 #include "cJSON.h"
 
+void find_outermost_git_root(const char *start_dir, char *out, size_t out_size) {
+    char dir[4096];
+    strncpy(dir, start_dir, sizeof(dir) - 1);
+    dir[sizeof(dir) - 1] = '\0';
+
+    char best[4096] = {0};
+
+    while (dir[0] != '\0') {
+        char git_path[4096 + 6];
+#ifdef _WIN32
+        snprintf(git_path, sizeof(git_path), "%s\\.git", dir);
+#else
+        snprintf(git_path, sizeof(git_path), "%s/.git", dir);
+#endif
+        struct stat st;
+        if (stat(git_path, &st) == 0) {
+            strncpy(best, dir, sizeof(best) - 1);
+            best[sizeof(best) - 1] = '\0';
+        }
+
+#ifdef _WIN32
+        char *last = strrchr(dir, '\\');
+#else
+        char *last = strrchr(dir, '/');
+#endif
+        if (last == NULL) break;
+        *last = '\0';
+    }
+
+    const char *result = best[0] ? best : "none";
+    strncpy(out, result, out_size - 1);
+    out[out_size - 1] = '\0';
+}
+
 static void find_git_root(const char *original_path, char *out, size_t out_size) {
     char dir[4096];
     strncpy(dir, original_path, sizeof(dir) - 1);
@@ -19,31 +53,7 @@ static void find_git_root(const char *original_path, char *out, size_t out_size)
 #endif
     if (sep) *sep = '\0';
 
-    while (dir[0] != '\0') {
-        char git_path[4096 + 6];
-#ifdef _WIN32
-        snprintf(git_path, sizeof(git_path), "%s\\.git", dir);
-#else
-        snprintf(git_path, sizeof(git_path), "%s/.git", dir);
-#endif
-        struct stat st;
-        if (stat(git_path, &st) == 0) {
-            strncpy(out, dir, out_size - 1);
-            out[out_size - 1] = '\0';
-            return;
-        }
-
-#ifdef _WIN32
-        char *last = strrchr(dir, '\\');
-#else
-        char *last = strrchr(dir, '/');
-#endif
-        if (last == NULL) break;
-        *last = '\0';
-    }
-
-    strncpy(out, "none", out_size - 1);
-    out[out_size - 1] = '\0';
+    find_outermost_git_root(dir, out, out_size);
 }
 
 /* Returns a cJSON object representing the manifest */

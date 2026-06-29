@@ -6,30 +6,37 @@
 #include "index.h"
 #include "ingest.h"
 #include "remove.h"
+#include "relocate.h"
 
 void reindex_all(void) {
-    int count;
-    IndexEntry *entries = index_get_entries(&count);
-    if (entries == NULL || count == 0) {
+    int initial_count;
+    IndexEntry *initial = index_get_entries(&initial_count);
+    if (initial == NULL || initial_count == 0) {
         printf("No files indexed yet.\n");
-        free(entries);
+        free(initial);
         return;
     }
+    free(initial);
 
-    /* Iterate over our own snapshot — ingest_file and remove_entry_by_abs_path
-       both rewrite manifest.json under us, but the snapshot is stable. */
-    int reindexed = 0, removed = 0;
+    /* Missing files: try to relocate within their repository; drop otherwise. */
+    relocate_scan_all();
+
+    int count;
+    IndexEntry *entries = index_get_entries(&count);
+    if (entries == NULL) return;
+
+    /* Iterate over our own snapshot — ingest_file rewrites manifest.json under
+       us, but the snapshot is stable. */
+    int reindexed = 0;
     for (int i = 0; i < count; i++) {
         struct stat st;
-        if (stat(entries[i].original_path, &st) != 0) {
-            if (remove_entry_by_abs_path(entries[i].original_path) == 1)
-                removed++;
-        } else {
+        if (stat(entries[i].original_path, &st) == 0) {
             ingest_file(entries[i].original_path);
             reindexed++;
         }
     }
 
+    int removed = initial_count - count;
     free(entries);
 
     printf("Reindexed %d file%s", reindexed, reindexed == 1 ? "" : "s");

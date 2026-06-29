@@ -148,7 +148,7 @@ mn remove ~/Documents/notes       # drops every indexed file under notes/
 
 ## `mn reindex`
 
-Re-parses every indexed file from disk and rewrites its cached plain-text copy. Useful after a parser change, after a `docs/` file has been manually deleted, or to refresh the whole index in one shot. Entries whose original file no longer exists on disk are dropped (same rule as the auto-prune that runs before every `mn search`).
+Re-parses every indexed file from disk and rewrites its cached plain-text copy. Useful after a parser change, after a `docs/` file has been manually deleted, or to refresh the whole index in one shot. Before re-parsing, it also runs the move-tracking pass: entries whose file is missing at the recorded path are searched for elsewhere and either relocated or dropped (same step that runs silently before every `mn search`).
 
 **Usage**
 ```
@@ -158,7 +158,12 @@ mn reindex
 Takes no arguments.
 
 **Behaviour**
-- Walks every entry in `manifest.json`. For each: if the file is missing, the manifest entry and its cached doc are removed; otherwise the file is re-parsed and its entry is updated (same path → same hash, so the existing `docs/<hash>.txt` slot is overwritten).
+- **Move-tracking pass first** (`relocate_scan_all()`):
+  - For each entry whose file is missing at `original_path`, scan the entry's repository (widened to the outermost containing `.git` ancestor, so files moved out of a submodule into its parent are still found) for a file with the same basename.
+  - If exactly one match is found in that tree, the file is re-ingested at the new path and the stale entry is dropped. Zero or multiple matches drop the entry.
+  - **Cross-repo fallback**: if the file isn't in its own repo at all, every *other* indexed repository is also scanned. Matches accumulate across repos, so a basename appearing in two unrelated repos is treated as ambiguous and the entry is dropped.
+  - Entries originally outside any git repo (`repository == "none"`) have no anchor to search from and are dropped on first miss. Re-add them with `mn add`.
+- **Then re-parse**: walks every remaining entry in `manifest.json` and re-ingests it (same path → same hash, so the existing `docs/<hash>.txt` slot is overwritten).
 - Per-file parse failures print to stderr and leave that entry untouched — a transient error won't drop your data.
 - Prints a summary on exit: `Reindexed N files.` (with `(M missing files dropped)` appended when applicable).
 - If the index is empty, prints `No files indexed yet.` and exits 0.

@@ -121,7 +121,9 @@ Reads and writes `manifest.json`. Each entry:
 }
 ```
 
-Functions: `index_add()`, `index_remove()`, `index_get_entries()`.
+Functions: `index_add()`, `index_remove()`, `index_get_entries()`, `find_outermost_git_root()`.
+
+`find_outermost_git_root()` walks up from a starting directory and returns the outermost ancestor containing `.git` (writes `"none"` if no ancestor has one). Used at ingest time to populate `repository`, and by `relocate.c` to widen the scan root when locating moved files — picking the outermost rather than innermost root handles nested git repos / submodules cleanly.
 
 ### `search.c` — Keyword Matcher (v1)
 Iterates over all `docs/<hash>.txt` files. For each, counts occurrences of the (already-lowercased) query string using `strstr()`. Builds a result list sorted by recency then match count. Provides a 256-character context snippet centred on the first match.
@@ -133,7 +135,14 @@ Reads and writes `~/.mnemosyne.conf` — a plain-text file with two lines: the d
 Removes an entry from `manifest.json` and deletes the corresponding `docs/<hash>.txt` file.
 
 ### `reindex.c` — Bulk Reindex
-Walks every entry in `manifest.json`. Missing files are dropped (entry + cached doc); present files are re-parsed via `ingest_file()`. Used by `mn reindex` to recover from parser changes or hand-deleted `docs/` files in one shot.
+Walks every entry in `manifest.json`. First runs `relocate_scan_all()` so missing files are relocated where possible; remaining present files are re-parsed via `ingest_file()`. Used by `mn reindex` to recover from parser changes or hand-deleted `docs/` files in one shot.
+
+### `relocate.c` — Moved-File Tracking
+For each indexed entry whose file is no longer at `original_path`, scans the entry's git repository (widened via `find_outermost_git_root()`) for a file with the same basename. A single match is re-ingested at the new location; zero or multiple matches drop the stale entry.
+
+Also runs a cross-repo fallback: if the file isn't in its own repo, every other distinct widened repository in the index is scanned too. Matches accumulate across repos, so the same basename appearing in two unrelated repos correctly registers as ambiguous and drops the entry. Entries with `repository == "none"` have no anchor to search from and are dropped on the first miss.
+
+Called from `reindex_all()` and from `update_files()` in `command_handler.c` (the silent pre-search pass), so moves are picked up on the next `mn search` without an explicit reindex. Functions: `relocate_scan_all()`.
 
 ### `init.c` — First-time Setup
 Prompts for storage location and IDE on first run, creates the index directory structure, and writes the initial `~/.mnemosyne.conf`.
@@ -158,6 +167,8 @@ Mnemosyne/
 │   ├── remove.h
 │   ├── reindex.c
 │   ├── reindex.h
+│   ├── relocate.c
+│   ├── relocate.h
 │   ├── config.c
 │   ├── config.h
 │   ├── init.c
