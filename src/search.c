@@ -305,11 +305,19 @@ SearchResult *search(const char *query, const char *raw_query, int *count, int i
     IndexEntry *entries = index_get_entries(&total);
     if (entries == NULL) { *count = 0; return NULL; }
 
-    /* If the inverted index is missing (e.g. first run after upgrading from
-       a pre-v2 install), rebuild it from the stored docs before querying. */
+    /* If inverted.bin is missing (e.g. first run after upgrading from a
+       pre-v2 install) or unreadable / corrupt (doc_count of 0 while the
+       manifest has entries), rebuild it from the stored docs before
+       querying. */
     if (!inverted_exists()) inverted_rebuild();
 
     InvertedIndex *idx = inverted_load();
+    if (total > 0 && inverted_doc_count(idx) == 0) {
+        inverted_free(idx);
+        inverted_rebuild();
+        idx = inverted_load();
+    }
+
     int cand_count = 0;
     InvertedMatch *cands = inverted_query(idx, query, &cand_count);
     inverted_free(idx);

@@ -254,6 +254,10 @@ int inverted_exists(void) {
     return 1;
 }
 
+uint32_t inverted_doc_count(const InvertedIndex *idx) {
+    return idx ? idx->doc_count : 0;
+}
+
 /* Read the entire stored doc (docs/<hash>.txt) into a heap buffer. The doc
    already starts with the [PATH]…[/PATH] header that ingest writes — we
    tokenize that too, which is harmless (the path bytes become words in the

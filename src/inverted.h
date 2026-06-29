@@ -23,6 +23,11 @@ void inverted_free(InvertedIndex *idx);
 /* Returns 1 if inverted.bin exists on disk, 0 otherwise. */
 int inverted_exists(void);
 
+/* Number of docs currently indexed in `idx`. Used by callers (e.g. search)
+   to detect a corrupt-but-present inverted.bin: if doc_count is 0 yet the
+   manifest has entries, the on-disk file is unusable and should be rebuilt. */
+uint32_t inverted_doc_count(const InvertedIndex *idx);
+
 /* Rebuilds inverted.bin from scratch by walking every entry in manifest.json
    and re-tokenizing its stored doc. Used by `mn remove`, `mn reindex`, and
    on the next `mn search` when inverted.bin is missing. */
