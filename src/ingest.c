@@ -13,6 +13,7 @@
 #include "config.h"
 #include "sha256.h"
 #include "index.h"
+#include "inverted.h"
 #include "parser/parser.h"
 
 static FileType get_file_type(const char *path) {
@@ -67,9 +68,11 @@ static int write_to_docs(const char *hash, const char *abs_path, const char *tex
     return 1;
 }
 
-void ingest_file(const char *path) {
+/* Inner ingest: caller owns load/save of `idx`. If `idx` is NULL the inverted
+   index isn't updated (used by callers that don't want to touch it here). */
+static void ingest_file_impl(const char *path, InvertedIndex *idx) {
     char abs_path[4096];
-    
+
     /* Step 1: Obtain absolute path */
 #ifdef _WIN32
     if (_fullpath(abs_path, path, sizeof(abs_path)) == NULL) {
@@ -123,10 +126,20 @@ void ingest_file(const char *path) {
     const char *file_type = file_type_to_string(filetype);
     index_add(abs_path, hash, (long)st.st_size, (long)st.st_mtime, file_type);
 
+    /* Step 8: Update the inverted index */
+    if (idx != NULL) inverted_add_doc(idx, hash, text);
+
     free(text);
 }
 
-static void ingest_directory(const char *dir, int depth) {
+void ingest_file(const char *path) {
+    InvertedIndex *idx = inverted_load();
+    ingest_file_impl(path, idx);
+    inverted_save(idx);
+    inverted_free(idx);
+}
+
+static void ingest_directory(const char *dir, int depth, InvertedIndex *idx) {
     if (depth > 8) return;
 #ifdef _WIN32
     char pattern[4096];
@@ -143,10 +156,10 @@ static void ingest_directory(const char *dir, int depth) {
         snprintf(child_path, sizeof(child_path), "%s\\%s", dir, fd.cFileName);
 
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            ingest_directory(child_path, depth + 1);
+            ingest_directory(child_path, depth + 1, idx);
         } else {
             if (get_file_type(child_path) != FILE_TYPE_UNKNOWN) {
-                ingest_file(child_path);
+                ingest_file_impl(child_path, idx);
             }
         }
     } while (FindNextFileA(h, &fd));
@@ -167,10 +180,10 @@ static void ingest_directory(const char *dir, int depth) {
         if (stat(child_path, &st) != 0) continue;
 
         if (S_ISDIR(st.st_mode)) {
-            ingest_directory(child_path, depth + 1);
+            ingest_directory(child_path, depth + 1, idx);
         } else if (S_ISREG(st.st_mode)) {
             if (get_file_type(child_path) != FILE_TYPE_UNKNOWN) {
-                ingest_file(child_path);
+                ingest_file_impl(child_path, idx);
             }
         }
     }
@@ -186,11 +199,16 @@ void ingest_path(const char *path) {
         return;
     }
 
+    InvertedIndex *idx = inverted_load();
+
     if (S_ISDIR(st.st_mode)) {
-        ingest_directory(path, 0);
+        ingest_directory(path, 0, idx);
     } else if (S_ISREG(st.st_mode)) {
-        ingest_file(path);
+        ingest_file_impl(path, idx);
     } else {
         fprintf(stderr, "error: unsupported path type: %s\n", path);
     }
+
+    inverted_save(idx);
+    inverted_free(idx);
 }
