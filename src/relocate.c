@@ -103,6 +103,43 @@ static void find_by_basename(const char *dir, const char *target_basename,
 #endif
 }
 
+/* Collects the deduplicated set of outermost git roots across all indexed
+   entries. Used as a fallback search space for files moved between repos. */
+static char **collect_distinct_repos(const IndexEntry *entries, int count, int *out_n) {
+    *out_n = 0;
+    if (count <= 0) return NULL;
+    char **roots = malloc((size_t)count * sizeof(char *));
+    if (roots == NULL) return NULL;
+
+    int n = 0;
+    for (int i = 0; i < count; i++) {
+        if (strcmp(entries[i].repository, "none") == 0) continue;
+
+        char widened[4096];
+        find_outermost_git_root(entries[i].repository, widened, sizeof(widened));
+        if (strcmp(widened, "none") == 0) continue;
+
+        int dup = 0;
+        for (int j = 0; j < n; j++) {
+            if (names_equal(roots[j], widened)) { dup = 1; break; }
+        }
+        if (dup) continue;
+
+        char *copy = malloc(strlen(widened) + 1);
+        if (copy == NULL) continue;
+        strcpy(copy, widened);
+        roots[n++] = copy;
+    }
+    *out_n = n;
+    return roots;
+}
+
+static void free_repos(char **roots, int n) {
+    if (roots == NULL) return;
+    for (int i = 0; i < n; i++) free(roots[i]);
+    free(roots);
+}
+
 void relocate_scan_all(void) {
     int count;
     IndexEntry *entries = index_get_entries(&count);
@@ -110,6 +147,11 @@ void relocate_scan_all(void) {
         free(entries);
         return;
     }
+
+    /* Pre-compute the fallback search space — all distinct widened git roots
+       in the index. Lets a file moved into a sibling repo still be found. */
+    int repo_count;
+    char **repos = collect_distinct_repos(entries, count, &repo_count);
 
     /* Iterate over our own snapshot — ingest_file and remove_entry_by_abs_path
        rewrite manifest.json under us. */
@@ -139,6 +181,17 @@ void relocate_scan_all(void) {
         find_by_basename(scan_root, target,
                          found_path, sizeof(found_path), &matches, 0);
 
+        /* Cross-repo fallback: only triggered when the file isn't in its own
+           repo at all. find_by_basename accumulates into matches/found_path,
+           so ambiguity across repos still correctly drops the entry. */
+        if (matches == 0) {
+            for (int r = 0; r < repo_count && matches < 2; r++) {
+                if (names_equal(repos[r], scan_root)) continue;
+                find_by_basename(repos[r], target,
+                                 found_path, sizeof(found_path), &matches, 0);
+            }
+        }
+
         if (matches == 1) {
             ingest_file(found_path);
             remove_entry_by_abs_path(entries[i].original_path);
@@ -147,5 +200,6 @@ void relocate_scan_all(void) {
         }
     }
 
+    free_repos(repos, repo_count);
     free(entries);
 }
