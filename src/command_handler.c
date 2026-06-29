@@ -24,6 +24,7 @@
 #include "config.h"
 #include "remove.h"
 #include "reindex.h"
+#include "relocate.h"
 #include "picker.h"
 #include "workspace.h"
 #include "app_resolve.h"
@@ -38,17 +39,19 @@ static void cmd_add(int argc, char *argv[]) {
     ingest_path(argv[2]);
 }
 
-/* Updates the index if a file has been modified or deleted. */
+/* Updates the index if a file has been modified, moved, or deleted. */
 static void update_files(void) {
+    /* Missing files: try to relocate within their repository; drop otherwise. */
+    relocate_scan_all();
+
     int count;
     IndexEntry *entries = index_get_entries(&count);
     if (entries == NULL) return;
 
     for (int i = 0; i < count; i++) {
         struct stat st;
-        if (stat(entries[i].original_path, &st) != 0)
-            remove_entry_by_abs_path(entries[i].original_path);
-        else if ((long)st.st_mtime > entries[i].last_modified)
+        if (stat(entries[i].original_path, &st) == 0 &&
+            (long)st.st_mtime > entries[i].last_modified)
             ingest_file(entries[i].original_path);
     }
 
