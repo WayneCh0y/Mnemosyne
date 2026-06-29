@@ -6,6 +6,7 @@
 
 #include "inverted.h"
 #include "config.h"
+#include "index.h"
 
 #define MAX_TOKEN_LEN 128
 
@@ -242,4 +243,150 @@ void inverted_free(InvertedIndex *idx) {
     }
     free(idx->doc_hashes);
     free(idx);
+}
+
+int inverted_exists(void) {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/index/inverted.bin", get_data_path());
+    FILE *f = fopen(path, "rb");
+    if (f == NULL) return 0;
+    fclose(f);
+    return 1;
+}
+
+/* Read the entire stored doc (docs/<hash>.txt) into a heap buffer. The doc
+   already starts with the [PATH]…[/PATH] header that ingest writes — we
+   tokenize that too, which is harmless (the path bytes become words in the
+   index, and the inverted lookup will find them just like content words). */
+static char *read_doc_text(const char *hash) {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/index/docs/%s.txt", get_data_path(), hash);
+    FILE *f = fopen(path, "rb");
+    if (f == NULL) return NULL;
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    rewind(f);
+    char *buf = malloc((size_t)size + 1);
+    if (buf == NULL) { fclose(f); return NULL; }
+    size_t nread = fread(buf, 1, (size_t)size, f);
+    buf[nread] = '\0';
+    fclose(f);
+    return buf;
+}
+
+void inverted_rebuild(void) {
+    InvertedIndex *idx = calloc(1, sizeof(InvertedIndex));
+    if (idx == NULL) return;
+
+    int count;
+    IndexEntry *entries = index_get_entries(&count);
+    if (entries != NULL) {
+        for (int i = 0; i < count; i++) {
+            char *text = read_doc_text(entries[i].hash);
+            if (text == NULL) continue;
+            inverted_add_doc(idx, entries[i].hash, text);
+            free(text);
+        }
+        free(entries);
+    }
+
+    inverted_save(idx);
+    inverted_free(idx);
+}
+
+/* Look up the WordEntry for an already-lowercased word. Returns NULL if
+   absent. Read-only counterpart of find_or_create_word. */
+static WordEntry *find_word(InvertedIndex *idx, const char *word) {
+    uint32_t b = hash_word(word) % BUCKET_COUNT;
+    for (WordEntry *e = idx->buckets[b]; e != NULL; e = e->next) {
+        if (strcmp(e->word, word) == 0) return e;
+    }
+    return NULL;
+}
+
+/* Context for collecting query tokens during the tokenize() callback. */
+typedef struct {
+    char     tokens[16][MAX_TOKEN_LEN + 1];
+    int      count;
+} QueryTokens;
+
+static void collect_token_cb(const char *word, uint32_t position, void *userdata) {
+    (void)position;
+    QueryTokens *qt = (QueryTokens *)userdata;
+    if (qt->count >= 16) return;  /* cap query length at 16 tokens */
+    strncpy(qt->tokens[qt->count], word, MAX_TOKEN_LEN);
+    qt->tokens[qt->count][MAX_TOKEN_LEN] = '\0';
+    qt->count++;
+}
+
+/* Does `e` have a hit at (doc_id, position)? Linear scan as postings lists
+   are short per doc. */
+static int has_hit_at(const WordEntry *e, uint32_t doc_id, uint32_t position) {
+    for (uint32_t i = 0; i < e->hit_count; i++) {
+        if (e->hits[i].doc_id == doc_id && e->hits[i].position == position) return 1;
+    }
+    return 0;
+}
+
+InvertedMatch *inverted_query(InvertedIndex *idx, const char *query, int *out_count) {
+    *out_count = 0;
+    if (idx == NULL || query == NULL) return NULL;
+
+    QueryTokens qt = {0};
+    tokenize(query, collect_token_cb, &qt);
+    if (qt.count == 0) return NULL;
+
+    /* Look up every token. If any is missing, no doc can match. */
+    WordEntry *entries[16];
+    for (int i = 0; i < qt.count; i++) {
+        entries[i] = find_word(idx, qt.tokens[i]);
+        if (entries[i] == NULL) return NULL;
+    }
+
+    /* Walk the first token's hits doc-by-doc. For each starting position,
+       verify token[k] also has a hit at (doc_id, pos+k). If yes, it's a
+       phrase occurrence. */
+    InvertedMatch *results = NULL;
+    int results_cap = 0;
+
+    WordEntry *first = entries[0];
+    for (uint32_t i = 0; i < first->hit_count; i++) {
+        uint32_t doc_id = first->hits[i].doc_id;
+        uint32_t pos    = first->hits[i].position;
+
+        int phrase_ok = 1;
+        for (int k = 1; k < qt.count; k++) {
+            if (!has_hit_at(entries[k], doc_id, pos + (uint32_t)k)) {
+                phrase_ok = 0;
+                break;
+            }
+        }
+        if (!phrase_ok) continue;
+
+        /* Find existing result for this doc, or append a new one. */
+        int found = -1;
+        for (int j = 0; j < *out_count; j++) {
+            if (strcmp(results[j].hash, idx->doc_hashes[doc_id]) == 0) {
+                found = j;
+                break;
+            }
+        }
+        if (found >= 0) {
+            results[found].match_count++;
+        } else {
+            if (*out_count == results_cap) {
+                int new_cap = results_cap ? results_cap * 2 : 8;
+                InvertedMatch *resized = realloc(results, (size_t)new_cap * sizeof(InvertedMatch));
+                if (resized == NULL) break;
+                results = resized;
+                results_cap = new_cap;
+            }
+            strncpy(results[*out_count].hash, idx->doc_hashes[doc_id], 64);
+            results[*out_count].hash[64] = '\0';
+            results[*out_count].match_count = 1;
+            (*out_count)++;
+        }
+    }
+
+    return results;
 }
