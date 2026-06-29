@@ -197,4 +197,6 @@ mn open
 
 Supported IDE keys: `code`, `cursor`, `nvim`, `vim`, `nano`, `idea`. See [Enabling GUI IDE launchers](#enabling-gui-ide-launchers) if `code`/`cursor`/`idea` aren't found on macOS.
 
+> **Moved files are tracked automatically.** When `mn search` or `mn reindex` notices an indexed file is no longer at its recorded path, it scans the file's git repo (and other indexed repos) for a file with the same name. A single match is re-indexed at its new location; zero or multiple matches drop the entry. Files not originally inside a git repo are dropped on first miss — re-add them with `mn add`.
+
 > After you open a file (`mn search` / `mn list`) or launch a workspace (`mn open`), Mnemosyne closes the terminal window it was launched from, leaving just the opened apps. Cancelling a picker with `Esc` opens nothing and leaves the terminal open. See the [Command Reference](documentation/commands.md) for full details.
