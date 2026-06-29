@@ -15,6 +15,7 @@
 #include "index.h"
 #include "inverted.h"
 #include "parser/parser.h"
+#include "parser/normalise.h"
 
 static FileType get_file_type(const char *path) {
     static const struct { const char *ext; FileType type; } map[] = {
@@ -112,21 +113,24 @@ static void ingest_file_impl(const char *path, InvertedIndex *idx) {
         return;
     }
 
-    /* Step 5: Hash the absolute path */
+    /* Step 5: Replace smart punctuation with ASCII so search queries match */
+    normalise_punctuation(text);
+
+    /* Step 6: Hash the absolute path */
     char hash[65];
     sha256_string(abs_path, hash);
 
-    /* Step 6: Write to docs/ */
+    /* Step 7: Write to docs/ */
     if (!write_to_docs(hash, abs_path, text)) {
         free(text);
         return;
     }
 
-    /* Step 7: Update manifest */
+    /* Step 8: Update manifest */
     const char *file_type = file_type_to_string(filetype);
     index_add(abs_path, hash, (long)st.st_size, (long)st.st_mtime, file_type);
 
-    /* Step 8: Update the inverted index */
+    /* Step 9: Update the inverted index */
     if (idx != NULL) inverted_add_doc(idx, hash, text);
 
     free(text);
