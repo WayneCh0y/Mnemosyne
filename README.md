@@ -14,9 +14,9 @@ Named after the Greek goddess of memory.
 
 ## Contents
 
+- [Install](#install)
 - [Documentation](#documentation)
-- [Building](#building)
-- [Installation](#installation)
+- [Building from source](#building-from-source)
   - [Linux](#linux)
   - [macOS](#macos)
   - [Windows](#windows)
@@ -25,6 +25,12 @@ Named after the Greek goddess of memory.
   - [Uninstalling](#uninstalling)
 - [Quick Start](#quick-start)
 
+## Install
+
+**Windows** — download `Mnemosyne-Setup-<version>.exe` from the [latest release](https://github.com/WayneCh0y/Mnemosyne/releases/latest) and run it. No admin rights needed, no separate PDF setup — poppler is bundled. The installer adds `mn` to your user `PATH`; open a new terminal afterwards.
+
+macOS and Linux installers aren't available yet — build from source below.
+
 ## Documentation
 
 - [System Architecture](documentation/structure.md) — component diagram, module descriptions, source and data layouts
@@ -32,7 +38,7 @@ Named after the Greek goddess of memory.
 - [Supported File Types](documentation/file-types.md) — `.txt`, `.md`, `.tex`, `.pdf` parsing details
 - [Roadmap](documentation/roadmap.md) — v1 direct match → v4 semantic search
 
-## Building
+## Building from source
 
 ```bash
 make        # build the binary
@@ -149,6 +155,10 @@ mingw32-make fetch-poppler POPPLER_VERSION=25.07.0-0
 > On Windows, `mn` resolves `pdftotext.exe` in this order: (1) next to `mn.exe`, (2) `poppler\bin\` next to `mn.exe`, (3) PATH. So you can also drop a manually-downloaded poppler folder in either location instead of using `fetch-poppler`.
 
 ### Uninstalling
+
+If you used the Windows installer, uninstall via **Settings → Apps → Mnemosyne** (or Add/Remove Programs) — this also removes it from PATH.
+
+If you built from source:
 ```bash
 sudo make uninstall          # Linux/macOS if installed to /usr/local/bin
 make uninstall               # Linux/macOS no-sudo install
