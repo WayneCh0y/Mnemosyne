@@ -5,6 +5,7 @@
 #include <time.h>
 
 #include "pdf.h"
+#include "theme.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -119,8 +120,8 @@ static char* read_file(const char *path) {
 char *parse_pdf(const char *path) {
     char exe[4096];
     if (find_pdftotext(exe, sizeof(exe)) != 0) {
+        ui_err("pdftotext not found.");
         fprintf(stderr,
-            "error: pdftotext not found.\n"
             "PDF support requires poppler-utils.\n"
 #ifdef _WIN32
             "Windows: drop pdftotext.exe (and its DLLs) next to mn.exe,\n"
@@ -137,7 +138,7 @@ char *parse_pdf(const char *path) {
     make_temp_path(temp_path, sizeof(temp_path));
 
     if (run_pdftotext(exe, path, temp_path) != 0) {
-        fprintf(stderr, "error: failed to run pdftotext on '%s'\n", path);
+        ui_err("failed to run pdftotext on '%s'", path);
         return NULL;
     }
 

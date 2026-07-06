@@ -4,6 +4,7 @@
 #include <sys/stat.h>
 
 #include "index.h"
+#include "theme.h"
 #include "config.h"
 #include "cJSON.h"
 
@@ -63,7 +64,7 @@ static cJSON *load_manifest(void) {
 
     FILE *f = fopen(manifest_path, "r");
     if (f == NULL) {
-        fprintf(stderr, "error: could not open manifest: %s\n", manifest_path);
+        ui_err("could not open manifest: %s", manifest_path);
         return NULL;
     }
     fseek(f, 0, SEEK_END);
@@ -78,7 +79,7 @@ static cJSON *load_manifest(void) {
     cJSON *root = cJSON_Parse(buf);
     free(buf);
     if (root == NULL) {
-        fprintf(stderr, "error: manifest.json is malformed\n");
+        ui_err("manifest.json is malformed");
         return NULL;
     }
     return root;
@@ -94,7 +95,7 @@ static int save_manifest(cJSON *root) {
 
     FILE *f = fopen(manifest_path, "w");
     if (f == NULL) {
-        fprintf(stderr, "error: could not write manifest\n");
+        ui_err("could not write manifest");
         free(output);
         return -1;
     }

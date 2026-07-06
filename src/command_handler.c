@@ -31,6 +31,7 @@
 #include "app_launch.h"
 #include "app_enum.h"
 #include "tokenizer.h"
+#include "theme.h"
 
 static int is_valid_add(int argc) { return argc == 3; }
 
@@ -217,7 +218,8 @@ static void cmd_search(int argc, char *argv[]) {
     SearchResult *results = search(query, raw_query, &count, is_case_sensitive);
 
     if (count == 0) {
-        printf("No results found.\n");
+        ui_info("No matches found.");
+        ui_hint("Try fewer or different words, or add -c for case-sensitive search.");
         free(results);
         return;
     }
@@ -264,7 +266,8 @@ static void cmd_list(int argc, char *argv[]) {
     int count;
     IndexEntry *entries = index_get_entries(&count);
     if (!entries || count == 0) {
-        printf("No files indexed yet.\n");
+        ui_info("No files indexed yet.");
+        ui_hint("Add one with: mn add <file>");
         free(entries);
         return;
     }
@@ -288,7 +291,8 @@ static void cmd_remove(int argc, char *argv[]) {
     int count;
     IndexEntry *entries = index_get_entries(&count);
     if (!entries || count == 0) {
-        printf("No files indexed yet.\n");
+        ui_info("No files indexed yet.");
+        ui_hint("Add one with: mn add <file>");
         free(entries);
         return;
     }
@@ -302,9 +306,9 @@ static void cmd_remove(int argc, char *argv[]) {
            underlying file has been deleted from disk. */
         int rc = remove_entry_by_abs_path(entries[chosen].original_path);
         if (rc == 1)
-            printf("Removed '%s' from the index.\n", entries[chosen].original_path);
+            ui_ok("Removed '%s' from the index.", entries[chosen].original_path);
         else if (rc == 0)
-            fprintf(stderr, "warning: '%s' was not indexed\n", entries[chosen].original_path);
+            ui_warn("'%s' was not indexed", entries[chosen].original_path);
         /* rc == -1: index_remove already printed the error */
     }
     free(entries);
@@ -330,19 +334,19 @@ static void cmd_config(int argc, char *argv[]) {
         printf(ANSI_CLEAR ANSI_RESET);
         if (chosen != -1) {
             if (set_ide(ide_list[chosen]) == 0) {
-                printf("Default IDE updated to: %s\n", ide_list[chosen]);
+                ui_ok("Default IDE updated to: %s", ide_list[chosen]);
             }
         }
     } else {
         if (set_ide(argv[3]) == 0) {
-            printf("Default IDE updated to: %s\n", argv[3]);
+            ui_ok("Default IDE updated to: %s", argv[3]);
         }
     }
 }
 
 static void launch_workspace(const Workspace *ws) {
-    printf("Opening '%s' (%d app%s)...\n",
-           ws->name, ws->entry_count, ws->entry_count == 1 ? "" : "s");
+    ui_info("Opening '%s' (%d app%s)...",
+            ws->name, ws->entry_count, ws->entry_count == 1 ? "" : "s");
 #ifdef _WIN32
     /* Each entry represents one app instance (one window). For UWP/IDEs, launch
        once per target. For browsers, all targets open as tabs in one window. */
@@ -375,7 +379,7 @@ static void launch_workspace(const Workspace *ws) {
             } else {
                 size_t cap = (size_t)tc * (WORKSPACE_TARGET_MAX + 4) + 16;
                 char *params = malloc(cap);
-                if (params == NULL) { fprintf(stderr, "error: out of memory\n"); continue; }
+                if (params == NULL) { ui_err("out of memory"); continue; }
                 int pos = snprintf(params, cap, "--new-window");
                 for (int k = 0; k < tc && pos < (int)cap - 1; k++)
                     pos += snprintf(params + pos, cap - pos,
@@ -388,7 +392,7 @@ static void launch_workspace(const Workspace *ws) {
                 sei.lpParameters = params;
                 sei.nShow        = SW_SHOWNORMAL;
                 if (!ShellExecuteExA(&sei))
-                    fprintf(stderr, "error: failed to launch '%s'\n", app);
+                    ui_err("failed to launch '%s'", app);
                 win_place_new(before, layout);
                 free(params);
             }
@@ -421,7 +425,7 @@ static void launch_workspace(const Workspace *ws) {
             /* GUI apps via 'open -a': pass all targets together (one window). */
             size_t cap = WORKSPACE_APP_MAX + (size_t)tc * (WORKSPACE_TARGET_MAX + 4) + 16;
             char *cmd = malloc(cap);
-            if (cmd == NULL) { fprintf(stderr, "error: out of memory\n"); continue; }
+            if (cmd == NULL) { ui_err("out of memory"); continue; }
             int pos = snprintf(cmd, cap, "open -a \"%s\"", app);
             for (int k = 0; k < tc && pos < (int)cap - 1; k++)
                 pos += snprintf(cmd + pos, cap - pos,
@@ -453,7 +457,7 @@ static void launch_workspace(const Workspace *ws) {
             /* GUI app: pass all targets in one invocation, backgrounded. */
             size_t cap = WORKSPACE_APP_MAX + (size_t)tc * (WORKSPACE_TARGET_MAX + 4) + 16;
             char *cmd = malloc(cap);
-            if (cmd == NULL) { fprintf(stderr, "error: out of memory\n"); continue; }
+            if (cmd == NULL) { ui_err("out of memory"); continue; }
             int pos = snprintf(cmd, cap, "\"%s\"", app);
             for (int k = 0; k < tc && pos < (int)cap - 1; k++)
                 pos += snprintf(cmd + pos, cap - pos,
@@ -472,7 +476,8 @@ static void cmd_open_run(void) {
     int count;
     Workspace *ws = workspace_load_all(&count);
     if (!ws || count == 0) {
-        printf("No workspaces yet. Create one with: mn open create <name>\n");
+        ui_info("No workspaces yet.");
+        ui_hint("Create one with: mn open create <name>");
         workspace_free_all(ws, count);
         return;
     }
@@ -486,11 +491,11 @@ static void cmd_open_run(void) {
 static void cmd_open_create(const char *name) {
     int rc = workspace_create(name);
     if (rc == 0)
-        printf("Workspace '%s' created.\n", name);
+        ui_ok("Workspace '%s' created.", name);
     else if (rc == -1)
-        fprintf(stderr, "error: workspace '%s' already exists\n", name);
+        ui_err("workspace '%s' already exists", name);
     else
-        fprintf(stderr, "error: failed to create workspace\n");
+        ui_err("failed to create workspace");
 }
 
 /* Frees the heap list each WsEditorApp owns, then the array (over full capacity;
@@ -514,7 +519,8 @@ static void cmd_open_edit(void) {
     int count;
     Workspace *ws = workspace_load_all(&count);
     if (!ws || count == 0) {
-        printf("No workspaces yet. Create one with: mn open create <name>\n");
+        ui_info("No workspaces yet.");
+        ui_hint("Create one with: mn open create <name>");
         workspace_free_all(ws, count);
         return;
     }
@@ -522,7 +528,7 @@ static void cmd_open_edit(void) {
     /* Step 1: pick workspace */
     int ws_idx = run_workspace_picker(ws, count, "Edit which workspace?", NULL);
     if (ws_idx == -1) {
-        printf(ANSI_CLEAR ANSI_RESET "Cancelled.\n");
+        printf(ANSI_CLEAR ANSI_RESET); ui_info("Cancelled.");
         workspace_free_all(ws, count);
         return;
     }
@@ -531,7 +537,7 @@ static void cmd_open_edit(void) {
        calloc zeroes every slot, so unused link lists start as {NULL,0,0}. */
     WsEditorApp *editor_apps = calloc(WORKSPACE_ENTRIES_MAX, sizeof(WsEditorApp));
     if (!editor_apps) {
-        fprintf(stderr, "error: out of memory\n");
+        ui_err("out of memory");
         workspace_free_all(ws, count);
         return;
     }
@@ -570,7 +576,7 @@ static void cmd_open_edit(void) {
                                               WORKSPACE_ENTRIES_MAX, &delete_ws);
     free(taken_names);
     if (!confirmed) {
-        printf(ANSI_CLEAR ANSI_RESET "Cancelled.\n");
+        printf(ANSI_CLEAR ANSI_RESET); ui_info("Cancelled.");
         free_editor_apps(editor_apps, WORKSPACE_ENTRIES_MAX);
         workspace_free_all(ws, count);
         return;
@@ -582,9 +588,9 @@ static void cmd_open_edit(void) {
     if (delete_ws) {
         int rc = workspace_remove(ws_name);
         if (rc == 0)
-            printf("Workspace '%s' removed.\n", ws_name);
+            ui_ok("Workspace '%s' removed.", ws_name);
         else
-            fprintf(stderr, "error: failed to remove workspace '%s'\n", ws_name);
+            ui_err("failed to remove workspace '%s'", ws_name);
         free_editor_apps(editor_apps, WORKSPACE_ENTRIES_MAX);
         workspace_free_all(ws, count);
         return;
@@ -621,9 +627,9 @@ static void cmd_open_edit(void) {
     w->entry_count = ec;
 
     if (workspace_save_all(ws, count) == 0)
-        printf("Saved workspace '%s'.\n", ws_name);
+        ui_ok("Saved workspace '%s'.", ws_name);
     else
-        fprintf(stderr, "error: failed to save workspace '%s'\n", ws_name);
+        ui_err("failed to save workspace '%s'", ws_name);
 
     free_editor_apps(editor_apps, WORKSPACE_ENTRIES_MAX);
     workspace_free_all(ws, count);
@@ -634,14 +640,14 @@ static void cmd_open_snap(void) {
     int n = app_enum_running(apps, WORKSPACE_ENTRIES_MAX);
     if (n < 0) {
 #ifdef __linux__
-        fprintf(stderr, "error: snapshot needs 'wmctrl' — install it via your package manager\n");
+        ui_err("snapshot needs 'wmctrl' — install it via your package manager");
 #else
-        fprintf(stderr, "error: failed to read running apps on this platform\n");
+        ui_err("failed to read running apps on this platform");
 #endif
         return;
     }
     if (n == 0) {
-        printf("No running apps detected.\n");
+        ui_info("No running apps detected.");
         return;
     }
 
@@ -650,7 +656,7 @@ static void cmd_open_snap(void) {
     int selected[WORKSPACE_ENTRIES_MAX];
     AppLinks *links = calloc(n, sizeof(AppLinks));
     if (links == NULL) {
-        fprintf(stderr, "error: out of memory\n");
+        ui_err("out of memory");
         return;
     }
     for (int i = 0; i < n; i++) {
@@ -672,21 +678,21 @@ static void cmd_open_snap(void) {
             if (!run_multiselect_picker("Snapshot running apps",
                                         "Pick apps; press any key on a green app to add a link.",
                                         labels, n, selected, links)) {
-                printf(ANSI_CLEAR ANSI_RESET "Cancelled.\n");
+                printf(ANSI_CLEAR ANSI_RESET); ui_info("Cancelled.");
                 free_app_links(links, n);
                 return;
             }
             int any = 0;
             for (int i = 0; i < n; i++) any += selected[i];
             if (!any) {
-                printf(ANSI_CLEAR ANSI_RESET "Nothing selected.\n");
+                printf(ANSI_CLEAR ANSI_RESET); ui_info("Nothing selected.");
                 free_app_links(links, n);
                 return;
             }
             state = SNAP_NAME;
         } else { /* SNAP_NAME */
             const char *subtitle = name_taken
-                ? "\033[33mthat name already exists — pick another.\033[0m"
+                ? TH_WARN "that name already exists — pick another." TH_RESET
                 : "Name for the new workspace.";
             if (!run_text_input("Snapshot workspace", subtitle, "Name",
                                 name, sizeof(name), 0, NULL)) {
@@ -698,7 +704,7 @@ static void cmd_open_snap(void) {
             if (rc == -1) { name_taken = 1; continue; }   /* exists → re-prompt */
             if (rc != 0) {
                 printf(ANSI_CLEAR ANSI_RESET);
-                fprintf(stderr, "error: failed to create workspace\n");
+                ui_err("failed to create workspace");
                 free_app_links(links, n);
                 return;
             }
@@ -721,8 +727,8 @@ static void cmd_open_snap(void) {
     }
     free_app_links(links, n);
     printf(ANSI_CLEAR ANSI_RESET);
-    printf("Created workspace '%s' with %d app%s.\n",
-           name, added, added == 1 ? "" : "s");
+    ui_ok("Created workspace '%s' with %d app%s.",
+          name, added, added == 1 ? "" : "s");
 }
 
 static void cmd_open(int argc, char *argv[]) {

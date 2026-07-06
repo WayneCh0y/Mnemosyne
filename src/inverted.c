@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "inverted.h"
+#include "theme.h"
 #include "config.h"
 #include "index.h"
 
@@ -141,7 +142,7 @@ InvertedIndex *inverted_load(void) {
         || fread(&doc_count,  sizeof(uint32_t), 1, f) != 1
         || fread(&word_count, sizeof(uint32_t), 1, f) != 1) {
         fclose(f);
-        fprintf(stderr, "warning: inverted.bin is corrupt or unrecognized; starting empty\n");
+        ui_warn("inverted.bin is corrupt or unrecognized; starting empty");
         return idx;
     }
 
@@ -199,7 +200,7 @@ void inverted_save(InvertedIndex *idx) {
 
     FILE *f = fopen(path, "wb");
     if (f == NULL) {
-        fprintf(stderr, "error: could not write inverted index: %s\n", path);
+        ui_err("could not write inverted index: %s", path);
         return;
     }
 

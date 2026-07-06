@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "workspace.h"
+#include "theme.h"
 #include "config.h"
 #include "cJSON.h"
 
@@ -53,7 +54,7 @@ static cJSON *load_ws_json(void) {
     workspace_path(path, sizeof(path));
     FILE *f = fopen(path, "r");
     if (f == NULL) {
-        fprintf(stderr, "error: could not open workspaces file: %s\n", path);
+        ui_err("could not open workspaces file: %s", path);
         return NULL;
     }
     fseek(f, 0, SEEK_END);
@@ -67,7 +68,7 @@ static cJSON *load_ws_json(void) {
     cJSON *root = cJSON_Parse(buf);
     free(buf);
     if (root == NULL) {
-        fprintf(stderr, "error: workspaces.json is malformed\n");
+        ui_err("workspaces.json is malformed");
         return NULL;
     }
     return root;
@@ -80,7 +81,7 @@ static int save_ws_json(cJSON *root) {
     if (output == NULL) return -1;
     FILE *f = fopen(path, "w");
     if (f == NULL) {
-        fprintf(stderr, "error: could not write workspaces file\n");
+        ui_err("could not write workspaces file");
         free(output);
         return -1;
     }

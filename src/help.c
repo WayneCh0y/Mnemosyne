@@ -1,50 +1,60 @@
 #include <stdio.h>
 #include "help.h"
+#include "theme.h"
 
-#define BOLD   "\033[1m"
-#define DIM    "\033[2m"
-#define CYAN   "\033[36m"
-#define GOLD   "\033[38;2;212;175;55m"
-#define SILVER "\033[38;2;192;192;192m"
-#define RESET  "\033[0m"
+/* Colour is chosen once at runtime: on a TTY the shared palette is used,
+   otherwise every code collapses to "" so piped/redirected help stays clean. */
+struct pal { const char *bold, *dim, *cyan, *gold, *silver, *reset; };
+
+static struct pal palette(void) {
+    if (th_color_for(stdout))
+        return (struct pal){ TH_BOLD, TH_DIM, TH_CYAN, TH_GOLD, TH_SILVER, TH_RESET };
+    return (struct pal){ "", "", "", "", "", "" };
+}
 
 static void print_section(const char *title) {
-    printf(DIM "─────────────────────────────────────────────────" RESET "\n");
-    printf(BOLD CYAN "%s" RESET "\n", title);
+    struct pal p = palette();
+    printf("%s─────────────────────────────────────────────────%s\n", p.dim, p.reset);
+    printf("%s%s%s%s\n", p.bold, p.cyan, title, p.reset);
 }
 
 void print_help(void) {
-    printf(SILVER "╭─────────────────────────────────────────────╮" RESET "\n");
-    printf(SILVER "│" RESET "   " BOLD GOLD "Mnemosyne" RESET "                                 " SILVER "│" RESET "\n");
-    printf(SILVER "│" RESET "   " DIM "personal file search & recall" RESET "             " SILVER "│" RESET "\n");
-    printf(SILVER "╰─────────────────────────────────────────────╯" RESET "\n");
-    printf(DIM "Search, browse, and launch files from anywhere." RESET "\n\n");
+    struct pal p = palette();
+
+    printf("%s╭─────────────────────────────────────────────╮%s\n", p.silver, p.reset);
+    printf("%s│%s   %s%sMnemosyne%s                                 %s│%s\n",
+           p.silver, p.reset, p.bold, p.gold, p.reset, p.silver, p.reset);
+    printf("%s│%s   %spersonal file search & recall%s             %s│%s\n",
+           p.silver, p.reset, p.dim, p.reset, p.silver, p.reset);
+    printf("%s╰─────────────────────────────────────────────╯%s\n", p.silver, p.reset);
+    printf("%sSearch, browse, and launch files from anywhere.%s\n\n", p.dim, p.reset);
 
     print_section("USAGE");
-    printf("  mn " CYAN "<command>" RESET " [arguments]\n\n");
+    printf("  mn %s<command>%s [arguments]\n\n", p.cyan, p.reset);
 
     print_section("COMMANDS");
-    printf("  " CYAN "add" RESET "        Index a file (.txt .md .tex .pdf)\n");
-    printf("  " CYAN "search" RESET "     Search indexed files (add " CYAN "-c" RESET " for case-sensitive)\n");
-    printf("  " CYAN "list" RESET "       Browse all indexed files\n");
-    printf("  " CYAN "remove" RESET "     Remove a file from the index (picker)\n");
-    printf("  " CYAN "reindex" RESET "    Re-parse every indexed file from disk\n");
-    printf("  " CYAN "open" RESET "       Open a workspace (launch apps)\n");
-    printf("  " CYAN "config ide" RESET " Set the default IDE\n\n");
+    printf("  %sadd%s        Index a file (.txt .md .tex .pdf)\n", p.cyan, p.reset);
+    printf("  %ssearch%s     Search indexed files (add %s-c%s for case-sensitive)\n",
+           p.cyan, p.reset, p.cyan, p.reset);
+    printf("  %slist%s       Browse all indexed files\n", p.cyan, p.reset);
+    printf("  %sremove%s     Remove a file from the index (picker)\n", p.cyan, p.reset);
+    printf("  %sreindex%s    Re-parse every indexed file from disk\n", p.cyan, p.reset);
+    printf("  %sopen%s       Open a workspace (launch apps)\n", p.cyan, p.reset);
+    printf("  %sconfig ide%s Set the default IDE\n\n", p.cyan, p.reset);
 
     print_section("WORKSPACES");
-    printf(DIM "  Named sets of apps / URLs to launch together." RESET "\n");
-    printf("  mn " CYAN "open" RESET "                        Interactive picker\n");
-    printf("  mn " CYAN "open create" RESET " <name>          Create a workspace\n");
-    printf("  mn " CYAN "open snap" RESET "                   Snapshot running apps into a workspace\n");
-    printf("  mn " CYAN "open edit" RESET "                   Edit a workspace: add/remove apps & links (picker)\n\n");
+    printf("%s  Named sets of apps / URLs to launch together.%s\n", p.dim, p.reset);
+    printf("  mn %sopen%s                        Interactive picker\n", p.cyan, p.reset);
+    printf("  mn %sopen create%s <name>          Create a workspace\n", p.cyan, p.reset);
+    printf("  mn %sopen snap%s                   Snapshot running apps into a workspace\n", p.cyan, p.reset);
+    printf("  mn %sopen edit%s                   Edit a workspace: add/remove apps & links (picker)\n\n", p.cyan, p.reset);
 
     print_section("EXAMPLES");
-    printf("  mn " CYAN "add" RESET " notes.txt\n");
-    printf("  mn " CYAN "search" RESET " \"simplex algorithm\"\n");
-    printf("  mn " CYAN "open create" RESET " work\n");
-    printf("  mn " CYAN "open snap" RESET "\n");
-    printf("  mn " CYAN "open edit" RESET "\n");
-    printf("  mn " CYAN "open\n" RESET);
-    printf("  mn " CYAN "config" RESET " ide\n");
+    printf("  mn %sadd%s notes.txt\n", p.cyan, p.reset);
+    printf("  mn %ssearch%s \"simplex algorithm\"\n", p.cyan, p.reset);
+    printf("  mn %sopen create%s work\n", p.cyan, p.reset);
+    printf("  mn %sopen snap%s\n", p.cyan, p.reset);
+    printf("  mn %sopen edit%s\n", p.cyan, p.reset);
+    printf("  mn %sopen%s\n", p.cyan, p.reset);
+    printf("  mn %sconfig%s ide\n", p.cyan, p.reset);
 }

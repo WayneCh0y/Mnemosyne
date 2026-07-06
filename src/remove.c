@@ -4,6 +4,7 @@
 #include <sys/stat.h>
 
 #include "remove.h"
+#include "theme.h"
 #include "config.h"
 #include "sha256.h"
 #include "index.h"
@@ -28,12 +29,12 @@ void remove_file(const char *path) {
     /* Step 1: Obtain absolute path */
 #ifdef _WIN32
     if (_fullpath(abs_path, path, sizeof(abs_path)) == NULL) {
-        fprintf(stderr, "error: could not resolve absolute path for: %s\n", path);
+        ui_err("could not resolve absolute path for: %s", path);
         return;
     }
 #else
     if (realpath(path, abs_path) == NULL) {
-        fprintf(stderr, "error: could not resolve absolute path for: %s\n", path);
+        ui_err("could not resolve absolute path for: %s", path);
         return;
     }
 #endif
@@ -41,7 +42,7 @@ void remove_file(const char *path) {
     /* Steps 2-4: Hash, remove from index, remove doc */
     int rc = remove_entry_by_abs_path(abs_path);
     if (rc == 0) {
-        fprintf(stderr, "warning: %s was not indexed\n", abs_path);
+        ui_warn("%s was not indexed", abs_path);
     }
     /* rc == -1: index_remove already printed the error */
 
@@ -53,12 +54,12 @@ void remove_folder(const char *path) {
 
 #ifdef _WIN32
     if (_fullpath(abs_folder, path, sizeof(abs_folder)) == NULL) {
-        fprintf(stderr, "error: could not resolve absolute path for: %s\n", path);
+        ui_err("could not resolve absolute path for: %s", path);
         return;
     }
 #else
     if (realpath(path, abs_folder) == NULL) {
-        fprintf(stderr, "error: could not resolve absolute path for: %s\n", path);
+        ui_err("could not resolve absolute path for: %s", path);
         return;
     }
 #endif

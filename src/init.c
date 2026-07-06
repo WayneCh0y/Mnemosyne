@@ -21,11 +21,13 @@
 #include "init.h"
 #include "config.h"
 #include "picker.h"
+#include "theme.h"
 
-#define BOLD    "\033[1m"
-#define CYAN    "\033[36m"
-#define YELLOW  "\033[1;33m"
-#define RESET   "\033[0m"
+/* Local aliases onto the shared palette (see theme.h). */
+#define BOLD    TH_BOLD
+#define CYAN    TH_CYAN
+#define GOLD    TH_GOLD
+#define RESET   TH_RESET
 
 static const char *get_home(void) {
 #ifdef _WIN32
@@ -99,7 +101,7 @@ static int first_time_setup(void) {
 
     snprintf(default_path, sizeof(default_path), "%s/.mnemosyne", home);
 
-    printf(YELLOW "Welcome to Mnemosyne!\n" RESET);
+    printf(BOLD GOLD "Welcome to Mnemosyne!\n" RESET);
     printf("This looks like your first time running the program.\n\n");
     printf("Where would you like to store your data?\n");
 
@@ -110,13 +112,12 @@ static int first_time_setup(void) {
         read_with_default(chosen_path, sizeof(chosen_path), default_path);
 
         if (!is_valid_path(chosen_path)) {
-            fprintf(stderr, "error: please enter an absolute path");
 #ifdef _WIN32
-            fprintf(stderr, " (e.g. C:\\Users\\Wayne\\notes)");
+            ui_err("please enter an absolute path (e.g. C:\\Users\\Wayne\\notes)");
 #else
-            fprintf(stderr, " (e.g. /home/user/notes)");
+            ui_err("please enter an absolute path (e.g. /home/user/notes)");
 #endif
-            fprintf(stderr, "\n\n");
+            fprintf(stderr, "\n");
             continue;
         }
 
@@ -127,7 +128,7 @@ static int first_time_setup(void) {
             break;
         }
 
-        fprintf(stderr, "error: could not create directory: %s\n", chosen_path);
+        ui_err("could not create directory: %s", chosen_path);
         fprintf(stderr, "Please enter a valid path.\n\n");
     }
 
@@ -143,7 +144,8 @@ static int first_time_setup(void) {
     printf(ANSI_CLEAR ANSI_RESET);
     printf("Using %s as your default IDE.\n\n", ide_list[chosen]);
 
-    printf(BOLD "Setup complete.\n\n" RESET);
+    ui_ok("Setup complete.");
+    printf("\n");
     return 0;
 }
 
@@ -164,10 +166,10 @@ void check_init(void) {
         return;
     }
 
-    fprintf(stderr, "warning: config incomplete or storage missing, re-running setup.\n");
+    ui_warn("config incomplete or storage missing, re-running setup.");
 
     if (first_time_setup() != 0) {
-        fprintf(stderr, "Setup failed. Exiting.\n");
+        ui_err("setup failed. Exiting.");
         exit(1);
     }
 }

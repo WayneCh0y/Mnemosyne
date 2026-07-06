@@ -16,6 +16,7 @@
 #include "inverted.h"
 #include "parser/parser.h"
 #include "parser/normalise.h"
+#include "theme.h"
 
 static FileType get_file_type(const char *path) {
     static const struct { const char *ext; FileType type; } map[] = {
@@ -53,7 +54,7 @@ static int write_to_docs(const char *hash, const char *abs_path, const char *tex
 
     FILE *f = fopen(doc_path, "wb");
     if (f == NULL) {
-        fprintf(stderr, "error: could not write to index: %s\n", doc_path);
+        ui_err("could not write to index: %s", doc_path);
         return 0;
     }
 
@@ -70,47 +71,48 @@ static int write_to_docs(const char *hash, const char *abs_path, const char *tex
 }
 
 /* Inner ingest: caller owns load/save of `idx`. If `idx` is NULL the inverted
-   index isn't updated (used by callers that don't want to touch it here). */
-static void ingest_file_impl(const char *path, InvertedIndex *idx) {
+   index isn't updated (used by callers that don't want to touch it here).
+   Returns 1 on success, 0 on failure (so callers can report/tally). */
+static int ingest_file_impl(const char *path, InvertedIndex *idx) {
     char abs_path[4096];
 
     /* Step 1: Obtain absolute path */
 #ifdef _WIN32
     if (_fullpath(abs_path, path, sizeof(abs_path)) == NULL) {
-        fprintf(stderr, "error: could not resolve path: %s\n", path);
-        return;
+        ui_err("could not resolve path: %s", path);
+        return 0;
     }
 #else
     if (realpath(path, abs_path) == NULL) {
-        fprintf(stderr, "error: could not resolve path: %s\n", path);
-        return;
+        ui_err("could not resolve path: %s", path);
+        return 0;
     }
 #endif
 
     /* Step 2: Check if file exists */
     struct stat st;
     if (stat(abs_path, &st) != 0) {
-        fprintf(stderr, "error: file not found: %s\n", abs_path);
-        return;
+        ui_err("file not found: %s", abs_path);
+        return 0;
     }
 
     /* Step 3: Check if file type is supported */
     FileType filetype = get_file_type(abs_path);
     if (filetype == FILE_TYPE_UNKNOWN) {
-        fprintf(stderr, "error: unsupported file type");
-        return;
+        ui_err("unsupported file type: %s", abs_path);
+        return 0;
     }
 
     /* Step 4: Parse file */
     char *text = parse_file(abs_path, filetype);
     if (text == NULL) {
-        fprintf(stderr, "error: failed to parse file: %s\n", abs_path);
-        return;
+        ui_err("failed to parse file: %s", abs_path);
+        return 0;
     }
     if (text[0] == '\0') {
-        fprintf(stderr, "error: file is empty: %s\n", abs_path);
+        ui_err("file is empty: %s", abs_path);
         free(text);
-        return;
+        return 0;
     }
 
     /* Step 5: Replace smart punctuation with ASCII so search queries match */
@@ -123,7 +125,7 @@ static void ingest_file_impl(const char *path, InvertedIndex *idx) {
     /* Step 7: Write to docs/ */
     if (!write_to_docs(hash, abs_path, text)) {
         free(text);
-        return;
+        return 0;
     }
 
     /* Step 8: Update manifest */
@@ -134,6 +136,7 @@ static void ingest_file_impl(const char *path, InvertedIndex *idx) {
     if (idx != NULL) inverted_add_doc(idx, hash, text);
 
     free(text);
+    return 1;
 }
 
 void ingest_file(const char *path) {
@@ -143,15 +146,17 @@ void ingest_file(const char *path) {
     inverted_free(idx);
 }
 
-static void ingest_directory(const char *dir, int depth, InvertedIndex *idx) {
-    if (depth > 8) return;
+/* Recursively ingests every supported file under `dir`; returns the count added. */
+static int ingest_directory(const char *dir, int depth, InvertedIndex *idx) {
+    if (depth > 8) return 0;
+    int added = 0;
 #ifdef _WIN32
     char pattern[4096];
     snprintf(pattern, sizeof(pattern), "%s\\*", dir);
 
     WIN32_FIND_DATAA fd;
     HANDLE h = FindFirstFileA(pattern, &fd);
-    if (h == INVALID_HANDLE_VALUE) return;
+    if (h == INVALID_HANDLE_VALUE) return added;
 
     do {
         if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0) continue;
@@ -160,10 +165,10 @@ static void ingest_directory(const char *dir, int depth, InvertedIndex *idx) {
         snprintf(child_path, sizeof(child_path), "%s\\%s", dir, fd.cFileName);
 
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            ingest_directory(child_path, depth + 1, idx);
+            added += ingest_directory(child_path, depth + 1, idx);
         } else {
             if (get_file_type(child_path) != FILE_TYPE_UNKNOWN) {
-                ingest_file_impl(child_path, idx);
+                added += ingest_file_impl(child_path, idx);
             }
         }
     } while (FindNextFileA(h, &fd));
@@ -171,7 +176,7 @@ static void ingest_directory(const char *dir, int depth, InvertedIndex *idx) {
     FindClose(h);
 #else
     DIR *d = opendir(dir);
-    if (d == NULL) return;
+    if (d == NULL) return added;
 
     struct dirent *entry;
     while ((entry = readdir(d)) != NULL) {
@@ -184,33 +189,39 @@ static void ingest_directory(const char *dir, int depth, InvertedIndex *idx) {
         if (stat(child_path, &st) != 0) continue;
 
         if (S_ISDIR(st.st_mode)) {
-            ingest_directory(child_path, depth + 1, idx);
+            added += ingest_directory(child_path, depth + 1, idx);
         } else if (S_ISREG(st.st_mode)) {
             if (get_file_type(child_path) != FILE_TYPE_UNKNOWN) {
-                ingest_file_impl(child_path, idx);
+                added += ingest_file_impl(child_path, idx);
             }
         }
     }
 
     closedir(d);
 #endif
+    return added;
 }
 
 void ingest_path(const char *path) {
     struct stat st;
     if (stat(path, &st) != 0) {
-        fprintf(stderr, "error: path not found: %s\n", path);
+        ui_err("path not found: %s", path);
         return;
     }
 
     InvertedIndex *idx = inverted_load();
 
     if (S_ISDIR(st.st_mode)) {
-        ingest_directory(path, 0, idx);
+        int added = ingest_directory(path, 0, idx);
+        if (added > 0)
+            ui_ok("Indexed %d file%s from '%s'.", added, added == 1 ? "" : "s", path);
+        else
+            ui_info("No supported files found in '%s'.", path);
     } else if (S_ISREG(st.st_mode)) {
-        ingest_file_impl(path, idx);
+        if (ingest_file_impl(path, idx))
+            ui_ok("Added '%s' to the index.", path);
     } else {
-        fprintf(stderr, "error: unsupported path type: %s\n", path);
+        ui_err("unsupported path type: %s", path);
     }
 
     inverted_save(idx);

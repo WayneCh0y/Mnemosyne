@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "config.h"
+#include "theme.h"
 
 static char data_path[1024];
 static char conf_path[1024];
@@ -44,7 +45,7 @@ static int write_config(void) {
     ensure_conf_path();
     FILE *conf = fopen(conf_path, "w");
     if (conf == NULL) {
-        fprintf(stderr, "error: could not write config file: %s\n", conf_path);
+        ui_err("could not write config file: %s", conf_path);
         return -1;
     }
     fprintf(conf, "%s\n", data_path);
@@ -92,7 +93,7 @@ static int is_ide_installed(const char *ide) {
 
 int set_ide(const char *new_ide) {
     if (!is_valid_ide(new_ide)) {
-        fprintf(stderr, "error: invalid IDE. Supported options are:\n");
+        ui_err("invalid IDE. Supported options are:");
         for (size_t i = 0; i < sizeof(ide_list) / sizeof(ide_list[0]); i++) {
             fprintf(stderr, "  - %s\n", ide_list[i]);
         }
@@ -100,7 +101,7 @@ int set_ide(const char *new_ide) {
     }
 
     if (!is_ide_installed(new_ide)) {
-        fprintf(stderr, "error: IDE '%s' is not installed or not in PATH.\n", new_ide);
+        ui_err("IDE '%s' is not installed or not in PATH.", new_ide);
         fprintf(stderr, "See the README section 'Enabling GUI IDE launchers' for setup help.\n");
         return -1;
     }

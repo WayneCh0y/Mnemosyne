@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "app_launch.h"
+#include "theme.h"
 #include "app_resolve.h"
 #include "workspace.h"
 
@@ -294,7 +295,7 @@ static void launch_url_win(const char *url) {
     sei.lpFile = url;
     sei.nShow  = SW_SHOWNORMAL;
     if (!ShellExecuteExA(&sei))
-        fprintf(stderr, "error: failed to open '%s'\n", url);
+        ui_err("failed to open '%s'", url);
 }
 
 /* Launches an app + optional target on Windows.
@@ -315,7 +316,7 @@ static void launch_app_win(const char *app, const char *target, const char *layo
         sei.lpParameters = params;
         sei.nShow        = SW_SHOWNORMAL;
         if (!ShellExecuteExA(&sei))
-            fprintf(stderr, "error: failed to launch '%s'\n", app);
+            ui_err("failed to launch '%s'", app);
         (void)target;
     } else if (is_new_window_app(app)) {
         char cmd_params[WORKSPACE_APP_MAX + WORKSPACE_TARGET_MAX + 64];
@@ -332,7 +333,7 @@ static void launch_app_win(const char *app, const char *target, const char *layo
         sei.lpParameters = cmd_params;
         sei.nShow        = SW_HIDE;
         if (!ShellExecuteExA(&sei))
-            fprintf(stderr, "error: failed to launch '%s'\n", app);
+            ui_err("failed to launch '%s'", app);
     } else {
         char params[WORKSPACE_TARGET_MAX + 4];
         params[0] = '\0';
@@ -346,7 +347,7 @@ static void launch_app_win(const char *app, const char *target, const char *layo
         sei.lpParameters = params[0] ? params : NULL;
         sei.nShow        = SW_SHOWNORMAL;
         if (!ShellExecuteExA(&sei))
-            fprintf(stderr, "error: failed to launch '%s'\n", app);
+            ui_err("failed to launch '%s'", app);
     }
 
     win_place_new(before, layout);   /* move the new window into its partition */
@@ -537,7 +538,7 @@ void open_with_default_app(const char *path) {
     sei.lpFile = path;
     sei.nShow  = SW_SHOWNORMAL;
     if (!ShellExecuteExA(&sei))
-        fprintf(stderr, "error: failed to open '%s'\n", path);
+        ui_err("failed to open '%s'", path);
 #elif defined(__APPLE__)
     char cmd[WORKSPACE_TARGET_MAX + 16];
     snprintf(cmd, sizeof(cmd), "open \"%s\"", path);
