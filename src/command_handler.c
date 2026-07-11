@@ -552,6 +552,8 @@ static void cmd_open_edit(void) {
         ws_display_name(src->app, e->display, sizeof(e->display));
         strncpy(e->layout, src->layout, sizeof(e->layout) - 1);
         e->layout[sizeof(e->layout) - 1] = '\0';
+        /* remember the stored placement so the editor can show it as changed */
+        memcpy(e->orig_layout, e->layout, sizeof(e->orig_layout));
         for (int k = 0; k < src->target_count; k++)
             editlink_push(&e->links, src->targets[k], src->targets[k], k);
     }
