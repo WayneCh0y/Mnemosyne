@@ -30,6 +30,7 @@ SRCS = src/main.c \
        src/help.c \
        src/command_handler.c \
        src/picker.c \
+       src/pathcomp.c \
        src/init.c \
        src/config.c \
        src/sha256.c \

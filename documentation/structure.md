@@ -94,6 +94,13 @@ It also implements the per-platform app/IDE launch logic and `close_terminal()`,
 ### `picker.c` — Interactive Terminal Pickers
 The interactive pickers (ANSI rendering, raw-mode arrow-key input, `1`–`9` numeric jump) shared across the app: `run_search_picker`, `run_list_picker`, `run_workspace_picker`, `run_ide_picker`, `run_multiselect_picker`, and `run_workspace_edit_picker`.
 
+Every text field that accepts a filesystem path (new app, add link, edit link) wraps a `PathSuggest`: it feeds each keypress to the completion dropdown before its own handling, so `↑`/`↓` move the highlight, `Tab` completes it, and `Esc` closes the list without leaving the field. `Enter` only accepts a suggestion once the highlight has been moved by hand — otherwise it submits what was typed, so a path that happens to prefix-match something is never hijacked on the way out. See `pathcomp.c` for the scanning itself.
+
+### `pathcomp.c` — Path Completion
+Backs the completion dropdown in every workspace field that takes a filesystem path. `pathcomp_update()` splits the typed buffer at its last separator, expands a leading `~`, lists that directory (`FindFirstFileA` on Windows, `dirent` elsewhere), and returns the children whose names start with the final segment — directories first, then files, case-insensitively, capped at 32. It yields nothing when the buffer has no separator or looks like a URL, so bare app names (`code`) and links (`https://…`) are left alone. `pathcomp_apply()` writes the chosen suggestion back into the caller's edit buffer, appending the separator for a directory so the next update lists its children.
+
+The engine is stateless between keystrokes; `picker.c` owns the highlight, the dismissal state, and the rendering.
+
 ### `workspace.c` — Workspace Store
 Reads and writes `workspaces.json` (via `cJSON`). A workspace is a named list of entries, each an `app` (either `code`/`cursor`, or a full path to an executable) plus optional `targets` (URLs or file paths). Functions: `workspace_create()`, `workspace_add_entry()`, `workspace_add_entry_with_targets()`, `workspace_remove()`, `workspace_load_all()`, `workspace_save_all()`.
 
@@ -189,6 +196,8 @@ Mnemosyne/
 │   ├── help.h
 │   ├── picker.c
 │   ├── picker.h
+│   ├── pathcomp.c
+│   ├── pathcomp.h
 │   ├── workspace.c
 │   ├── workspace.h
 │   ├── types.h
