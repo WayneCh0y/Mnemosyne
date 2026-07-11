@@ -38,10 +38,16 @@ int read_key(void) {
     raw.c_iflag &= ~ICRNL;
     raw.c_cc[VMIN] = 1;
     raw.c_cc[VTIME] = 0;
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+    /* TCSANOW, never TCSAFLUSH: a paste arrives as one burst of bytes, and
+       flushing here would drop every byte after the one we return. */
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
 
     char c;
-    read(STDIN_FILENO, &c, 1);
+    if (read(STDIN_FILENO, &c, 1) != 1) {
+        /* EOF or error — treat as Esc so the picker unwinds instead of spinning. */
+        tcsetattr(STDIN_FILENO, TCSANOW, &orig);
+        return KEY_ESC;
+    }
 
     int result = (int)(unsigned char)c;
     if (c == '\033') {
@@ -49,9 +55,8 @@ int read_key(void) {
         raw.c_cc[VTIME] = 1;
         tcsetattr(STDIN_FILENO, TCSANOW, &raw);
         char seq[2] = {0, 0};
-        read(STDIN_FILENO, &seq[0], 1);
-        read(STDIN_FILENO, &seq[1], 1);
-        if (seq[0] == '[') {
+        if (read(STDIN_FILENO, &seq[0], 1) == 1 &&
+            read(STDIN_FILENO, &seq[1], 1) == 1 && seq[0] == '[') {
             if (seq[1] == 'A') result = KEY_UP;
             if (seq[1] == 'B') result = KEY_DOWN;
             if (seq[1] == 'C') result = KEY_RIGHT;
@@ -59,7 +64,7 @@ int read_key(void) {
         }
     }
 
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig);
+    tcsetattr(STDIN_FILENO, TCSANOW, &orig);
     return result;
 }
 #endif
