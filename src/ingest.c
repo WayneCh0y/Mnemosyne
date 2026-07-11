@@ -176,6 +176,64 @@ static int should_skip_dir(const char *name
     return 0;
 }
 
+#define INGEST_CONFIRM_THRESHOLD 500
+
+/* Dry-run counterpart to ingest_directory: walks the same tree using the same
+   skip rules and returns how many supported files a real ingest would visit.
+   Used to preview the workload and prompt before big walks. */
+static int count_supported_files(const char *dir, int depth) {
+    if (depth > 8) return 0;
+    int count = 0;
+#ifdef _WIN32
+    char pattern[4096];
+    snprintf(pattern, sizeof(pattern), "%s\\*", dir);
+
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) return count;
+
+    do {
+        if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0) continue;
+
+        char child_path[4096];
+        snprintf(child_path, sizeof(child_path), "%s\\%s", dir, fd.cFileName);
+
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (should_skip_dir(fd.cFileName, fd.dwFileAttributes)) continue;
+            count += count_supported_files(child_path, depth + 1);
+        } else if (get_file_type(child_path) != FILE_TYPE_UNKNOWN) {
+            count++;
+        }
+    } while (FindNextFileA(h, &fd));
+
+    FindClose(h);
+#else
+    DIR *d = opendir(dir);
+    if (d == NULL) return count;
+
+    struct dirent *entry;
+    while ((entry = readdir(d)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+
+        char child_path[4096];
+        snprintf(child_path, sizeof(child_path), "%s/%s", dir, entry->d_name);
+
+        struct stat st;
+        if (stat(child_path, &st) != 0) continue;
+
+        if (S_ISDIR(st.st_mode)) {
+            if (should_skip_dir(entry->d_name)) continue;
+            count += count_supported_files(child_path, depth + 1);
+        } else if (S_ISREG(st.st_mode) && get_file_type(child_path) != FILE_TYPE_UNKNOWN) {
+            count++;
+        }
+    }
+
+    closedir(d);
+#endif
+    return count;
+}
+
 /* Recursively ingests every supported file under `dir`; returns the count added. */
 static int ingest_directory(const char *dir, int depth, InvertedIndex *idx,
                             IndexManifest *manifest) {
@@ -240,6 +298,16 @@ void ingest_path(const char *path) {
     if (stat(path, &st) != 0) {
         ui_err("path not found: %s", path);
         return;
+    }
+
+    if (S_ISDIR(st.st_mode)) {
+        int total = count_supported_files(path, 0);
+        ui_info("Found %d supported file%s under '%s'.",
+                total, total == 1 ? "" : "s", path);
+        if (total > INGEST_CONFIRM_THRESHOLD && !ui_confirm("Proceed with indexing?")) {
+            ui_info("Aborted.");
+            return;
+        }
     }
 
     InvertedIndex *idx = inverted_load();
