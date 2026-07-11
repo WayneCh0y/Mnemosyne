@@ -1362,6 +1362,21 @@ static int editlink_is_edited(const EditLink *e) {
     return e->orig_pos >= 0 && strcmp(e->text, e->orig) != 0;
 }
 
+/* How an app's screen placement differs from the one loaded from disk. A new app
+   is always PLACE_SAME: its whole row already reads as an addition, so the badge
+   would only repeat that. */
+enum { PLACE_SAME, PLACE_ADDED, PLACE_EDITED, PLACE_REMOVED };
+
+static int placement_change(const WsEditorApp *a) {
+    if (a->is_new) return PLACE_SAME;
+    int had = a->orig_layout[0] != '\0';
+    int has = a->layout[0] != '\0';
+    if (!had && !has) return PLACE_SAME;
+    if (!had)         return PLACE_ADDED;
+    if (!has)         return PLACE_REMOVED;
+    return strcmp(a->layout, a->orig_layout) != 0 ? PLACE_EDITED : PLACE_SAME;
+}
+
 /* Flattens the editor state into the navigable row list, growing the heap buffer
    as needed; returns the row count. rows and cap are in/out. Links of an app staged
    for deletion are collapsed (the whole app is going). */
@@ -1438,10 +1453,25 @@ static void render_workspace_edit(const char *ws_name,
             } else {
                 printf("  %s " ANSI_APP_HL " %s " ANSI_RESET, arrow, a->display);
             }
-            if (!a->marked_delete && a->layout[0]) {
+            /* Placement badge. A staged change is spelled the way a changed link
+               is — glyph first, then colour — so "+/e/-" mean the same thing on
+               both kinds of row. A cleared placement still shows a badge (the old
+               one, struck in red); otherwise it would just silently disappear. */
+            if (!a->marked_delete) {
+                int    ch = placement_change(a);
                 char place[80];
-                placement_brief(a->layout, place, sizeof(place));
-                printf("  " ANSI_APP_HL " %s " ANSI_RESET, place);
+                if (ch == PLACE_REMOVED) {
+                    placement_brief(a->orig_layout, place, sizeof(place));
+                    printf("  " ANSI_DEL_HL " - %s " ANSI_RESET, place);
+                } else if (a->layout[0]) {
+                    placement_brief(a->layout, place, sizeof(place));
+                    if (ch == PLACE_ADDED)
+                        printf("  " ANSI_ADD_HL " + %s " ANSI_RESET, place);
+                    else if (ch == PLACE_EDITED)
+                        printf("  " ANSI_EDIT_HL " e %s " ANSI_RESET, place);
+                    else
+                        printf("  " ANSI_APP_HL " %s " ANSI_RESET, place);
+                }
             }
             printf("\n");
         } else { /* ROW_LINK */

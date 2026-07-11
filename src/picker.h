@@ -114,14 +114,19 @@ void editlink_free(EditLinkList *l);
    from disk and links added this session intermixed — each carrying its own
    add/edit/move/delete state (see EditLink).
    Staged removals: marked_delete flags an existing app for deletion (shown red).
-   New apps are un-staged by dropping them from the apps array. */
+   New apps are un-staged by dropping them from the apps array.
+   Placement changes are derived, not flagged: layout is the current token and
+   orig_layout the one loaded from disk, so the badge shows added / edited /
+   removed by comparing them — and re-picking the original partition clears the
+   indication on its own. */
 typedef struct {
     char app[WORKSPACE_APP_MAX];
     char display[256];
     int  is_new;
     int  marked_delete;
     EditLinkList links;
-    char layout[16];   /* screen-partition token ("" = none) chosen via '\' */
+    char layout[16];        /* screen-partition token ("" = none) chosen via '\' */
+    char orig_layout[16];   /* layout as loaded from disk ("" for a new app) */
 } WsEditorApp;
 
 /* Workspace editor picker for `mn open edit`. Shows existing apps and their links;
