@@ -151,6 +151,31 @@ void ingest_file(const char *path) {
     inverted_free(idx);
 }
 
+/* Blocklist of directory names that never contain user notes worth indexing:
+   version control, package managers, build outputs, editor state, and the
+   Windows AppData root. Also skips hidden directories (FILE_ATTRIBUTE_HIDDEN
+   on Windows, leading-dot on Unix). */
+static int should_skip_dir(const char *name
+#ifdef _WIN32
+                           , DWORD attrs
+#endif
+                          ) {
+    static const char *blocked[] = {
+        ".git", "node_modules", ".venv", "venv", "__pycache__",
+        ".cache", "dist", "build", ".next", "target", "AppData",
+        ".idea", ".vscode", NULL
+    };
+    for (int i = 0; blocked[i]; i++)
+        if (strcmp(name, blocked[i]) == 0) return 1;
+
+#ifdef _WIN32
+    if (attrs & FILE_ATTRIBUTE_HIDDEN) return 1;
+#else
+    if (name[0] == '.') return 1;
+#endif
+    return 0;
+}
+
 /* Recursively ingests every supported file under `dir`; returns the count added. */
 static int ingest_directory(const char *dir, int depth, InvertedIndex *idx,
                             IndexManifest *manifest) {
@@ -171,6 +196,7 @@ static int ingest_directory(const char *dir, int depth, InvertedIndex *idx,
         snprintf(child_path, sizeof(child_path), "%s\\%s", dir, fd.cFileName);
 
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (should_skip_dir(fd.cFileName, fd.dwFileAttributes)) continue;
             added += ingest_directory(child_path, depth + 1, idx, manifest);
         } else {
             if (get_file_type(child_path) != FILE_TYPE_UNKNOWN) {
@@ -195,6 +221,7 @@ static int ingest_directory(const char *dir, int depth, InvertedIndex *idx,
         if (stat(child_path, &st) != 0) continue;
 
         if (S_ISDIR(st.st_mode)) {
+            if (should_skip_dir(entry->d_name)) continue;
             added += ingest_directory(child_path, depth + 1, idx, manifest);
         } else if (S_ISREG(st.st_mode)) {
             if (get_file_type(child_path) != FILE_TYPE_UNKNOWN) {
