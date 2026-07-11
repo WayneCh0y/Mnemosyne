@@ -70,10 +70,12 @@ static int write_to_docs(const char *hash, const char *abs_path, const char *tex
     return 1;
 }
 
-/* Inner ingest: caller owns load/save of `idx`. If `idx` is NULL the inverted
-   index isn't updated (used by callers that don't want to touch it here).
-   Returns 1 on success, 0 on failure (so callers can report/tally). */
-static int ingest_file_impl(const char *path, InvertedIndex *idx) {
+/* Inner ingest: caller owns load/save of `idx` and `manifest`. If `idx` is
+   NULL the inverted index isn't updated. If `manifest` is non-NULL the entry
+   is appended to the batched manifest; otherwise index_add is used (single
+   load/save). Returns 1 on success, 0 on failure. */
+static int ingest_file_impl(const char *path, InvertedIndex *idx,
+                            IndexManifest *manifest) {
     char abs_path[4096];
 
     /* Step 1: Obtain absolute path */
@@ -130,7 +132,10 @@ static int ingest_file_impl(const char *path, InvertedIndex *idx) {
 
     /* Step 8: Update manifest */
     const char *file_type = file_type_to_string(filetype);
-    index_add(abs_path, hash, (long)st.st_size, (long)st.st_mtime, file_type);
+    if (manifest != NULL)
+        index_manifest_add(manifest, abs_path, hash, (long)st.st_size, (long)st.st_mtime, file_type);
+    else
+        index_add(abs_path, hash, (long)st.st_size, (long)st.st_mtime, file_type);
 
     /* Step 9: Update the inverted index */
     if (idx != NULL) inverted_add_doc(idx, hash, text);
@@ -141,13 +146,14 @@ static int ingest_file_impl(const char *path, InvertedIndex *idx) {
 
 void ingest_file(const char *path) {
     InvertedIndex *idx = inverted_load();
-    ingest_file_impl(path, idx);
+    ingest_file_impl(path, idx, NULL);
     inverted_save(idx);
     inverted_free(idx);
 }
 
 /* Recursively ingests every supported file under `dir`; returns the count added. */
-static int ingest_directory(const char *dir, int depth, InvertedIndex *idx) {
+static int ingest_directory(const char *dir, int depth, InvertedIndex *idx,
+                            IndexManifest *manifest) {
     if (depth > 8) return 0;
     int added = 0;
 #ifdef _WIN32
@@ -165,10 +171,10 @@ static int ingest_directory(const char *dir, int depth, InvertedIndex *idx) {
         snprintf(child_path, sizeof(child_path), "%s\\%s", dir, fd.cFileName);
 
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            added += ingest_directory(child_path, depth + 1, idx);
+            added += ingest_directory(child_path, depth + 1, idx, manifest);
         } else {
             if (get_file_type(child_path) != FILE_TYPE_UNKNOWN) {
-                added += ingest_file_impl(child_path, idx);
+                added += ingest_file_impl(child_path, idx, manifest);
             }
         }
     } while (FindNextFileA(h, &fd));
@@ -189,10 +195,10 @@ static int ingest_directory(const char *dir, int depth, InvertedIndex *idx) {
         if (stat(child_path, &st) != 0) continue;
 
         if (S_ISDIR(st.st_mode)) {
-            added += ingest_directory(child_path, depth + 1, idx);
+            added += ingest_directory(child_path, depth + 1, idx, manifest);
         } else if (S_ISREG(st.st_mode)) {
             if (get_file_type(child_path) != FILE_TYPE_UNKNOWN) {
-                added += ingest_file_impl(child_path, idx);
+                added += ingest_file_impl(child_path, idx, manifest);
             }
         }
     }
@@ -212,13 +218,15 @@ void ingest_path(const char *path) {
     InvertedIndex *idx = inverted_load();
 
     if (S_ISDIR(st.st_mode)) {
-        int added = ingest_directory(path, 0, idx);
+        IndexManifest *m = index_manifest_begin();
+        int added = ingest_directory(path, 0, idx, m);
+        index_manifest_end(m);
         if (added > 0)
             ui_ok("Indexed %d file%s from '%s'.", added, added == 1 ? "" : "s", path);
         else
             ui_info("No supported files found in '%s'.", path);
     } else if (S_ISREG(st.st_mode)) {
-        if (ingest_file_impl(path, idx))
+        if (ingest_file_impl(path, idx, NULL))
             ui_ok("Added '%s' to the index.", path);
     } else {
         ui_err("unsupported path type: %s", path);

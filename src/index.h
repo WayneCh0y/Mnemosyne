@@ -19,6 +19,20 @@ void index_add(
     const char* file_type
 );
 
+/* Batched manifest mutation. Use this from callers that touch many files in a
+   row (e.g. directory ingest) to avoid re-parsing/rewriting manifest.json on
+   every entry. Sequence: begin -> add (N times) -> end. */
+typedef struct IndexManifest IndexManifest;
+
+IndexManifest *index_manifest_begin(void);
+void           index_manifest_add(IndexManifest *m,
+                                  const char *original_path,
+                                  const char *hash,
+                                  long size_bytes,
+                                  long last_modified,
+                                  const char *file_type);
+void           index_manifest_end(IndexManifest *m);
+
 int index_remove(const char* original_path);
 
 IndexEntry *index_get_entries(int *count);

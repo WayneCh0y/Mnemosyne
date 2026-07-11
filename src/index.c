@@ -105,10 +105,24 @@ static int save_manifest(cJSON *root) {
     return 0;
 }
 
-void index_add(const char *original_path, const char *hash,
-               long size_bytes, long last_modified, const char *file_type) {
+struct IndexManifest {
+    cJSON *root;
+};
+
+IndexManifest *index_manifest_begin(void) {
     cJSON *root = load_manifest();
-    if (root == NULL) return;
+    if (root == NULL) return NULL;
+    IndexManifest *m = malloc(sizeof(*m));
+    if (m == NULL) { cJSON_Delete(root); return NULL; }
+    m->root = root;
+    return m;
+}
+
+void index_manifest_add(IndexManifest *m, const char *original_path,
+                        const char *hash, long size_bytes, long last_modified,
+                        const char *file_type) {
+    if (m == NULL || m->root == NULL) return;
+    cJSON *root = m->root;
 
     /* Remove existing entry for this path (re-index case) */
     int n = cJSON_GetArraySize(root);
@@ -133,9 +147,23 @@ void index_add(const char *original_path, const char *hash,
     cJSON_AddStringToObject(entry, "file_type",     file_type);
     cJSON_AddStringToObject(entry, "repository",    repository);
     cJSON_AddItemToArray(root, entry);
+}
 
-    save_manifest(root);
-    cJSON_Delete(root);
+void index_manifest_end(IndexManifest *m) {
+    if (m == NULL) return;
+    if (m->root != NULL) {
+        save_manifest(m->root);
+        cJSON_Delete(m->root);
+    }
+    free(m);
+}
+
+void index_add(const char *original_path, const char *hash,
+               long size_bytes, long last_modified, const char *file_type) {
+    IndexManifest *m = index_manifest_begin();
+    if (m == NULL) return;
+    index_manifest_add(m, original_path, hash, size_bytes, last_modified, file_type);
+    index_manifest_end(m);
 }
 
 int index_remove(const char *original_path) {
