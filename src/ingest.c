@@ -70,10 +70,12 @@ static int write_to_docs(const char *hash, const char *abs_path, const char *tex
     return 1;
 }
 
-/* Inner ingest: caller owns load/save of `idx`. If `idx` is NULL the inverted
-   index isn't updated (used by callers that don't want to touch it here).
-   Returns 1 on success, 0 on failure (so callers can report/tally). */
-static int ingest_file_impl(const char *path, InvertedIndex *idx) {
+/* Inner ingest: caller owns load/save of `idx` and `manifest`. If `idx` is
+   NULL the inverted index isn't updated. If `manifest` is non-NULL the entry
+   is appended to the batched manifest; otherwise index_add is used (single
+   load/save). Returns 1 on success, 0 on failure. */
+static int ingest_file_impl(const char *path, InvertedIndex *idx,
+                            IndexManifest *manifest) {
     char abs_path[4096];
 
     /* Step 1: Obtain absolute path */
@@ -130,7 +132,10 @@ static int ingest_file_impl(const char *path, InvertedIndex *idx) {
 
     /* Step 8: Update manifest */
     const char *file_type = file_type_to_string(filetype);
-    index_add(abs_path, hash, (long)st.st_size, (long)st.st_mtime, file_type);
+    if (manifest != NULL)
+        index_manifest_add(manifest, abs_path, hash, (long)st.st_size, (long)st.st_mtime, file_type);
+    else
+        index_add(abs_path, hash, (long)st.st_size, (long)st.st_mtime, file_type);
 
     /* Step 9: Update the inverted index */
     if (idx != NULL) inverted_add_doc(idx, hash, text);
@@ -141,13 +146,97 @@ static int ingest_file_impl(const char *path, InvertedIndex *idx) {
 
 void ingest_file(const char *path) {
     InvertedIndex *idx = inverted_load();
-    ingest_file_impl(path, idx);
+    ingest_file_impl(path, idx, NULL);
     inverted_save(idx);
     inverted_free(idx);
 }
 
+/* Blocklist of directory names that never contain user notes worth indexing:
+   version control, package managers, build outputs, editor state, and the
+   Windows AppData root. Also skips hidden directories (FILE_ATTRIBUTE_HIDDEN
+   on Windows, leading-dot on Unix). */
+static int should_skip_dir(const char *name
+#ifdef _WIN32
+                           , DWORD attrs
+#endif
+                          ) {
+    static const char *blocked[] = {
+        ".git", "node_modules", ".venv", "venv", "__pycache__",
+        ".cache", "dist", "build", ".next", "target", "AppData",
+        ".idea", ".vscode", NULL
+    };
+    for (int i = 0; blocked[i]; i++)
+        if (strcmp(name, blocked[i]) == 0) return 1;
+
+#ifdef _WIN32
+    if (attrs & FILE_ATTRIBUTE_HIDDEN) return 1;
+#else
+    if (name[0] == '.') return 1;
+#endif
+    return 0;
+}
+
+#define INGEST_CONFIRM_THRESHOLD 500
+
+/* Dry-run counterpart to ingest_directory: walks the same tree using the same
+   skip rules and returns how many supported files a real ingest would visit.
+   Used to preview the workload and prompt before big walks. */
+static int count_supported_files(const char *dir, int depth) {
+    if (depth > 8) return 0;
+    int count = 0;
+#ifdef _WIN32
+    char pattern[4096];
+    snprintf(pattern, sizeof(pattern), "%s\\*", dir);
+
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) return count;
+
+    do {
+        if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0) continue;
+
+        char child_path[4096];
+        snprintf(child_path, sizeof(child_path), "%s\\%s", dir, fd.cFileName);
+
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (should_skip_dir(fd.cFileName, fd.dwFileAttributes)) continue;
+            count += count_supported_files(child_path, depth + 1);
+        } else if (get_file_type(child_path) != FILE_TYPE_UNKNOWN) {
+            count++;
+        }
+    } while (FindNextFileA(h, &fd));
+
+    FindClose(h);
+#else
+    DIR *d = opendir(dir);
+    if (d == NULL) return count;
+
+    struct dirent *entry;
+    while ((entry = readdir(d)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+
+        char child_path[4096];
+        snprintf(child_path, sizeof(child_path), "%s/%s", dir, entry->d_name);
+
+        struct stat st;
+        if (stat(child_path, &st) != 0) continue;
+
+        if (S_ISDIR(st.st_mode)) {
+            if (should_skip_dir(entry->d_name)) continue;
+            count += count_supported_files(child_path, depth + 1);
+        } else if (S_ISREG(st.st_mode) && get_file_type(child_path) != FILE_TYPE_UNKNOWN) {
+            count++;
+        }
+    }
+
+    closedir(d);
+#endif
+    return count;
+}
+
 /* Recursively ingests every supported file under `dir`; returns the count added. */
-static int ingest_directory(const char *dir, int depth, InvertedIndex *idx) {
+static int ingest_directory(const char *dir, int depth, InvertedIndex *idx,
+                            IndexManifest *manifest) {
     if (depth > 8) return 0;
     int added = 0;
 #ifdef _WIN32
@@ -165,10 +254,11 @@ static int ingest_directory(const char *dir, int depth, InvertedIndex *idx) {
         snprintf(child_path, sizeof(child_path), "%s\\%s", dir, fd.cFileName);
 
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            added += ingest_directory(child_path, depth + 1, idx);
+            if (should_skip_dir(fd.cFileName, fd.dwFileAttributes)) continue;
+            added += ingest_directory(child_path, depth + 1, idx, manifest);
         } else {
             if (get_file_type(child_path) != FILE_TYPE_UNKNOWN) {
-                added += ingest_file_impl(child_path, idx);
+                added += ingest_file_impl(child_path, idx, manifest);
             }
         }
     } while (FindNextFileA(h, &fd));
@@ -189,10 +279,11 @@ static int ingest_directory(const char *dir, int depth, InvertedIndex *idx) {
         if (stat(child_path, &st) != 0) continue;
 
         if (S_ISDIR(st.st_mode)) {
-            added += ingest_directory(child_path, depth + 1, idx);
+            if (should_skip_dir(entry->d_name)) continue;
+            added += ingest_directory(child_path, depth + 1, idx, manifest);
         } else if (S_ISREG(st.st_mode)) {
             if (get_file_type(child_path) != FILE_TYPE_UNKNOWN) {
-                added += ingest_file_impl(child_path, idx);
+                added += ingest_file_impl(child_path, idx, manifest);
             }
         }
     }
@@ -209,16 +300,28 @@ void ingest_path(const char *path) {
         return;
     }
 
+    if (S_ISDIR(st.st_mode)) {
+        int total = count_supported_files(path, 0);
+        ui_info("Found %d supported file%s under '%s'.",
+                total, total == 1 ? "" : "s", path);
+        if (total > INGEST_CONFIRM_THRESHOLD && !ui_confirm("Proceed with indexing?")) {
+            ui_info("Aborted.");
+            return;
+        }
+    }
+
     InvertedIndex *idx = inverted_load();
 
     if (S_ISDIR(st.st_mode)) {
-        int added = ingest_directory(path, 0, idx);
+        IndexManifest *m = index_manifest_begin();
+        int added = ingest_directory(path, 0, idx, m);
+        index_manifest_end(m);
         if (added > 0)
             ui_ok("Indexed %d file%s from '%s'.", added, added == 1 ? "" : "s", path);
         else
             ui_info("No supported files found in '%s'.", path);
     } else if (S_ISREG(st.st_mode)) {
-        if (ingest_file_impl(path, idx))
+        if (ingest_file_impl(path, idx, NULL))
             ui_ok("Added '%s' to the index.", path);
     } else {
         ui_err("unsupported path type: %s", path);

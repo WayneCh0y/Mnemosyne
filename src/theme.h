@@ -91,6 +91,25 @@ static inline void ui_info(const char *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     th_emit(stdout, TH_INFO, TH_GLYPH_INFO, fmt, ap); va_end(ap);
 }
+/* y/N prompt on stdout, reads one line from stdin. Auto-proceeds (returns 1)
+   when stdin isn't a TTY so scripted usage doesn't hang. */
+static inline int ui_confirm(const char *fmt, ...) {
+    if (!TH_ISATTY(TH_FILENO(stdin))) return 1;
+
+    va_list ap; va_start(ap, fmt);
+    int c = th_color_for(stdout);
+    if (c) fprintf(stdout, "%s%s%s ", TH_WARN, TH_GLYPH_WARN, TH_RESET);
+    else   fprintf(stdout, "%s ", TH_GLYPH_WARN);
+    vfprintf(stdout, fmt, ap);
+    fputs(" [y/N] ", stdout);
+    fflush(stdout);
+    va_end(ap);
+
+    char buf[16];
+    if (fgets(buf, sizeof(buf), stdin) == NULL) return 0;
+    return buf[0] == 'y' || buf[0] == 'Y';
+}
+
 /* A dimmed follow-up line ("→ do this next"), stdout, no leading glyph colour. */
 static inline void ui_hint(const char *fmt, ...) {
     va_list ap; va_start(ap, fmt);
