@@ -14,6 +14,7 @@
 #include "picker.h"
 #include "app_resolve.h"
 #include "app_launch.h"
+#include "pathcomp.h"
 #include "tokenizer.h"
 
 #ifdef _WIN32
@@ -164,6 +165,130 @@ static int edit_buffer_key(int key, char *buf, int *len, int *pos, size_t size) 
         return 0;
     }
     return 1;
+}
+
+/* ── Inline path completion ─────────────────────────────────────────────────
+   Every field that takes a filesystem path (a new app, a link, a link being
+   edited) carries one of these. pathcomp.c re-scans the directory being typed
+   on each keystroke; this layer owns the highlight and the dropdown drawn under
+   the field, so a path can be walked into instead of typed out.
+
+   Keys, while the list is open: ↑/↓ move the highlight, Tab accepts it (a
+   directory gains a trailing separator, so Tab again lists its children), and
+   Esc closes the list without leaving the field. Enter accepts only once the
+   highlight has been moved — otherwise it submits what was typed, so a path
+   that happens to prefix-match something is never hijacked on the way out. */
+
+#define SUGGEST_WINDOW 5
+
+typedef struct {
+    PathComp pc;
+    int sel;         /* highlighted suggestion */
+    int navigated;   /* highlight was moved by hand → Enter accepts it */
+    int dismissed;   /* Esc closed the list; the next edit brings it back */
+} PathSuggest;
+
+/* Opens the completion state on a field seeded with `buf` (empty, one typed
+   character, or an existing link being edited). */
+static void suggest_reset(PathSuggest *s, const char *buf) {
+    memset(s, 0, sizeof(*s));
+    pathcomp_update(&s->pc, buf);
+}
+
+/* Re-scans after an edit. The highlight returns to the top because the previous
+   pick may no longer match, and a dismissed list reopens: typing means the user
+   is still working on the path. */
+static void suggest_refresh(PathSuggest *s, const char *buf) {
+    pathcomp_update(&s->pc, buf);
+    s->sel = 0;
+    s->navigated = 0;
+    s->dismissed = 0;
+}
+
+static int suggest_open(const PathSuggest *s) {
+    return !s->dismissed && s->pc.count > 0;
+}
+
+/* Applies one keypress to the dropdown. Returns 1 if the key belonged to it; 0
+   leaves the key for the field's own Enter / Esc / text handling. */
+static int suggest_key(PathSuggest *s, int key, char *buf, int *len, int *pos,
+                       size_t size) {
+    if (!suggest_open(s)) return 0;
+
+    switch (key) {
+    case KEY_UP:
+        s->sel = (s->sel > 0) ? s->sel - 1 : s->pc.count - 1;
+        s->navigated = 1;
+        return 1;
+    case KEY_DOWN:
+        s->sel = (s->sel + 1) % s->pc.count;
+        s->navigated = 1;
+        return 1;
+    case KEY_ESC:
+        s->dismissed = 1;
+        return 1;
+    case KEY_TAB:
+        if (pathcomp_apply(&s->pc, s->sel, buf, len, pos, size))
+            suggest_refresh(s, buf);
+        return 1;
+    case KEY_ENTER:
+        if (!s->navigated) return 0;   /* nothing was picked → the field submits */
+        if (pathcomp_apply(&s->pc, s->sel, buf, len, pos, size))
+            suggest_refresh(s, buf);
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* Right-anchored copy of the directory being listed: a deep path keeps the tail
+   that identifies it ("…\Users\Wayne\Projects\") rather than the drive letter. */
+static void dir_brief(const char *dir, char *out, size_t n, int max_cols) {
+    int len = (int)strlen(dir);
+    if (len <= max_cols) {
+        snprintf(out, n, "%s", dir);
+        return;
+    }
+    snprintf(out, n, "\xe2\x80\xa6%s", dir + len - (max_cols - 1));
+}
+
+/* Draws the dropdown beneath the field, carrying its own key hints (the field's
+   usual hint line is suppressed while it's open). Nothing is drawn when the
+   buffer isn't a path, has no matches, or the list has been dismissed. */
+static void render_suggestions(const PathSuggest *s) {
+    if (!suggest_open(s)) return;
+    const PathComp *pc = &s->pc;
+
+    char where[64];
+    dir_brief(pc->dir, where, sizeof(where), 44);
+    printf("\n" ANSI_SILVER "  \xe2\x94\x8c " ANSI_RESET ANSI_DIM "%d match%s in %s" ANSI_RESET "\n",
+           pc->total, pc->total == 1 ? "" : "es", where);
+
+    int start = picker_window_start(s->sel, pc->count);
+    int end   = start + (pc->count < SUGGEST_WINDOW ? pc->count : SUGGEST_WINDOW);
+    for (int i = start; i < end; i++) {
+        const PathCompItem *it = &pc->items[i];
+        char tail[2] = { it->is_dir ? pc->sep : '\0', '\0' };   /* dirs show their separator */
+
+        /* Only the selected row carries colour — a violet "> " marker and its
+           name. The rest stay dim, so the eye lands on one row, not on a wall of
+           highlighted text. */
+        printf(ANSI_SILVER "  \xe2\x94\x82 " ANSI_RESET);
+        if (i == s->sel)
+            printf(ANSI_VIOLET "> %s%s" ANSI_RESET "\n", it->name, tail);
+        else
+            printf(ANSI_DIM "  %s%s" ANSI_RESET "\n", it->name, tail);
+    }
+
+    /* Matches past the item cap can't be scrolled to, so say what does reach
+       them rather than dangling a count the highlight can never land on. */
+    int hidden = pc->total - end;
+    if (hidden > 0)
+        printf(ANSI_SILVER "  \xe2\x94\x82 " ANSI_RESET ANSI_DIM "\xe2\x8b\xaf %d more%s" ANSI_RESET "\n",
+               hidden, pc->total > pc->count ? " \xe2\x80\x94 keep typing to narrow" : "");
+
+    printf(ANSI_SILVER "  \xe2\x94\x94 " ANSI_RESET ANSI_DIM "%s  \xe2\x80\xa2  \xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  Esc dismiss" ANSI_RESET,
+           s->navigated ? "Tab/Enter accept" : "Tab complete");
 }
 
 /* ── Generic indexed-list navigation loop ───────────────────────────────────
@@ -320,7 +445,8 @@ static void render_multiselect(const char *title, const char *subtitle,
                                const char **labels,
                                const int *selected, const AppLinks *links,
                                const MsRow *rows, int nrows,
-                               int cursor, int mode, const char *typed, int type_app) {
+                               int cursor, int mode, const char *typed, int type_app,
+                               int edit_pos, const PathSuggest *sg) {
     print_picker_header(title, subtitle);
     int start = picker_window_start(cursor, nrows);
     int end   = start + (nrows < PICKER_WINDOW ? nrows : PICKER_WINDOW);
@@ -340,9 +466,14 @@ static void render_multiselect(const char *title, const char *subtitle,
     }
     print_more_below(end, nrows);
     if (mode == MS_MODE_TYPE) {
-        printf("\n" ANSI_CYAN "  Add link for %s: " ANSI_RESET "%s" ANSI_SEL "_" ANSI_RESET,
-               labels[type_app], typed);
-        printf("\n" ANSI_DIM "  Enter add  •  Esc cancel  •  Backspace delete" ANSI_RESET);
+        /* highlight block cursor at edit_pos (a space when parked past the end) */
+        char cur = typed[edit_pos] ? typed[edit_pos] : ' ';
+        const char *rest = typed[edit_pos] ? typed + edit_pos + 1 : "";
+        printf("\n" ANSI_CYAN "  Add link for %s: " ANSI_RESET
+               "%.*s" ANSI_REVERSE "%c" ANSI_REVERSE_OFF "%s",
+               labels[type_app], edit_pos, typed, cur, rest);
+        if (suggest_open(sg)) render_suggestions(sg);
+        else printf("\n" ANSI_DIM "  \xe2\x86\x90/\xe2\x86\x92 move  \xe2\x80\xa2  Enter add  \xe2\x80\xa2  Esc cancel  \xe2\x80\xa2  Backspace delete" ANSI_RESET);
     } else {
         const MsRow *r = &rows[cursor];
         if (r->kind == MS_ROW_LINK)
@@ -367,30 +498,33 @@ int run_multiselect_picker(const char *title, const char *subtitle,
     int  type_app  = 0;   /* app being given a new link in MS_MODE_TYPE */
     char typed[WORKSPACE_TARGET_MAX] = {0};
     int  typed_len = 0;
+    int  edit_pos  = 0;   /* cursor within typed[] */
+    PathSuggest sg;       /* path completion for the link field */
 
+    suggest_reset(&sg, typed);
     int nrows = build_ms_rows(count, selected, links, &rows, &rows_cap);
     printf(ANSI_CURSOR_HIDE);
     render_multiselect(title, subtitle, labels, selected, links,
-                       rows, nrows, cursor, mode, typed, type_app);
+                       rows, nrows, cursor, mode, typed, type_app, edit_pos, &sg);
 
     while (!done) {
         int key = read_key();
 
         if (mode == MS_MODE_TYPE) {
-            if (key == KEY_ENTER) {
+            /* Path completion sees the key first, so ↑/↓/Tab drive the dropdown
+               while it's open; otherwise this is the same in-place editing as
+               the workspace editor's link field. */
+            if (suggest_key(&sg, key, typed, &typed_len, &edit_pos, sizeof(typed))) {
+                /* consumed by the dropdown */
+            } else if (key == KEY_ENTER) {
                 if (typed_len > 0)
                     targetlist_push(&links[type_app].items, &links[type_app].cap,
                                     &links[type_app].count, typed);
-                mode = MS_MODE_LIST; typed[0] = '\0'; typed_len = 0;
+                mode = MS_MODE_LIST; typed[0] = '\0'; typed_len = 0; edit_pos = 0;
             } else if (key == KEY_ESC) {
-                mode = MS_MODE_LIST; typed[0] = '\0'; typed_len = 0;
-            } else if (key == KEY_BACKSPACE || key == 127) {
-                if (typed_len > 0) typed[--typed_len] = '\0';
-            } else if (key >= 32 && key < 127) {
-                if (typed_len < (int)sizeof(typed) - 1) {
-                    typed[typed_len++] = (char)key;
-                    typed[typed_len]   = '\0';
-                }
+                mode = MS_MODE_LIST; typed[0] = '\0'; typed_len = 0; edit_pos = 0;
+            } else if (edit_buffer_key(key, typed, &typed_len, &edit_pos, sizeof(typed))) {
+                suggest_refresh(&sg, typed);
             }
         } else {
             const MsRow *r = &rows[cursor];
@@ -417,6 +551,8 @@ int run_multiselect_picker(const char *title, const char *subtitle,
                     typed[0]  = (char)key;
                     typed[1]  = '\0';
                     typed_len = 1;
+                    edit_pos  = 1;
+                    suggest_reset(&sg, typed);
                 }
                 break;
             }
@@ -427,7 +563,7 @@ int run_multiselect_picker(const char *title, const char *subtitle,
             if (cursor >= nrows) cursor = nrows - 1;
             if (cursor < 0)      cursor = 0;
             render_multiselect(title, subtitle, labels, selected, links,
-                               rows, nrows, cursor, mode, typed, type_app);
+                               rows, nrows, cursor, mode, typed, type_app, edit_pos, &sg);
         }
     }
 
@@ -1275,7 +1411,8 @@ static void render_workspace_edit(const char *ws_name,
                                   const WeditRow *rows, int nrows,
                                   int cursor, int mode,
                                   const char *typed, const char *app_error,
-                                  int type_app, int reordering, int edit_pos) {
+                                  int type_app, int reordering, int edit_pos,
+                                  const PathSuggest *sg) {
     char title[140];
     snprintf(title, sizeof(title), "Edit '%s'", ws_name);
     print_picker_header(title, NULL);
@@ -1345,7 +1482,8 @@ static void render_workspace_edit(const char *ws_name,
         printf("\n" ANSI_CYAN "  Add link for %s: " ANSI_RESET
                "%.*s" ANSI_REVERSE "%c" ANSI_REVERSE_OFF "%s",
                apps[type_app].display, edit_pos, typed, cur, rest);
-        printf("\n" ANSI_DIM "  \xe2\x86\x90/\xe2\x86\x92 move  \xe2\x80\xa2  Enter add  \xe2\x80\xa2  Esc cancel  \xe2\x80\xa2  Backspace delete" ANSI_RESET);
+        if (suggest_open(sg)) render_suggestions(sg);
+        else printf("\n" ANSI_DIM "  \xe2\x86\x90/\xe2\x86\x92 move  \xe2\x80\xa2  Enter add  \xe2\x80\xa2  Esc cancel  \xe2\x80\xa2  Backspace delete" ANSI_RESET);
     } else if (mode == WADD_TYPE_APP) {
         /* highlight block cursor at edit_pos (a space when parked past the end) */
         char cur = typed[edit_pos] ? typed[edit_pos] : ' ';
@@ -1355,9 +1493,11 @@ static void render_workspace_edit(const char *ws_name,
         printf("\n" ANSI_CYAN "  New app: " ANSI_RESET
                "%.*s" ANSI_REVERSE "%c" ANSI_REVERSE_OFF "%s",
                edit_pos, typed, cur, rest);
-        printf("\n" ANSI_DIM "  \xe2\x86\x90/\xe2\x86\x92 move  \xe2\x80\xa2  Enter add  \xe2\x80\xa2  Esc cancel  \xe2\x80\xa2  Backspace delete" ANSI_RESET);
+        if (suggest_open(sg)) render_suggestions(sg);
+        else printf("\n" ANSI_DIM "  \xe2\x86\x90/\xe2\x86\x92 move  \xe2\x80\xa2  Enter add  \xe2\x80\xa2  Esc cancel  \xe2\x80\xa2  Backspace delete" ANSI_RESET);
     } else if (mode == WADD_EDIT_LINK) {
-        printf("\n" ANSI_DIM "\xe2\x86\x90/\xe2\x86\x92 move  \xe2\x80\xa2  type to edit  \xe2\x80\xa2  Enter save  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
+        if (suggest_open(sg)) render_suggestions(sg);
+        else printf("\n" ANSI_DIM "\xe2\x86\x90/\xe2\x86\x92 move  \xe2\x80\xa2  type to edit  \xe2\x80\xa2  Enter save  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
     } else {
         const WeditRow *r = &rows[cursor];
         if (app_error && app_error[0])
@@ -1400,13 +1540,15 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
     int  edit_link = 0;   /* link index being edited in WADD_EDIT_LINK */
     int  done      = 0;
     int  cancelled = 0;
+    PathSuggest sg;       /* path completion for whichever text field is open */
 
+    suggest_reset(&sg, typed);
     *delete_workspace = 0;
     int nrows = build_edit_rows(apps, *count, &rows, &rows_cap);
 
     printf(ANSI_CURSOR_HIDE);
     render_workspace_edit(ws_name, apps, rows, nrows, cursor, mode,
-                          typed, app_error, type_app, reordering, edit_pos);
+                          typed, app_error, type_app, reordering, edit_pos, &sg);
 
     while (!done) {
         int key = read_key();
@@ -1415,8 +1557,11 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
         if (mode == WADD_TYPE_LINK) {
             /* Keying in a new link's path/url. ←/→ move the in-string cursor,
                printable keys insert at it, Backspace deletes the char before it
-               (same in-place editing as WADD_EDIT_LINK). */
-            if (key == KEY_ENTER) {
+               (same in-place editing as WADD_EDIT_LINK). Path completion sees
+               the key first, so ↑/↓/Tab drive the dropdown when it's open. */
+            if (suggest_key(&sg, key, typed, &typed_len, &edit_pos, sizeof(typed))) {
+                /* consumed by the dropdown */
+            } else if (key == KEY_ENTER) {
                 if (typed_len > 0)
                     editlink_push(&apps[type_app].links, typed, "", -1);
                 typed[0] = '\0'; typed_len = 0; edit_pos = 0;
@@ -1424,11 +1569,13 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
             } else if (key == KEY_ESC) {
                 typed[0] = '\0'; typed_len = 0; edit_pos = 0;
                 mode = WADD_LIST;
-            } else {
-                edit_buffer_key(key, typed, &typed_len, &edit_pos, sizeof(typed));
+            } else if (edit_buffer_key(key, typed, &typed_len, &edit_pos, sizeof(typed))) {
+                suggest_refresh(&sg, typed);
             }
         } else if (mode == WADD_TYPE_APP) {
-            if (key == KEY_ENTER) {
+            if (suggest_key(&sg, key, typed, &typed_len, &edit_pos, sizeof(typed))) {
+                /* consumed by the dropdown */
+            } else if (key == KEY_ENTER) {
                 if (typed_len > 0 && *count < max) {
                     char resolved[WORKSPACE_APP_MAX] = {0};
                     const char *final_app = typed;
@@ -1463,16 +1610,19 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
             } else if (key == KEY_ESC) {
                 typed[0] = '\0'; typed_len = 0; edit_pos = 0;
                 mode = WADD_LIST;
-            } else {
-                edit_buffer_key(key, typed, &typed_len, &edit_pos, sizeof(typed));
+            } else if (edit_buffer_key(key, typed, &typed_len, &edit_pos, sizeof(typed))) {
+                suggest_refresh(&sg, typed);
             }
         } else if (mode == WADD_EDIT_LINK) {
             /* ── Inline edit mode ───────────────────────────────────────────
                Editing one link's text in place. ←/→ move the in-string cursor,
                printable keys insert at it, Backspace deletes the char before it.
                Enter commits the buffer back into the link; Esc discards the edit
-               (the link keeps its previous text) — neither exits the picker. */
-            if (key == KEY_ENTER) {
+               (the link keeps its previous text) — neither exits the picker.
+               Path completion sees the key first, as in the other text fields. */
+            if (suggest_key(&sg, key, typed, &typed_len, &edit_pos, sizeof(typed))) {
+                /* consumed by the dropdown */
+            } else if (key == KEY_ENTER) {
                 strncpy(apps[edit_app].links.items[edit_link].text, typed,
                         WORKSPACE_TARGET_MAX - 1);
                 apps[edit_app].links.items[edit_link].text[WORKSPACE_TARGET_MAX - 1] = '\0';
@@ -1481,8 +1631,8 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
             } else if (key == KEY_ESC) {
                 typed[0] = '\0'; typed_len = 0; edit_pos = 0;
                 mode = WADD_LIST;
-            } else {
-                edit_buffer_key(key, typed, &typed_len, &edit_pos, sizeof(typed));
+            } else if (edit_buffer_key(key, typed, &typed_len, &edit_pos, sizeof(typed))) {
+                suggest_refresh(&sg, typed);
             }
         } else if (reordering) {
             /* ── Move mode ──────────────────────────────────────────────────
@@ -1514,6 +1664,7 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                 if (r->kind == ROW_ADD_APP) {
                     mode = WADD_TYPE_APP;
                     edit_pos = 0;
+                    suggest_reset(&sg, typed);
                 } else if (r->kind == ROW_RENAME_WS) {
                     char newname[WORKSPACE_NAME_MAX];
                     if (run_text_input_centered("Rename workspace", "Name",
@@ -1595,6 +1746,7 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                     typed_len = (int)strlen(typed);
                     edit_pos  = typed_len;
                     mode      = WADD_EDIT_LINK;
+                    suggest_reset(&sg, typed);
                 } else if (key >= 33 && key < 127) {
                     if (r->kind == ROW_APP && !apps[r->app].marked_delete) {
                         /* printable key on an app row → start adding a link */
@@ -1604,6 +1756,7 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                         typed[1]  = '\0';
                         typed_len = 1;
                         edit_pos  = 1;
+                        suggest_reset(&sg, typed);
                     } else if (r->kind == ROW_ADD_APP && *count < max) {
                         /* printable key on "[+ Add a new app]" → open app-type mode */
                         mode      = WADD_TYPE_APP;
@@ -1611,6 +1764,7 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                         typed[1]  = '\0';
                         typed_len = 1;
                         edit_pos  = 1;
+                        suggest_reset(&sg, typed);
                     }
                 }
                 break;
@@ -1622,7 +1776,7 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
             if (cursor >= nrows) cursor = nrows - 1;
             if (cursor < 0)      cursor = 0;
             render_workspace_edit(ws_name, apps, rows, nrows, cursor, mode,
-                                  typed, app_error, type_app, reordering, edit_pos);
+                                  typed, app_error, type_app, reordering, edit_pos, &sg);
         }
     }
 

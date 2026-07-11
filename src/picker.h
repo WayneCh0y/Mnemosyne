@@ -14,6 +14,7 @@
 #define KEY_ENTER     13
 #define KEY_ESC       27
 #define KEY_BACKSPACE 8
+#define KEY_TAB       9
 
 #define ANSI_CLEAR       "\033[H\033[2J"
 #define ANSI_RESET       "\033[0m"
@@ -43,6 +44,12 @@
 #define ANSI_BRIGHT_RED    "\033[91m"
 #define ANSI_BRIGHT_GREEN  "\033[92m"
 #define ANSI_BRIGHT_YELLOW "\033[93m"
+
+/* Path-completion dropdown — a silver frame, and violet on the one selected row
+   ("> name"). Everything else stays dim: the list is an overlay to glance at,
+   not another highlighted control competing with the picker underneath it. */
+#define ANSI_SILVER    "\033[38;2;192;192;192m"
+#define ANSI_VIOLET    "\033[38;2;167;139;250m"   /* selected suggestion */
 
 int read_key(void);
 /* Generic numbered string-list picker. Returns the chosen index, or -1 (Esc). */

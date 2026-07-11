@@ -201,6 +201,19 @@ Inside the editor you see the workspace's apps, each with its links beneath it. 
 
 When typing an app/link, `Backspace` deletes characters and `Esc` cancels that inline edit (it does not exit the editor).
 
+**Path completion**
+
+Any field that takes a filesystem path — the new-app field, the add-link field, and a link being edited (`e`) — suggests as you type, so paths don't have to be typed out in full. As soon as what you've typed contains a separator (`C:\`, `/`, `~/`), a dropdown lists the matching children of that directory: directories first (cyan, with a trailing separator), then files, with the part you've already typed highlighted in gold.
+
+| Key | Action |
+|---|---|
+| `Tab` | Complete the highlighted suggestion. Completing a directory appends its separator, so `Tab` again lists what's inside it |
+| `↑` / `↓` | Move through the suggestions |
+| `Enter` | Accept the highlighted suggestion — but only once you've moved the highlight with `↑`/`↓`. Otherwise `Enter` submits what you typed, so a path that happens to match something is never hijacked |
+| `Esc` | Dismiss the dropdown; the field stays open (a second `Esc` cancels the field as usual) |
+
+Only up to 32 matches are kept — keep typing to narrow them. Hidden and dot-prefixed entries are skipped unless the segment you're typing starts with `.`. Bare app names (`code`) and URLs (`https://…`) produce no suggestions.
+
 **Snapshotting running apps**
 
 ```
@@ -209,7 +222,7 @@ mn open snap
 
 `mn open snap` builds a workspace from the applications you currently have open, so you don't have to add them one by one. The flow is interactive (`Esc` steps back, cancels at the first step):
 1. **Review** — a list of the detected apps, all pre-selected (selected apps show **white text on a blue highlight**; the cursor row is marked with a green `▌` bar). `↑`/`↓` move, `Backspace` toggles the highlighted app between selected (blue) and deselected (dim), `Enter` confirms. Deselect anything you don't want (e.g. the terminal, file-explorer windows).
-   - **Add links/targets** — with the cursor on a **selected** app, press any printable key to start typing inline: an `Add link for <app>:` field appears at the bottom of the list (seeded with the key you pressed), where you can type a URL, app link, repository, or file path. `Enter` adds it, `Esc` cancels the edit, `Backspace` deletes. You can repeat to add **as many links to the same app** as you like; each one is shown on its own dim-yellow `→ link` line beneath the app. Deselected (dim) apps don't accept links.
+   - **Add links/targets** — with the cursor on a **selected** app, press any printable key to start typing inline: an `Add link for <app>:` field appears at the bottom of the list (seeded with the key you pressed), where you can type a URL, app link, repository, or file path. `Enter` adds it, `Esc` cancels the edit, `Backspace` deletes. File paths get the same completion dropdown as the editor (see *Path completion* above). You can repeat to add **as many links to the same app** as you like; each one is shown on its own dim-yellow `→ link` line beneath the app. Deselected (dim) apps don't accept links.
    - **Remove a link** — move the cursor onto a `→ link` line and press `Backspace`; that link is removed immediately. Each link becomes a separate launch entry, so the app opens once per link.
 2. **Name** — type a name for the new workspace. If the name already exists you're asked for another.
 
