@@ -200,10 +200,10 @@ Manages workspaces — named collections of apps, URLs, and paths to launch all 
 **Subcommands**
 
 ```
-mn open                          # interactive picker to choose and launch a workspace
+mn open                          # browse folders/workspaces and launch one
 mn open create <name>            # create a new empty workspace
 mn open snap                     # snapshot the apps you have open into a new workspace
-mn open edit                     # interactive picker to add/remove apps & links in a workspace
+mn open edit                     # add/remove apps & links; organise workspaces into folders
 ```
 
 **Creating and populating a workspace**
@@ -213,7 +213,33 @@ mn open create work
 mn open edit
 ```
 
-`mn open edit` is fully interactive (same picker UI as the rest of the app) and is where you add **and** remove apps and links. First pick which workspace to edit; pressing `Esc` cancels.
+`mn open edit` is fully interactive (same picker UI as the rest of the app) and is where you add **and** remove apps and links. First browse to the workspace you want to edit; pressing `Esc` cancels.
+
+**Organising workspaces into folders**
+
+Once you have more than a handful of workspaces, a flat list stops helping. Both `mn open` and `mn open edit` browse a folder tree instead: folders are shown in **gold** with a `▸` and an item count, above the workspaces at that level. A breadcrumb (`mn / NUSY4S1 /`) shows where you are, and selecting a folder previews what's inside it.
+
+| Key | Action |
+|---|---|
+| `Enter` on a folder | Go into it |
+| `Enter` on a workspace | Launch it (`mn open`) or edit it (`mn open edit`) |
+| `Backspace` | Go back up one level — the cursor lands on the folder you just left |
+| `/` | Open the command palette (`mn open edit` only) |
+
+Folders are created and rearranged through `/` commands in `mn open edit`. Type `/` to open the palette: it lists the commands that apply to whatever is selected, narrows as you type, and `Tab` completes the highlighted one. `Enter` always runs what the line actually says, and `Esc` closes the palette.
+
+| Command | Action |
+|---|---|
+| `/new-folder [name]` | Create a folder at the level you're currently in. Go into a folder first to nest one inside it |
+| `/move` | File the selected folder or workspace under another folder (or back at the top level) |
+| `/rename [name]` | Rename the selected folder |
+| `/delete` | Remove the selected folder |
+
+A command's name can be given inline (`/new-folder NUSY4S1`) or left off, in which case you're prompted for it.
+
+Folder changes save as you make them, so `Esc` still keeps them — unlike the app/link edits inside a workspace, which stay staged until you press `Enter`. Deleting a folder never deletes a workspace: everything inside moves up to the parent, and the confirmation says so. Workspace names are unique across the whole tree, so a workspace can be moved between folders without ever being renamed.
+
+New workspaces from `mn open create` and `mn open snap` start at the top level; use `/move` to file them.
 
 Inside the editor you see the workspace's apps, each with its links beneath it. Changes are **staged** — nothing is written until you press `Enter` to save (`Esc` discards everything):
 

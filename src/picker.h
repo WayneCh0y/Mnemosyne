@@ -4,6 +4,7 @@
 #include "search.h"
 #include "index.h"
 #include "workspace.h"
+#include "wstree.h"
 
 #define CURSOR_TOKEN  "▌"
 
@@ -52,6 +53,19 @@
    would draw the whole dropdown uncoloured. */
 #define ANSI_SILVER    "\033[38;5;250m"           /* frame  — grey  #bcbcbc */
 #define ANSI_VIOLET    "\033[38;5;141m"           /* selected suggestion #af87ff */
+
+/* Workspace folders. The colours above split along a line worth keeping: the
+   8-colour set names actions on a thing (blue app, green add, red delete,
+   magenta edit, yellow rename) while the 256-colour set is structure and chrome
+   (silver frames, violet highlight). A folder is structure, so it takes a
+   256-colour gold — the colour a folder is everywhere else, and one that reads
+   as a container rather than as something staged for a change.
+   It does not compete with the dim yellow of a link: that yellow only ever
+   appears indented inside the expanded app frame, carries a "→", and is dimmed;
+   a folder row is bright, top-level, and carries a "▸". */
+#define ANSI_FOLDER    "\033[38;5;179m"           /* folder row   #d7af5f */
+#define ANSI_FOLDER_HL "\033[38;5;235;48;5;179m"  /* selected folder — dark on gold */
+#define ANSI_CRUMB     "\033[38;5;245m"           /* breadcrumb ancestors #8a8a8a */
 
 int read_key(void);
 /* Generic numbered string-list picker. Returns the chosen index, or -1 (Esc). */
@@ -149,10 +163,19 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
 int run_search_picker(SearchResult *results, int count);
 int run_list_picker(IndexEntry *entries, int count,
                     const char *title, const char *subtitle);
-/* Workspace picker: lists workspaces, expanding the selected one's apps in a
-   left-rail frame. Returns the chosen index, or -1 (Esc). */
-int run_workspace_picker(Workspace *ws, int count,
-                         const char *title, const char *subtitle);
+/* Workspace browser for `mn open` and step 1 of `mn open edit`. Drills through
+   the folder tree — Enter descends into a folder or chooses a workspace,
+   Backspace goes back up — expanding the selected row in a left-rail frame: a
+   workspace shows its apps, a folder a preview of what it holds.
+
+   With edit_mode set, "/" opens the command palette (/new-folder, /move,
+   /rename, /delete) and st is mutated in place; *dirty is set to 1 if anything
+   changed, so the caller can persist even when the browse itself is cancelled.
+   dirty may be NULL when edit_mode is 0.
+
+   Returns the chosen workspace's index into st->ws, or -1 (Esc). */
+int run_workspace_browser(WorkspaceStore *st, const char *title,
+                          int edit_mode, int *dirty);
 /* Strip directory prefix and trailing .exe from app path for a short display name. */
 void ws_display_name(const char *app, char *out, size_t out_size);
 /* Single styled text input box. Returns 1 with out filled, 0 if cancelled (Esc).

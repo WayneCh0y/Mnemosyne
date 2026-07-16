@@ -489,19 +489,21 @@ static void launch_workspace(const Workspace *ws) {
 }
 
 static void cmd_open_run(void) {
-    int count;
-    Workspace *ws = workspace_load_all(&count);
-    if (!ws || count == 0) {
+    WorkspaceStore st;
+    workspace_store_load(&st);
+    if (st.ws_count == 0) {
         ui_info("No workspaces yet.");
         ui_hint("Create one with: mn open create <name>");
-        workspace_free_all(ws, count);
+        workspace_store_free(&st);
         return;
     }
-    int chosen = run_workspace_picker(ws, count, "Open a workspace", NULL);
+    /* Browse only: folders are organised in `mn open edit`, so nothing here can
+       write to the store. */
+    int chosen = run_workspace_browser(&st, "Open a workspace", 0, NULL);
     printf(ANSI_CLEAR ANSI_RESET);
     if (chosen != -1)
-        launch_workspace(&ws[chosen]);
-    workspace_free_all(ws, count);
+        launch_workspace(&st.ws[chosen]);
+    workspace_store_free(&st);
 }
 
 static void cmd_open_create(const char *name) {
@@ -532,20 +534,37 @@ static void free_app_links(AppLinks *links, int n) {
 }
 
 static void cmd_open_edit(void) {
-    int count;
-    Workspace *ws = workspace_load_all(&count);
-    if (!ws || count == 0) {
+    WorkspaceStore st;
+    workspace_store_load(&st);
+    if (st.ws_count == 0 && st.folders.count == 0) {
         ui_info("No workspaces yet.");
         ui_hint("Create one with: mn open create <name>");
-        workspace_free_all(ws, count);
+        workspace_store_free(&st);
+        return;
+    }
+    Workspace *ws = st.ws;
+    int count = st.ws_count;
+
+    /* Step 1: browse to a workspace. The "/" palette is live here, so folder work
+       happens during the browse rather than as a step of its own. */
+    int dirty = 0;
+    int ws_idx = run_workspace_browser(&st, "Edit which workspace?", 1, &dirty);
+
+    /* Folder edits are committed on the way out whichever way the browse ended:
+       creating three folders and then pressing Esc is a session's work, not a
+       cancellation of it. */
+    if (dirty && workspace_store_save(&st) != 0) {
+        printf(ANSI_CLEAR ANSI_RESET);
+        ui_err("failed to save folder changes");
+        workspace_store_free(&st);
         return;
     }
 
-    /* Step 1: pick workspace */
-    int ws_idx = run_workspace_picker(ws, count, "Edit which workspace?", NULL);
     if (ws_idx == -1) {
-        printf(ANSI_CLEAR ANSI_RESET); ui_info("Cancelled.");
-        workspace_free_all(ws, count);
+        printf(ANSI_CLEAR ANSI_RESET);
+        if (dirty) ui_ok("Folders updated.");
+        else       ui_info("Cancelled.");
+        workspace_store_free(&st);
         return;
     }
 
@@ -554,7 +573,7 @@ static void cmd_open_edit(void) {
     WsEditorApp *editor_apps = calloc(WORKSPACE_ENTRIES_MAX, sizeof(WsEditorApp));
     if (!editor_apps) {
         ui_err("out of memory");
-        workspace_free_all(ws, count);
+        workspace_store_free(&st);
         return;
     }
     int editor_count = 0;
@@ -596,7 +615,7 @@ static void cmd_open_edit(void) {
     if (!confirmed) {
         printf(ANSI_CLEAR ANSI_RESET); ui_info("Cancelled.");
         free_editor_apps(editor_apps, WORKSPACE_ENTRIES_MAX);
-        workspace_free_all(ws, count);
+        workspace_store_free(&st);
         return;
     }
 
@@ -610,7 +629,7 @@ static void cmd_open_edit(void) {
         else
             ui_err("failed to remove workspace '%s'", ws_name);
         free_editor_apps(editor_apps, WORKSPACE_ENTRIES_MAX);
-        workspace_free_all(ws, count);
+        workspace_store_free(&st);
         return;
     }
 
@@ -644,13 +663,13 @@ static void cmd_open_edit(void) {
     }
     w->entry_count = ec;
 
-    if (workspace_save_all(ws, count) == 0)
+    if (workspace_store_save(&st) == 0)
         ui_ok("Saved workspace '%s'.", ws_name);
     else
         ui_err("failed to save workspace '%s'", ws_name);
 
     free_editor_apps(editor_apps, WORKSPACE_ENTRIES_MAX);
-    workspace_free_all(ws, count);
+    workspace_store_free(&st);
 }
 
 static void cmd_open_snap(void) {

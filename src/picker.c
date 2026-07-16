@@ -889,7 +889,10 @@ int run_list_picker(IndexEntry *entries, int count,
     return result;
 }
 
-/* ── Workspace picker ──────────────────────────────────────────────────── */
+/* ── Workspace browser ──────────────────────────────────────────────────────
+   The rows and the "/" palette live further down, past the centred dialogs they
+   call into; only the selected-workspace frame is here, next to the rendering
+   helpers it belongs with. */
 
 /* Most entries to show under the selected workspace before collapsing the rest
    into a "⋯ K more" line, so a large workspace can't overflow. */
@@ -931,46 +934,6 @@ static void render_workspace_frame(const Workspace *w) {
             lines++;
         }
     }
-}
-
-static void render_workspace_list(Workspace *ws, int count, int selected,
-                                  int num_input, int show_error,
-                                  const char *title, const char *subtitle) {
-    print_picker_header(title, subtitle);
-    int start = picker_window_start(selected, count);
-    int end   = start + (count < PICKER_WINDOW ? count : PICKER_WINDOW);
-    print_more_above(start);
-    for (int i = start; i < end; i++) {
-        if (num_input < 0 && i == selected) {
-            printf("  " ANSI_ACCENT CURSOR_TOKEN ANSI_RESET " " ANSI_BOLD "[%d] %s" ANSI_RESET " " ANSI_DIM "(%d app%s)" ANSI_RESET "\n",
-                   i + 1, ws[i].name, ws[i].entry_count, ws[i].entry_count == 1 ? "" : "s");
-            /* Expand the apps of the selected workspace only. */
-            render_workspace_frame(&ws[i]);
-        } else {
-            printf(ANSI_DIM "    [%d] %s (%d app%s)" ANSI_RESET "\n",
-                   i + 1, ws[i].name, ws[i].entry_count, ws[i].entry_count == 1 ? "" : "s");
-        }
-    }
-    print_more_below(end, count);
-    print_picker_footer(num_input, show_error, NULL);
-}
-
-typedef struct {
-    Workspace *ws;
-    int count;
-    const char *title, *subtitle;
-} WorkspacePickerCtx;
-
-static void render_workspace_cb(void *ctx, int selected, int num_input, int show_error) {
-    const WorkspacePickerCtx *c = ctx;
-    render_workspace_list(c->ws, c->count, selected, num_input, show_error,
-                          c->title, c->subtitle);
-}
-
-int run_workspace_picker(Workspace *ws, int count,
-                         const char *title, const char *subtitle) {
-    WorkspacePickerCtx ctx = { ws, count, title, subtitle };
-    return run_indexed_picker(count, render_workspace_cb, &ctx);
 }
 
 /* ── Centered yes/no confirmation ──────────────────────────────────────── */
@@ -1101,6 +1064,553 @@ static int run_text_input_centered(const char *title, const char *label,
     }
     printf(ANSI_CURSOR_SHOW);
     return cancelled ? 0 : 1;
+}
+
+/* ── Workspace browser: rows, breadcrumb, "/" palette ───────────────────────
+   `mn open` and step 1 of `mn open edit` are the same screen: one level of the
+   folder tree, drilled into with Enter and backed out of with Backspace. Rows
+   are rebuilt from the store on every keystroke rather than cached, the way the
+   editor's build_edit_rows does — there is no tree state to fall out of sync.
+
+   This is its own loop rather than another run_indexed_picker callback: that
+   loop is shared with the menu, search and list pickers, and neither drilling
+   nor a command palette belongs in them. */
+
+/* Children to preview under a selected folder, matching WS_FRAME_MAX_ENTRIES. */
+#define WS_FOLDER_PREVIEW_MAX 6
+
+/* The selected folder's contents, in the same left rail the selected workspace
+   gets — a folder is a row like any other, so selecting one has to expand into
+   something rather than leave a hole where the frame was. Nested folders keep
+   their "▸" so the preview reads as a level, not a flat dump. */
+static void render_ws_folder_frame(const FolderList *f, const Workspace *ws, int ws_count,
+                                   const char *path) {
+    int lines = 0, shown = 0;
+    int total = wstree_count_children(f, path, ws, ws_count);
+
+    for (int i = 0; i < f->count && lines < WS_FOLDER_PREVIEW_MAX; i++) {
+        if (!wstree_is_child_of(f->paths[i], path)) continue;
+        printf(ANSI_DIM_YELLOW "    │ " ANSI_RESET ANSI_DIM ANSI_FOLDER "\xe2\x96\xb8 %s" ANSI_RESET "\n",
+               wstree_leaf(f->paths[i]));
+        lines++; shown++;
+    }
+    for (int i = 0; i < ws_count && lines < WS_FOLDER_PREVIEW_MAX; i++) {
+        if (strcmp(ws[i].folder, path) != 0) continue;
+        printf(ANSI_DIM_YELLOW "    │ " ANSI_RESET ANSI_DIM "%s" ANSI_RESET "\n", ws[i].name);
+        lines++; shown++;
+    }
+
+    if (total == 0)
+        printf(ANSI_DIM_YELLOW "    │ " ANSI_RESET ANSI_DIM "empty" ANSI_RESET "\n");
+    else if (shown < total)
+        printf(ANSI_DIM_YELLOW "    │ " ANSI_RESET ANSI_DIM "\xe2\x8b\xaf %d more" ANSI_RESET "\n",
+               total - shown);
+}
+
+/* "mn / NUSY4S1 / CS2030S" — ancestors grey, the level you are on gold, so the
+   breadcrumb answers "where am I" before the rows do. Replaces the subtitle. */
+static void print_breadcrumb(const char *cwd) {
+    printf("  " ANSI_CRUMB "mn" ANSI_RESET);
+    const char *p = cwd;
+    while (*p) {
+        const char *slash = strchr(p, WORKSPACE_FOLDER_SEP);
+        int len = slash ? (int)(slash - p) : (int)strlen(p);
+        printf(ANSI_CRUMB " / " ANSI_RESET);
+        if (slash) printf(ANSI_CRUMB "%.*s" ANSI_RESET, len, p);
+        else       printf(ANSI_BOLD ANSI_FOLDER "%.*s" ANSI_RESET, len, p);
+        if (!slash) break;
+        p = slash + 1;
+    }
+    printf(ANSI_CRUMB " /" ANSI_RESET "\n\n");
+}
+
+/* ── "/" command palette ────────────────────────────────────────────────────
+   Modelled on the path-completion dropdown above: an overlay under a field that
+   takes keys before the field does, with the same contract so the two feel like
+   one mechanism — ↑/↓ move the highlight, Tab accepts it, Esc dismisses, and
+   Enter always submits the line rather than completing it.
+
+   A command may carry its argument inline ("/new-folder NUSY4S1"), which skips
+   the follow-up prompt; without one, the command asks. */
+
+enum { CMD_NEW_FOLDER, CMD_MOVE, CMD_RENAME, CMD_DELETE, CMD_COUNT };
+
+typedef struct {
+    const char *name;
+    const char *arg;    /* "" when the command takes none */
+    const char *help;
+} CmdDef;
+
+static const CmdDef CMDS[CMD_COUNT] = {
+    { "/new-folder", " [name]", "create a folder in here"        },
+    { "/move",       "",        "file this under another folder" },
+    { "/rename",     " [name]", "rename this folder"             },
+    { "/delete",     "",        "remove this folder"             },
+};
+
+typedef struct {
+    int  open;
+    char buf[WORKSPACE_FOLDER_MAX];
+    int  len, pos;
+    int  sel;
+    int  match[CMD_COUNT];
+    int  nmatch;
+} CmdPalette;
+
+/* A command only appears when it has something to act on: /rename with no folder
+   selected would be a row you can highlight and not run. Filtering the list is
+   how the palette says so — quieter than an error after the fact. */
+static int cmd_applies(int cmd, int row_kind) {
+    switch (cmd) {
+    case CMD_NEW_FOLDER: return 1;
+    case CMD_MOVE:       return row_kind == WSROW_FOLDER || row_kind == WSROW_WS;
+    case CMD_RENAME:
+    case CMD_DELETE:     return row_kind == WSROW_FOLDER;
+    }
+    return 0;
+}
+
+/* Length of the command word in buf — up to the first space, so a typed argument
+   doesn't stop the name from matching. */
+static int palette_word_len(const CmdPalette *p) {
+    const char *sp = strchr(p->buf, ' ');
+    return sp ? (int)(sp - p->buf) : p->len;
+}
+
+/* Recomputes the visible commands after an edit or a cursor move. The highlight
+   returns to the top: the previous pick may no longer be in the list. */
+static void palette_refresh(CmdPalette *p, int row_kind) {
+    int w = palette_word_len(p);
+    p->nmatch = 0;
+    for (int i = 0; i < CMD_COUNT; i++) {
+        if (!cmd_applies(i, row_kind)) continue;
+        if (strncmp(CMDS[i].name, p->buf, (size_t)w) != 0) continue;
+        p->match[p->nmatch++] = i;
+    }
+    p->sel = 0;
+}
+
+static void palette_open(CmdPalette *p, int row_kind) {
+    memset(p, 0, sizeof(*p));
+    p->open = 1;
+    p->buf[0] = '/'; p->len = 1; p->pos = 1;
+    palette_refresh(p, row_kind);
+}
+
+/* Replaces the typed word with the highlighted command, leaving the cursor where
+   the argument goes. */
+static void palette_complete(CmdPalette *p, int row_kind) {
+    if (p->nmatch == 0) return;
+    const CmdDef *c = &CMDS[p->match[p->sel]];
+    snprintf(p->buf, sizeof(p->buf), "%s%s", c->name, c->arg[0] ? " " : "");
+    p->len = (int)strlen(p->buf);
+    p->pos = p->len;
+    palette_refresh(p, row_kind);
+}
+
+/* The inline argument: whatever follows the command word ("" if there is none). */
+static void palette_arg(const CmdPalette *p, char *arg, size_t n) {
+    const char *rest = p->buf + palette_word_len(p);
+    while (*rest == ' ') rest++;
+    snprintf(arg, n, "%s", rest);
+}
+
+/* The command Enter would run: the highlighted match, or -1 when nothing matches.
+   Enter runs the highlight rather than re-resolving the typed text, because the
+   two can't disagree — typing is what filters the list, and the highlight is
+   always inside it. A bare "/" has no literal meaning to submit instead (unlike
+   a path field, where Enter deliberately submits what was typed), so there is no
+   second thing for the key to mean. */
+static int palette_selected(const CmdPalette *p) {
+    return p->nmatch > 0 ? p->match[p->sel] : -1;
+}
+
+static void render_palette(const CmdPalette *p) {
+    /* The field, with the same block cursor every other text field in here uses. */
+    char cur = p->buf[p->pos] ? p->buf[p->pos] : ' ';
+    const char *rest = p->buf[p->pos] ? p->buf + p->pos + 1 : "";
+    printf("\n  " ANSI_VIOLET "%.*s" ANSI_RESET ANSI_REVERSE "%c" ANSI_REVERSE_OFF
+           ANSI_VIOLET "%s" ANSI_RESET,
+           p->pos, p->buf, cur, rest);
+
+    if (p->nmatch == 0) {
+        printf("\n" ANSI_SILVER "  \xe2\x94\x94 " ANSI_RESET
+               ANSI_DIM "no such command  \xe2\x80\xa2  Esc dismiss" ANSI_RESET);
+        return;
+    }
+
+    printf("\n" ANSI_SILVER "  \xe2\x94\x8c " ANSI_RESET ANSI_DIM "%d command%s" ANSI_RESET "\n",
+           p->nmatch, p->nmatch == 1 ? "" : "s");
+    for (int i = 0; i < p->nmatch; i++) {
+        const CmdDef *c = &CMDS[p->match[i]];
+        char label[64];
+        snprintf(label, sizeof(label), "%s%s", c->name, c->arg);
+        printf(ANSI_SILVER "  \xe2\x94\x82 " ANSI_RESET);
+        if (i == p->sel)
+            printf(ANSI_VIOLET "> %-22s" ANSI_RESET ANSI_DIM " %s" ANSI_RESET "\n", label, c->help);
+        else
+            printf(ANSI_DIM "  %-22s %s" ANSI_RESET "\n", label, c->help);
+    }
+    printf(ANSI_SILVER "  \xe2\x94\x94 " ANSI_RESET ANSI_DIM
+           "Tab complete  \xe2\x80\xa2  \xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  Enter run  \xe2\x80\xa2  Esc dismiss" ANSI_RESET);
+}
+
+/* ── Browser rendering ─────────────────────────────────────────────────── */
+
+static void render_ws_browser(const WorkspaceStore *st, const WsRow *rows, int nrows,
+                              const char *cwd, int cursor, const char *title,
+                              int num_input, int show_error, int edit_mode,
+                              const char *err, const CmdPalette *pal) {
+    print_picker_header(title, NULL);
+    print_breadcrumb(cwd);
+
+    if (nrows == 0) {
+        printf("  " ANSI_DIM "%s" ANSI_RESET "\n",
+               cwd[0] ? "This folder is empty." : "No workspaces yet.");
+    }
+
+    int start = picker_window_start(cursor, nrows);
+    int end   = start + (nrows < PICKER_WINDOW ? nrows : PICKER_WINDOW);
+    print_more_above(start);
+    /* The palette needs the rows below it for context but not their detail, and
+       an 8-line app frame plus the command list overruns a short terminal and
+       scrolls the header away. Keep the highlight, drop the expansion. */
+    int expand = !pal->open;
+
+    for (int i = start; i < end; i++) {
+        const WsRow *r    = &rows[i];
+        int sel           = (num_input < 0 && i == cursor);
+        const char *arrow = sel ? ANSI_ACCENT CURSOR_TOKEN ANSI_RESET : " ";
+
+        if (r->kind == WSROW_FOLDER) {
+            const char *path = st->folders.paths[r->idx];
+            int kids = wstree_count_children(&st->folders, path, st->ws, st->ws_count);
+            if (sel) {
+                printf("  %s " ANSI_FOLDER_HL " \xe2\x96\xb8 [%d] %s " ANSI_RESET
+                       " " ANSI_DIM "%d item%s" ANSI_RESET "\n",
+                       arrow, i + 1, wstree_leaf(path), kids, kids == 1 ? "" : "s");
+                if (expand)
+                    render_ws_folder_frame(&st->folders, st->ws, st->ws_count, path);
+            } else {
+                printf("    " ANSI_FOLDER "\xe2\x96\xb8 [%d] %s" ANSI_RESET
+                       " " ANSI_DIM "%d item%s" ANSI_RESET "\n",
+                       i + 1, wstree_leaf(path), kids, kids == 1 ? "" : "s");
+            }
+        } else {
+            const Workspace *w = &st->ws[r->idx];
+            if (sel) {
+                printf("  %s " ANSI_BOLD "[%d] %s" ANSI_RESET " " ANSI_DIM "(%d app%s)" ANSI_RESET "\n",
+                       arrow, i + 1, w->name, w->entry_count, w->entry_count == 1 ? "" : "s");
+                if (expand) render_workspace_frame(w);
+            } else {
+                printf(ANSI_DIM "    [%d] %s (%d app%s)" ANSI_RESET "\n",
+                       i + 1, w->name, w->entry_count, w->entry_count == 1 ? "" : "s");
+            }
+        }
+    }
+    print_more_below(end, nrows);
+
+    if (err && err[0])
+        printf("\n" ANSI_YELLOW "  %s" ANSI_RESET, err);
+
+    if (pal->open) { render_palette(pal); fflush(stdout); return; }
+
+    if (show_error) {
+        printf("\n" ANSI_YELLOW "That index doesn't exist." ANSI_RESET);
+    } else if (num_input == 0) {
+        printf("\n" ANSI_YELLOW "Jump target: -" ANSI_RESET);
+    } else if (num_input > 0) {
+        printf("\n" ANSI_YELLOW "Jump target: %d" ANSI_RESET, num_input);
+    }
+
+    const char *act = (nrows > 0 && rows[cursor].kind == WSROW_FOLDER) ? "Enter open" : "Enter select";
+    printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  %s", act);
+    if (cwd[0]) printf("  \xe2\x80\xa2  Backspace up");
+    if (edit_mode) printf("  \xe2\x80\xa2  " ANSI_RESET ANSI_VIOLET "/" ANSI_RESET ANSI_DIM " commands");
+    printf("  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
+    fflush(stdout);
+}
+
+/* ── Folder chooser (/move) ─────────────────────────────────────────────────
+   A plain menu of every folder plus the root, minus anywhere the thing being
+   moved cannot go. Returns the chosen path in out, or 0 if cancelled. */
+static int choose_folder(const WorkspaceStore *st, const char *what,
+                         const char *exclude_subtree, const char *current,
+                         char *out, size_t out_size) {
+    const char **labels = malloc((size_t)(st->folders.count + 1) * sizeof(*labels));
+    int  *ids = malloc((size_t)(st->folders.count + 1) * sizeof(*ids));
+    if (labels == NULL || ids == NULL) { free(labels); free(ids); return 0; }
+
+    int n = 0;
+    if (strcmp(current, "") != 0) { labels[n] = "/  (root)"; ids[n] = -1; n++; }
+
+    /* Sorted by path, so the chooser lists folders in the same order the browser
+       shows them — the registry's insertion order would be an arbitrary third
+       ordering to learn. Root, when offered, stays pinned at the top. */
+    int first = n;
+    for (int i = 0; i < st->folders.count; i++) {
+        if (exclude_subtree && exclude_subtree[0] &&
+            wstree_is_descendant(st->folders.paths[i], exclude_subtree)) continue;
+        if (strcmp(st->folders.paths[i], current) == 0) continue;   /* already there */
+        int j = n++;
+        while (j > first && strcmp(labels[j - 1], st->folders.paths[i]) > 0) {
+            labels[j] = labels[j - 1]; ids[j] = ids[j - 1]; j--;
+        }
+        labels[j] = st->folders.paths[i];
+        ids[j] = i;
+    }
+
+    /* Nowhere to go — the only folders are the one it's already in and its own
+       subtree. Say so rather than blinking and doing nothing. */
+    if (n == 0) {
+        free(labels); free(ids);
+        return -1;
+    }
+
+    int ok = 0;
+    char title[220];
+    snprintf(title, sizeof(title), "Move '%.60s' to", what);
+    int pick = run_menu_picker(title, NULL, labels, n);
+    if (pick >= 0) {
+        snprintf(out, out_size, "%s", ids[pick] < 0 ? "" : st->folders.paths[ids[pick]]);
+        ok = 1;
+    }
+    free(labels); free(ids);
+    return ok;
+}
+
+/* ── Command execution ──────────────────────────────────────────────────────
+   Runs one palette command against the store. Returns 1 if anything changed.
+   Failures are written to err for the browser to show in yellow, the way the
+   editor already reports a rejected rename. */
+/* A command's name argument: taken as typed when given inline, otherwise asked
+   for. Returns 0 if the prompt was cancelled. The centred dialogs re-show the
+   cursor on the way out, so it is hidden again here rather than at each caller. */
+static int ask_name(const char *arg, const char *title, const char *prefill,
+                    char *out, size_t out_size) {
+    if (arg[0]) { snprintf(out, out_size, "%s", arg); return 1; }
+    int ok = run_text_input_centered(title, "Name", out, out_size, prefill);
+    printf(ANSI_CURSOR_HIDE);
+    return ok;
+}
+
+static int palette_run(int cmd, const char *arg, WorkspaceStore *st, const char *cwd,
+                       const WsRow *rows, int nrows, int cursor,
+                       char *err, size_t err_size) {
+    const WsRow *r = (nrows > 0) ? &rows[cursor] : NULL;
+    char name[WORKSPACE_FOLDER_MAX];
+
+    if (cmd == CMD_NEW_FOLDER) {
+        if (!ask_name(arg, "New folder", "", name, sizeof(name))) return 0;
+        if (!wstree_name_ok(name)) {
+            snprintf(err, err_size, "'%.60s' isn't a usable folder name (no '/', no blank ends).", name);
+            return 0;
+        }
+        char path[WORKSPACE_FOLDER_MAX];
+        wstree_join(cwd, name, path, sizeof(path));
+        int rc = wstree_add(&st->folders, path);
+        if (rc == -1) { snprintf(err, err_size, "A folder named '%.60s' is already here.", name); return 0; }
+        if (rc == -2) { snprintf(err, err_size, "Out of memory."); return 0; }
+        return 1;
+    }
+
+    if (cmd == CMD_RENAME) {
+        if (r == NULL || r->kind != WSROW_FOLDER) return 0;
+        char path[WORKSPACE_FOLDER_MAX];
+        snprintf(path, sizeof(path), "%s", st->folders.paths[r->idx]);
+        char title[220];
+        snprintf(title, sizeof(title), "Rename '%.60s'", wstree_leaf(path));
+        if (!ask_name(arg, title, wstree_leaf(path), name, sizeof(name))) return 0;
+        if (!wstree_name_ok(name)) {
+            snprintf(err, err_size, "'%.60s' isn't a usable folder name (no '/', no blank ends).", name);
+            return 0;
+        }
+        if (wstree_rename(&st->folders, path, name, st->ws, st->ws_count) == -1) {
+            snprintf(err, err_size, "A folder named '%.60s' is already here.", name);
+            return 0;
+        }
+        return 1;
+    }
+
+    if (cmd == CMD_DELETE) {
+        if (r == NULL || r->kind != WSROW_FOLDER) return 0;
+        char path[WORKSPACE_FOLDER_MAX];
+        snprintf(path, sizeof(path), "%s", st->folders.paths[r->idx]);
+        int kids = wstree_count_children(&st->folders, path, st->ws, st->ws_count);
+
+        char parent[WORKSPACE_FOLDER_MAX], q[420];
+        wstree_parent(path, parent, sizeof(parent));
+        /* Bounded: a folder path can be as long as the buffer, and this question
+           has to stay on one centred line. */
+        if (kids == 0)
+            snprintf(q, sizeof(q), "Remove folder '%.60s'?", wstree_leaf(path));
+        else
+            snprintf(q, sizeof(q), "Remove folder '%.60s'? Its %d item%s move to %.80s.",
+                     wstree_leaf(path), kids, kids == 1 ? "" : "s",
+                     parent[0] ? parent : "the top level");
+        int yes = confirm_centered(q);
+        printf(ANSI_CURSOR_HIDE);
+        if (!yes) return 0;
+
+        if (wstree_remove(&st->folders, path, st->ws, st->ws_count) == -1) {
+            snprintf(err, err_size, "Can't remove '%.60s': a name inside it already exists in %.80s.",
+                     wstree_leaf(path), parent[0] ? parent : "the top level");
+            return 0;
+        }
+        return 1;
+    }
+
+    if (cmd == CMD_MOVE) {
+        if (r == NULL) return 0;
+        char dest[WORKSPACE_FOLDER_MAX];
+        if (st->folders.count == 0) {
+            snprintf(err, err_size, "There are no folders yet \xe2\x80\x94 make one with /new-folder.");
+            return 0;
+        }
+
+        if (r->kind == WSROW_FOLDER) {
+            char path[WORKSPACE_FOLDER_MAX];
+            snprintf(path, sizeof(path), "%s", st->folders.paths[r->idx]);
+            char parent[WORKSPACE_FOLDER_MAX];
+            wstree_parent(path, parent, sizeof(parent));
+            /* A folder can go anywhere except into itself or its own subtree. */
+            int ok = choose_folder(st, wstree_leaf(path), path, parent, dest, sizeof(dest));
+            printf(ANSI_CURSOR_HIDE);
+            if (!ok) return 0;
+            int rc = wstree_move(&st->folders, path, dest, st->ws, st->ws_count);
+            if (rc == -1) {
+                snprintf(err, err_size, "'%.80s' already holds a folder by that name.",
+                         dest[0] ? dest : "The top level");
+                return 0;
+            }
+            return rc == 0;
+        }
+
+        Workspace *w = &st->ws[r->idx];
+        int ok = choose_folder(st, w->name, NULL, w->folder, dest, sizeof(dest));
+        printf(ANSI_CURSOR_HIDE);
+        if (!ok) return 0;
+        snprintf(w->folder, WORKSPACE_FOLDER_MAX, "%s", dest);
+        return 1;
+    }
+    return 0;
+}
+
+/* ── Browser loop ──────────────────────────────────────────────────────── */
+
+int run_workspace_browser(WorkspaceStore *st, const char *title,
+                          int edit_mode, int *dirty) {
+    char cwd[WORKSPACE_FOLDER_MAX] = "";
+    WsRow *rows = NULL;
+    int rows_cap = 0;
+    int cursor = 0, prev_cursor = 0, num_input = -1, show_error = 0;
+    int done = 0, result = -1;
+    char err[220] = {0};
+    CmdPalette pal; memset(&pal, 0, sizeof(pal));
+
+    if (dirty) *dirty = 0;
+    int nrows = wstree_build_rows(&st->folders, st->ws, st->ws_count, cwd, &rows, &rows_cap);
+
+    printf(ANSI_CURSOR_HIDE);
+    render_ws_browser(st, rows, nrows, cwd, cursor, title, num_input, show_error,
+                      edit_mode, err, &pal);
+
+    while (!done) {
+        int key = read_key();
+        show_error = 0;
+        int activate = 0;
+
+        if (pal.open) {
+            int row_kind = (nrows > 0) ? rows[cursor].kind : -1;
+            if (key == KEY_ESC) {
+                pal.open = 0;
+            } else if (key == KEY_UP) {
+                if (pal.nmatch) pal.sel = (pal.sel > 0) ? pal.sel - 1 : pal.nmatch - 1;
+            } else if (key == KEY_DOWN) {
+                if (pal.nmatch) pal.sel = (pal.sel + 1) % pal.nmatch;
+            } else if (key == KEY_TAB) {
+                palette_complete(&pal, row_kind);
+            } else if (key == KEY_ENTER) {
+                char arg[WORKSPACE_FOLDER_MAX];
+                palette_arg(&pal, arg, sizeof(arg));
+                int cmd = palette_selected(&pal);
+                pal.open = 0;
+                err[0] = '\0';
+                if (cmd < 0) {
+                    snprintf(err, sizeof(err), "No command matches '%.40s'.", pal.buf);
+                } else if (palette_run(cmd, arg, st, cwd, rows, nrows, cursor,
+                                       err, sizeof(err))) {
+                    if (dirty) *dirty = 1;
+                    nrows = wstree_build_rows(&st->folders, st->ws, st->ws_count,
+                                              cwd, &rows, &rows_cap);
+                    if (cursor >= nrows) cursor = nrows > 0 ? nrows - 1 : 0;
+                }
+            } else if ((key == KEY_BACKSPACE || key == 127) && pal.len <= 1) {
+                pal.open = 0;   /* deleting the "/" leaves the palette */
+            } else if (edit_buffer_key(key, pal.buf, &pal.len, &pal.pos, sizeof(pal.buf))) {
+                palette_refresh(&pal, row_kind);
+            }
+        } else if (num_input >= 0) {
+            handle_num_input(key, nrows, &num_input, &cursor,
+                             &prev_cursor, &show_error, &activate);
+        } else {
+            switch (key) {
+            case KEY_UP:    if (cursor > 0)         cursor--; break;
+            case KEY_DOWN:  if (cursor < nrows - 1) cursor++; break;
+            case KEY_ENTER: activate = 1;                     break;
+            case KEY_ESC:   result = -1; done = 1;            break;
+            case KEY_BACKSPACE:
+            case 127:
+                if (cwd[0]) {
+                    /* Step out, and land the cursor on the folder just left —
+                       backing out should return you to where you came from, not
+                       to the top of the parent. */
+                    char was[WORKSPACE_FOLDER_MAX];
+                    snprintf(was, sizeof(was), "%s", cwd);
+                    wstree_parent(was, cwd, sizeof(cwd));
+                    err[0] = '\0';
+                    nrows = wstree_build_rows(&st->folders, st->ws, st->ws_count,
+                                              cwd, &rows, &rows_cap);
+                    cursor = 0;
+                    for (int i = 0; i < nrows; i++)
+                        if (rows[i].kind == WSROW_FOLDER &&
+                            strcmp(st->folders.paths[rows[i].idx], was) == 0) { cursor = i; break; }
+                }
+                break;
+            default:
+                if (key == '/' && edit_mode) {
+                    err[0] = '\0';
+                    palette_open(&pal, (nrows > 0) ? rows[cursor].kind : -1);
+                } else if (key >= '1' && key <= '9') {
+                    prev_cursor = cursor;
+                    num_input = key - '0';
+                }
+                break;
+            }
+        }
+
+        if (activate && nrows > 0) {
+            const WsRow *r = &rows[cursor];
+            if (r->kind == WSROW_FOLDER) {
+                snprintf(cwd, sizeof(cwd), "%s", st->folders.paths[r->idx]);
+                cursor = 0; num_input = -1; err[0] = '\0';
+                nrows = wstree_build_rows(&st->folders, st->ws, st->ws_count,
+                                          cwd, &rows, &rows_cap);
+            } else {
+                result = r->idx;
+                done = 1;
+            }
+        }
+
+        if (!done)
+            render_ws_browser(st, rows, nrows, cwd, cursor, title, num_input,
+                              show_error, edit_mode, err, &pal);
+    }
+
+    free(rows);
+    printf(ANSI_CURSOR_SHOW);
+    fflush(stdout);
+    return result;
 }
 
 /* ── App screen-placement chooser ('\' in the workspace editor) ──────────────

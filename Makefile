@@ -46,6 +46,7 @@ SRCS = src/main.c \
        src/reindex.c \
        src/relocate.c \
        src/workspace.c \
+       src/wstree.c \
        src/app_resolve.c \
        src/app_launch.c \
        src/app_enum.c \
