@@ -894,10 +894,16 @@ static int launch_preview_pdf(const char *path, int page) {
 
     /* Poll for Preview's window and the Go-to-Page sheet rather than sleeping
        a fixed amount — cold starts and state restoration make fixed delays
-       unreliable. All-System-Events, no direct Preview scripting. */
+       unreliable. All-System-Events, no direct Preview scripting.
+       Wrapped in `nohup` because close_terminal closes the Terminal window
+       shortly after we return, and Terminal-window closure sends SIGHUP to
+       every process still attached to that PTY. Without `nohup` the polling
+       osascript is killed before it even sees Preview's window appear. This
+       is the same hazard workspace placement dodges by running its osascript
+       *synchronously* before close_terminal fires. */
     char osa[1024];
     snprintf(osa, sizeof(osa),
-        "(osascript"
+        "nohup osascript"
         " -e 'tell application \"System Events\"'"
         " -e 'repeat 40 times'"                  /* ~6s to wait for the window */
         " -e 'try'"
@@ -916,7 +922,7 @@ static int launch_preview_pdf(const char *path, int page) {
         " -e 'delay 0.05'"
         " -e 'key code 36'"                      /* Return */
         " -e 'end tell'"
-        " 2>/dev/null) &",
+        " </dev/null >/dev/null 2>&1 &",
         page);
     return system(osa);
 }
