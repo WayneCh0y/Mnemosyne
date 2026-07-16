@@ -878,24 +878,44 @@ static int launch_skim_pdf(const char *path, int page) {
 static int launch_preview_pdf(const char *path, int page) {
     /* Preview has no CLI page-jump and its AppleScript dictionary has no page
        entity. We open the file, then send the ⌥⌘G "Go to Page…" shortcut via
-       System Events. This needs Accessibility permission for the terminal —
-       when it isn't granted the keystrokes are dropped silently, which is fine
-       because the PDF is already open at page 1. Delays let the app come to
-       the foreground before we send the chord. */
+       System Events. Requires Accessibility for the terminal plus Automation
+       for System Events — the same permissions the workspace placement flow
+       relies on ([mac_place_window]), so a user for whom `mn open` works
+       already has everything needed. We deliberately avoid a `tell application
+       "Preview"` block so we don't require the *separate* Automation entry for
+       Preview, whose prompt would never surface (backgrounded osascript). If
+       Accessibility is missing the keystrokes are dropped silently, leaving
+       the PDF open at page 1 — the target page is still printed to the
+       terminal as a manual fallback. */
     char open_cmd[WORKSPACE_TARGET_MAX + 32];
     snprintf(open_cmd, sizeof(open_cmd), "open -a Preview \"%s\"", path);
     system(open_cmd);
     if (page <= 1) return 0;
 
-    char osa[512];
+    /* Poll for Preview's window and the Go-to-Page sheet rather than sleeping
+       a fixed amount — cold starts and state restoration make fixed delays
+       unreliable. All-System-Events, no direct Preview scripting. */
+    char osa[1024];
     snprintf(osa, sizeof(osa),
-        "(sleep 0.6; osascript"
-        " -e 'tell application \"Preview\" to activate'"
-        " -e 'delay 0.2'"
-        " -e 'tell application \"System Events\" to keystroke \"g\" using {option down, command down}'"
-        " -e 'delay 0.2'"
-        " -e 'tell application \"System Events\" to keystroke \"%d\"'"
-        " -e 'tell application \"System Events\" to key code 36'"
+        "(osascript"
+        " -e 'tell application \"System Events\"'"
+        " -e 'repeat 40 times'"                  /* ~6s to wait for the window */
+        " -e 'try'"
+        " -e 'if (count of windows of application process \"Preview\") > 0 then exit repeat'"
+        " -e 'end try'"
+        " -e 'delay 0.15'"
+        " -e 'end repeat'"
+        " -e 'keystroke \"g\" using {option down, command down}'"
+        " -e 'repeat 20 times'"                  /* ~2s for the sheet to appear */
+        " -e 'try'"
+        " -e 'if exists (sheet 1 of window 1 of application process \"Preview\") then exit repeat'"
+        " -e 'end try'"
+        " -e 'delay 0.1'"
+        " -e 'end repeat'"
+        " -e 'keystroke \"%d\"'"
+        " -e 'delay 0.05'"
+        " -e 'key code 36'"                      /* Return */
+        " -e 'end tell'"
         " 2>/dev/null) &",
         page);
     return system(osa);
