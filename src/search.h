@@ -9,6 +9,7 @@ typedef struct {
     long last_modified;
     int  match_start;  /* byte offset in context[] where query begins; -1 if path-only match */
     int  match_len;    /* byte length of the matched query */
+    int  page;         /* 1-based page of the first match for PDFs; 0 for non-PDFs */
 } SearchResult;
 
 int is_word_match(const char *buf, const char *mp, const char *query);

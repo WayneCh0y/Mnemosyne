@@ -166,9 +166,13 @@ static void close_terminal(void) {
 static void handle_enter(SearchResult *results, int selected, const char *query, int is_case_sensitive) {
     const char *file_path = results[selected].original_path;
 
-    /* Open PDFs with the OS's default PDF viewer instead of the IDE. */
+    /* Open PDFs with the OS's default PDF viewer instead of the IDE. Jump to
+       the match's page when the viewer supports it; the page is printed either
+       way so the user always has a manual fallback (⌥⌘G / Ctrl+G). */
     if (strcmp(results[selected].file_type, "pdf") == 0) {
-        open_with_default_app(file_path);
+        int page = results[selected].page > 0 ? results[selected].page : 1;
+        ui_info("Opening '%s' at page %d", file_path, page);
+        open_pdf_at_page(file_path, page);
         close_terminal();
         return;
     }

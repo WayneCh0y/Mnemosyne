@@ -75,8 +75,10 @@ static int run_pdftotext(const char *exe, const char *input, const char *output)
     snprintf(input_q,  sizeof(input_q),  "\"%s\"", input);
     snprintf(output_q, sizeof(output_q), "\"%s\"", output);
 
+    /* Page breaks (form-feed 0x0C between pages) are kept — the search layer
+       counts them to report the page number of a match. */
     const char *argv[] = {
-        exe, "-raw", "-nopgbrk", "-enc", "UTF-8",
+        exe, "-raw", "-enc", "UTF-8",
         input_q, output_q, NULL
     };
     /* _spawnvp uses `exe` directly if it contains a path separator,
@@ -86,8 +88,10 @@ static int run_pdftotext(const char *exe, const char *input, const char *output)
 }
 #else
 static int run_pdftotext(const char *exe, const char *input, const char *output) {
+    /* Page breaks (form-feed 0x0C between pages) are kept — the search layer
+       counts them to report the page number of a match. */
     char *argv[] = {
-        (char *)exe, "-raw", "-nopgbrk", "-enc", "UTF-8",
+        (char *)exe, "-raw", "-enc", "UTF-8",
         (char *)input, (char *)output, NULL
     };
     pid_t pid;

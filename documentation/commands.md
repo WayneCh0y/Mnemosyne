@@ -72,12 +72,14 @@ For `.md` files, the context is rendered with formatting:
 - List items appear as `- item one` / `- item two` (one per line)
 - Links appear as `link` in **blue**
 
+For `.pdf` files, the context is prefixed with `[p.N]` in **blue** — the 1-based page number of the first match — so you can see where the hit is before opening.
+
 **Interactive controls**
 
 | Key | Action |
 |---|---|
 | `↑` / `↓` | Move selection up or down |
-| `Enter` | Open the selected file in the configured IDE |
+| `Enter` | Open the selected file in the configured IDE (PDFs: the OS default PDF viewer; see below) |
 | `Esc` | Exit without opening anything |
 | `1`–`9` | Enter numeric jump mode — type the index number shown in brackets |
 | `0`–`9` | Append a digit (once a non-zero digit has been typed) |
@@ -85,6 +87,27 @@ For `.md` files, the context is rendered with formatting:
 | `Enter` (numeric mode, valid index) | Jump directly to that result |
 | `Enter` (numeric mode, invalid index) | Show `no such index!` and return to arrow-key mode |
 | `Esc` / `↑` / `↓` (numeric mode) | Return to arrow-key mode |
+
+**PDF opening behaviour**
+
+PDFs bypass the IDE — they open in the OS's registered default PDF viewer. When the viewer supports it, Mnemosyne jumps directly to the matching page; otherwise the file opens at page 1 and you can use the `[p.N]` hint from the picker to navigate manually. The target page is always printed to the terminal as a fallback.
+
+Page-jump support by viewer:
+
+| Platform | Viewer | How |
+|---|---|---|
+| Windows | Microsoft Edge / Chrome / Firefox | `file:///<path>#page=N` URL fragment |
+| Windows | SumatraPDF | `-page N` flag |
+| Windows | Adobe Reader / Acrobat | `/A "page=N"` flag |
+| Windows | anything else | opens at page 1 |
+| macOS | Skim (if installed) | AppleScript — reliable |
+| macOS | Preview (default) | ⌥⌘G "Go to Page…" via System Events; needs Accessibility permission for the terminal, silently falls back to page 1 otherwise |
+| Linux | Evince | `--page-label=N` |
+| Linux | Okular | `-p N` |
+| Linux | Firefox / Chrome / Chromium | `xdg-open` with `#page=N` fragment |
+| Linux | anything else | opens at page 1 |
+
+The default viewer is detected per-OS: `AssocQueryString(".pdf", ASSOCSTR_EXECUTABLE)` on Windows, `xdg-mime query default application/pdf` on Linux.
 
 ---
 
@@ -115,7 +138,7 @@ If no files are indexed, prints `No files indexed.` and exits.
 
 **Opening behaviour**
 
-Identical to `search`: if the file belongs to a git repository, VS Code and Cursor are opened with the repository root as the workspace and the file as the target (`--goto`). IntelliJ IDEA receives both the repository root and the file path. All other IDEs receive the file path only.
+Identical to `search`: if the file belongs to a git repository, VS Code and Cursor are opened with the repository root as the workspace and the file as the target (`--goto`). IntelliJ IDEA receives both the repository root and the file path. All other IDEs receive the file path only. PDFs bypass the IDE and open in the OS's default PDF viewer at page 1 (no query context, so no page to jump to — see [`mn search`](#mn-search-query) for the per-viewer page-jump support that applies when opening from search results).
 
 ---
 
