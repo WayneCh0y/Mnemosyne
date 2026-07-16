@@ -965,13 +965,12 @@ static void print_centered(int cols, const char *color, const char *text, int vl
 }
 
 /* Full-screen, centred Yes/No confirmation. Returns 1 (yes) or 0 (no/Esc).
-   Defaults to No so an accidental Enter never deletes anything. */
-static int confirm_centered(const char *question) {
+   Defaults to No so an accidental Enter never destroys anything. yes/no are the
+   button labels, which say what the answer does ("Yes, remove it") rather than
+   just "Yes"; pad both to the same width so the boxes line up. */
+static int confirm_labelled(const char *question, const char *yes, const char *no) {
     int choice = 0;   /* 0 = No (safe default), 1 = Yes */
     int done = 0, result = 0;
-    /* Both labels padded to the same 20-column width so the boxes match. */
-    const char *yes  = "   Yes, remove it   ";
-    const char *no   = "    No, keep it     ";
     const char *help = "\xe2\x86\x91/\xe2\x86\x93 move   Enter select   Esc cancel";
 
     printf(ANSI_CURSOR_HIDE);
@@ -1003,6 +1002,18 @@ static int confirm_centered(const char *question) {
     }
     printf(ANSI_CURSOR_SHOW);
     return result;
+}
+
+static int confirm_centered(const char *question) {
+    return confirm_labelled(question, "   Yes, remove it   ",
+                                      "    No, keep it     ");
+}
+
+/* Leaving the editor throws staged work away, which is a different question from
+   removing something — the buttons have to say that, not "remove it". */
+static int confirm_discard(const char *question) {
+    return confirm_labelled(question, " Yes, discard them  ",
+                                      "  No, keep editing  ");
 }
 
 /* Full-screen, centred single-line text input, matching confirm_centered's layout.
@@ -1127,13 +1138,16 @@ static void print_breadcrumb(const char *cwd) {
 /* ── "/" command palette ────────────────────────────────────────────────────
    Modelled on the path-completion dropdown above: an overlay under a field that
    takes keys before the field does, with the same contract so the two feel like
-   one mechanism — ↑/↓ move the highlight, Tab accepts it, Esc dismisses, and
-   Enter always submits the line rather than completing it.
+   one mechanism — ↑/↓ move the highlight and Tab accepts it.
+
+   The workspace screens have no Esc and no per-action letter keys: arrows move,
+   Enter opens the selected row, and everything else is a command typed here. So
+   this is the only way out of those screens (/back, /exit) as well as the way to
+   act on them, and it is shared — the browser and the editor pass their own
+   command table plus a mask of which entries currently apply.
 
    A command may carry its argument inline ("/new-folder NUSY4S1"), which skips
    the follow-up prompt; without one, the command asks. */
-
-enum { CMD_NEW_FOLDER, CMD_MOVE, CMD_RENAME, CMD_DELETE, CMD_COUNT };
 
 typedef struct {
     const char *name;
@@ -1141,34 +1155,24 @@ typedef struct {
     const char *help;
 } CmdDef;
 
-static const CmdDef CMDS[CMD_COUNT] = {
-    { "/new-folder", " [name]", "create a folder in here"        },
-    { "/move",       "",        "file this under another folder" },
-    { "/rename",     " [name]", "rename this folder"             },
-    { "/delete",     "",        "remove this folder"             },
-};
+#define CMD_MAX 12   /* upper bound on any one screen's command table */
 
 typedef struct {
     int  open;
     char buf[WORKSPACE_FOLDER_MAX];
     int  len, pos;
     int  sel;
-    int  match[CMD_COUNT];
+    int  match[CMD_MAX];
     int  nmatch;
+    const CmdDef *defs;
+    int  ndefs;
 } CmdPalette;
 
-/* A command only appears when it has something to act on: /rename with no folder
-   selected would be a row you can highlight and not run. Filtering the list is
-   how the palette says so — quieter than an error after the fact. */
-static int cmd_applies(int cmd, int row_kind) {
-    switch (cmd) {
-    case CMD_NEW_FOLDER: return 1;
-    case CMD_MOVE:       return row_kind == WSROW_FOLDER || row_kind == WSROW_WS;
-    case CMD_RENAME:
-    case CMD_DELETE:     return row_kind == WSROW_FOLDER;
-    }
-    return 0;
-}
+/* Bit i of `mask` means defs[i] applies to what is selected right now. A command
+   with nothing to act on (/rename with no folder under the cursor) is left out of
+   the list entirely rather than offered and then refused — filtering is the
+   quieter way to say it, and it keeps the list short. */
+static void palette_refresh(CmdPalette *p, unsigned mask);
 
 /* Length of the command word in buf — up to the first space, so a typed argument
    doesn't stop the name from matching. */
@@ -1177,35 +1181,66 @@ static int palette_word_len(const CmdPalette *p) {
     return sp ? (int)(sp - p->buf) : p->len;
 }
 
-/* Recomputes the visible commands after an edit or a cursor move. The highlight
-   returns to the top: the previous pick may no longer be in the list. */
-static void palette_refresh(CmdPalette *p, int row_kind) {
+/* Recomputes the visible commands after an edit. The highlight returns to the
+   top: the previous pick may no longer be in the list. */
+static void palette_refresh(CmdPalette *p, unsigned mask) {
     int w = palette_word_len(p);
     p->nmatch = 0;
-    for (int i = 0; i < CMD_COUNT; i++) {
-        if (!cmd_applies(i, row_kind)) continue;
-        if (strncmp(CMDS[i].name, p->buf, (size_t)w) != 0) continue;
+    for (int i = 0; i < p->ndefs && i < CMD_MAX; i++) {
+        if (!(mask & (1u << i))) continue;
+        if (strncmp(p->defs[i].name, p->buf, (size_t)w) != 0) continue;
         p->match[p->nmatch++] = i;
     }
     p->sel = 0;
 }
 
-static void palette_open(CmdPalette *p, int row_kind) {
+static void palette_open(CmdPalette *p, const CmdDef *defs, int ndefs, unsigned mask) {
     memset(p, 0, sizeof(*p));
     p->open = 1;
+    p->defs = defs;
+    p->ndefs = ndefs;
     p->buf[0] = '/'; p->len = 1; p->pos = 1;
-    palette_refresh(p, row_kind);
+    palette_refresh(p, mask);
 }
 
 /* Replaces the typed word with the highlighted command, leaving the cursor where
    the argument goes. */
-static void palette_complete(CmdPalette *p, int row_kind) {
+static void palette_complete(CmdPalette *p, unsigned mask) {
     if (p->nmatch == 0) return;
-    const CmdDef *c = &CMDS[p->match[p->sel]];
+    const CmdDef *c = &p->defs[p->match[p->sel]];
     snprintf(p->buf, sizeof(p->buf), "%s%s", c->name, c->arg[0] ? " " : "");
     p->len = (int)strlen(p->buf);
     p->pos = p->len;
-    palette_refresh(p, row_kind);
+    palette_refresh(p, mask);
+}
+
+/* ── The browser's commands ─────────────────────────────────────────────────
+   /back and /exit come first: they are the only ways out of the screen, so they
+   are what a bare "/" offers before anything is typed. `mn open` is read-only
+   and masks off everything below them. */
+
+enum { BC_BACK, BC_EXIT, BC_NEW_FOLDER, BC_MOVE, BC_RENAME, BC_DELETE, BC_COUNT };
+
+static const CmdDef BROWSE_CMDS[BC_COUNT] = {
+    { "/back",       "",        "go up one level"                },
+    { "/exit",       "",        "return to the terminal"         },
+    { "/new-folder", " [name]", "create a folder in here"        },
+    { "/move",       "",        "file this under another folder" },
+    { "/rename",     " [name]", "rename this folder"             },
+    { "/delete",     "",        "remove this folder"             },
+};
+
+/* Which browser commands apply right now. row_kind is WSROW_FOLDER, WSROW_WS, or
+   -1 for an empty level. At the top level /back has nowhere to go, so it isn't
+   offered — the breadcrumb already says you are at the root. */
+static unsigned browse_mask(int edit_mode, int row_kind, const char *cwd) {
+    unsigned m = 1u << BC_EXIT;
+    if (cwd[0]) m |= 1u << BC_BACK;
+    if (!edit_mode) return m;
+    m |= 1u << BC_NEW_FOLDER;
+    if (row_kind == WSROW_FOLDER || row_kind == WSROW_WS) m |= 1u << BC_MOVE;
+    if (row_kind == WSROW_FOLDER) m |= (1u << BC_RENAME) | (1u << BC_DELETE);
+    return m;
 }
 
 /* The inline argument: whatever follows the command word ("" if there is none). */
@@ -1235,14 +1270,14 @@ static void render_palette(const CmdPalette *p) {
 
     if (p->nmatch == 0) {
         printf("\n" ANSI_SILVER "  \xe2\x94\x94 " ANSI_RESET
-               ANSI_DIM "no such command  \xe2\x80\xa2  Esc dismiss" ANSI_RESET);
+               ANSI_DIM "no such command  \xe2\x80\xa2  Backspace to clear" ANSI_RESET);
         return;
     }
 
     printf("\n" ANSI_SILVER "  \xe2\x94\x8c " ANSI_RESET ANSI_DIM "%d command%s" ANSI_RESET "\n",
            p->nmatch, p->nmatch == 1 ? "" : "s");
     for (int i = 0; i < p->nmatch; i++) {
-        const CmdDef *c = &CMDS[p->match[i]];
+        const CmdDef *c = &p->defs[p->match[i]];
         char label[64];
         snprintf(label, sizeof(label), "%s%s", c->name, c->arg);
         printf(ANSI_SILVER "  \xe2\x94\x82 " ANSI_RESET);
@@ -1252,14 +1287,14 @@ static void render_palette(const CmdPalette *p) {
             printf(ANSI_DIM "  %-22s %s" ANSI_RESET "\n", label, c->help);
     }
     printf(ANSI_SILVER "  \xe2\x94\x94 " ANSI_RESET ANSI_DIM
-           "Tab complete  \xe2\x80\xa2  \xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  Enter run  \xe2\x80\xa2  Esc dismiss" ANSI_RESET);
+           "Tab complete  \xe2\x80\xa2  \xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  Enter run  \xe2\x80\xa2  Backspace to clear" ANSI_RESET);
 }
 
 /* ── Browser rendering ─────────────────────────────────────────────────── */
 
 static void render_ws_browser(const WorkspaceStore *st, const WsRow *rows, int nrows,
                               const char *cwd, int cursor, const char *title,
-                              int num_input, int show_error, int edit_mode,
+                              int num_input, int show_error,
                               const char *err, const CmdPalette *pal) {
     print_picker_header(title, NULL);
     print_breadcrumb(cwd);
@@ -1324,10 +1359,9 @@ static void render_ws_browser(const WorkspaceStore *st, const WsRow *rows, int n
     }
 
     const char *act = (nrows > 0 && rows[cursor].kind == WSROW_FOLDER) ? "Enter open" : "Enter select";
-    printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  %s", act);
-    if (cwd[0]) printf("  \xe2\x80\xa2  Backspace up");
-    if (edit_mode) printf("  \xe2\x80\xa2  " ANSI_RESET ANSI_VIOLET "/" ANSI_RESET ANSI_DIM " commands");
-    printf("  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
+    printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  %s  \xe2\x80\xa2  "
+           ANSI_RESET ANSI_VIOLET "/" ANSI_RESET ANSI_DIM " commands (%s)" ANSI_RESET,
+           act, cwd[0] ? "/back, /exit\xe2\x80\xa6" : "/exit\xe2\x80\xa6");
     fflush(stdout);
 }
 
@@ -1400,7 +1434,7 @@ static int palette_run(int cmd, const char *arg, WorkspaceStore *st, const char 
     const WsRow *r = (nrows > 0) ? &rows[cursor] : NULL;
     char name[WORKSPACE_FOLDER_MAX];
 
-    if (cmd == CMD_NEW_FOLDER) {
+    if (cmd == BC_NEW_FOLDER) {
         if (!ask_name(arg, "New folder", "", name, sizeof(name))) return 0;
         if (!wstree_name_ok(name)) {
             snprintf(err, err_size, "'%.60s' isn't a usable folder name (no '/', no blank ends).", name);
@@ -1414,7 +1448,7 @@ static int palette_run(int cmd, const char *arg, WorkspaceStore *st, const char 
         return 1;
     }
 
-    if (cmd == CMD_RENAME) {
+    if (cmd == BC_RENAME) {
         if (r == NULL || r->kind != WSROW_FOLDER) return 0;
         char path[WORKSPACE_FOLDER_MAX];
         snprintf(path, sizeof(path), "%s", st->folders.paths[r->idx]);
@@ -1432,7 +1466,7 @@ static int palette_run(int cmd, const char *arg, WorkspaceStore *st, const char 
         return 1;
     }
 
-    if (cmd == CMD_DELETE) {
+    if (cmd == BC_DELETE) {
         if (r == NULL || r->kind != WSROW_FOLDER) return 0;
         char path[WORKSPACE_FOLDER_MAX];
         snprintf(path, sizeof(path), "%s", st->folders.paths[r->idx]);
@@ -1460,7 +1494,7 @@ static int palette_run(int cmd, const char *arg, WorkspaceStore *st, const char 
         return 1;
     }
 
-    if (cmd == CMD_MOVE) {
+    if (cmd == BC_MOVE) {
         if (r == NULL) return 0;
         char dest[WORKSPACE_FOLDER_MAX];
         if (st->folders.count == 0) {
@@ -1499,8 +1533,8 @@ static int palette_run(int cmd, const char *arg, WorkspaceStore *st, const char 
 /* ── Browser loop ──────────────────────────────────────────────────────── */
 
 int run_workspace_browser(WorkspaceStore *st, const char *title,
-                          int edit_mode, int *dirty) {
-    char cwd[WORKSPACE_FOLDER_MAX] = "";
+                          int edit_mode, int *dirty,
+                          char *cwd, size_t cwd_size) {
     WsRow *rows = NULL;
     int rows_cap = 0;
     int cursor = 0, prev_cursor = 0, num_input = -1, show_error = 0;
@@ -1509,11 +1543,15 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
     CmdPalette pal; memset(&pal, 0, sizeof(pal));
 
     if (dirty) *dirty = 0;
+    /* The caller's remembered folder may have been renamed or removed since —
+       fall back to the top level rather than showing a level that isn't there. */
+    if (cwd[0] && !wstree_exists(&st->folders, cwd)) cwd[0] = '\0';
+
     int nrows = wstree_build_rows(&st->folders, st->ws, st->ws_count, cwd, &rows, &rows_cap);
 
     printf(ANSI_CURSOR_HIDE);
     render_ws_browser(st, rows, nrows, cwd, cursor, title, num_input, show_error,
-                      edit_mode, err, &pal);
+                      err, &pal);
 
     while (!done) {
         int key = read_key();
@@ -1522,14 +1560,13 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
 
         if (pal.open) {
             int row_kind = (nrows > 0) ? rows[cursor].kind : -1;
-            if (key == KEY_ESC) {
-                pal.open = 0;
-            } else if (key == KEY_UP) {
+            unsigned mask = browse_mask(edit_mode, row_kind, cwd);
+            if (key == KEY_UP) {
                 if (pal.nmatch) pal.sel = (pal.sel > 0) ? pal.sel - 1 : pal.nmatch - 1;
             } else if (key == KEY_DOWN) {
                 if (pal.nmatch) pal.sel = (pal.sel + 1) % pal.nmatch;
             } else if (key == KEY_TAB) {
-                palette_complete(&pal, row_kind);
+                palette_complete(&pal, mask);
             } else if (key == KEY_ENTER) {
                 char arg[WORKSPACE_FOLDER_MAX];
                 palette_arg(&pal, arg, sizeof(arg));
@@ -1538,6 +1575,21 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
                 err[0] = '\0';
                 if (cmd < 0) {
                     snprintf(err, sizeof(err), "No command matches '%.40s'.", pal.buf);
+                } else if (cmd == BC_EXIT) {
+                    result = -1; done = 1;
+                } else if (cmd == BC_BACK) {
+                    /* Step out, and land the cursor on the folder just left —
+                       backing out should return you to where you came from, not
+                       to the top of the parent. */
+                    char was[WORKSPACE_FOLDER_MAX];
+                    snprintf(was, sizeof(was), "%s", cwd);
+                    wstree_parent(was, cwd, cwd_size);
+                    nrows = wstree_build_rows(&st->folders, st->ws, st->ws_count,
+                                              cwd, &rows, &rows_cap);
+                    cursor = 0;
+                    for (int i = 0; i < nrows; i++)
+                        if (rows[i].kind == WSROW_FOLDER &&
+                            strcmp(st->folders.paths[rows[i].idx], was) == 0) { cursor = i; break; }
                 } else if (palette_run(cmd, arg, st, cwd, rows, nrows, cursor,
                                        err, sizeof(err))) {
                     if (dirty) *dirty = 1;
@@ -1546,9 +1598,9 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
                     if (cursor >= nrows) cursor = nrows > 0 ? nrows - 1 : 0;
                 }
             } else if ((key == KEY_BACKSPACE || key == 127) && pal.len <= 1) {
-                pal.open = 0;   /* deleting the "/" leaves the palette */
+                pal.open = 0;   /* clearing the "/" leaves the palette */
             } else if (edit_buffer_key(key, pal.buf, &pal.len, &pal.pos, sizeof(pal.buf))) {
-                palette_refresh(&pal, row_kind);
+                palette_refresh(&pal, mask);
             }
         } else if (num_input >= 0) {
             handle_num_input(key, nrows, &num_input, &cursor,
@@ -1558,29 +1610,15 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
             case KEY_UP:    if (cursor > 0)         cursor--; break;
             case KEY_DOWN:  if (cursor < nrows - 1) cursor++; break;
             case KEY_ENTER: activate = 1;                     break;
-            case KEY_ESC:   result = -1; done = 1;            break;
-            case KEY_BACKSPACE:
-            case 127:
-                if (cwd[0]) {
-                    /* Step out, and land the cursor on the folder just left —
-                       backing out should return you to where you came from, not
-                       to the top of the parent. */
-                    char was[WORKSPACE_FOLDER_MAX];
-                    snprintf(was, sizeof(was), "%s", cwd);
-                    wstree_parent(was, cwd, sizeof(cwd));
-                    err[0] = '\0';
-                    nrows = wstree_build_rows(&st->folders, st->ws, st->ws_count,
-                                              cwd, &rows, &rows_cap);
-                    cursor = 0;
-                    for (int i = 0; i < nrows; i++)
-                        if (rows[i].kind == WSROW_FOLDER &&
-                            strcmp(st->folders.paths[rows[i].idx], was) == 0) { cursor = i; break; }
-                }
-                break;
             default:
-                if (key == '/' && edit_mode) {
+                /* Arrows move, Enter opens, and everything else — including the
+                   ways out — is a command. `mn open` gets the palette too: it is
+                   read-only, but /back and /exit still have to live somewhere. */
+                if (key == '/') {
                     err[0] = '\0';
-                    palette_open(&pal, (nrows > 0) ? rows[cursor].kind : -1);
+                    palette_open(&pal, BROWSE_CMDS, BC_COUNT,
+                                 browse_mask(edit_mode,
+                                             (nrows > 0) ? rows[cursor].kind : -1, cwd));
                 } else if (key >= '1' && key <= '9') {
                     prev_cursor = cursor;
                     num_input = key - '0';
@@ -1592,7 +1630,7 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
         if (activate && nrows > 0) {
             const WsRow *r = &rows[cursor];
             if (r->kind == WSROW_FOLDER) {
-                snprintf(cwd, sizeof(cwd), "%s", st->folders.paths[r->idx]);
+                snprintf(cwd, cwd_size, "%s", st->folders.paths[r->idx]);
                 cursor = 0; num_input = -1; err[0] = '\0';
                 nrows = wstree_build_rows(&st->folders, st->ws, st->ws_count,
                                           cwd, &rows, &rows_cap);
@@ -1604,7 +1642,7 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
 
         if (!done)
             render_ws_browser(st, rows, nrows, cwd, cursor, title, num_input,
-                              show_error, edit_mode, err, &pal);
+                              show_error, err, &pal);
     }
 
     free(rows);
@@ -1613,7 +1651,7 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
     return result;
 }
 
-/* ── App screen-placement chooser ('\' in the workspace editor) ──────────────
+/* ── App screen-placement chooser (/place in the workspace editor) ───────────
    A self-contained visual grid for assigning an app a screen partition. The
    placement is stored as a short token ("" = none); only this module knows the
    token<->grid mapping, so it stays decoupled from save/load. */
@@ -1887,6 +1925,52 @@ static int placement_change(const WsEditorApp *a) {
     return strcmp(a->layout, a->orig_layout) != 0 ? PLACE_EDITED : PLACE_SAME;
 }
 
+/* ── The editor's commands ──────────────────────────────────────────────────
+   Same rule as the browser: arrows move, Enter opens the row under the cursor,
+   and everything else is typed here. The keys this replaces were `Backspace`
+   (remove), `e` (edit a link), `\` (placement) and `←`/`→` (reorder).
+
+   /remove and /restore are the same toggle split in two, because the palette
+   filters by what applies: a row staged for removal offers only /restore, an
+   ordinary row only /remove. One entry called "/remove" that sometimes un-removes
+   would read as a no-op on the very row where it does something. */
+
+enum { EC_SAVE, EC_BACK, EC_EXIT, EC_REMOVE, EC_RESTORE, EC_PLACE, EC_REORDER, EC_COUNT };
+
+static const CmdDef EDIT_CMDS[EC_COUNT] = {
+    { "/save",    "", "save and return to the terminal"        },
+    { "/back",    "", "discard changes, back to the workspaces"},
+    { "/exit",    "", "discard changes, return to the terminal"},
+    { "/remove",  "", "remove the selected app or link"        },
+    { "/restore", "", "keep the selected app or link after all"},
+    { "/place",   "", "put this app on part of the screen"     },
+    { "/reorder", "", "move this link among the app's links"   },
+};
+
+/* Which editor commands apply to the row under the cursor. */
+static unsigned edit_mask(const WsEditorApp *apps, const WeditRow *rows,
+                          int nrows, int cursor) {
+    unsigned m = (1u << EC_SAVE) | (1u << EC_BACK) | (1u << EC_EXIT);
+    if (nrows <= 0) return m;
+
+    const WeditRow *r = &rows[cursor];
+    if (r->kind == ROW_APP) {
+        const WsEditorApp *a = &apps[r->app];
+        m |= a->marked_delete ? (1u << EC_RESTORE) : (1u << EC_REMOVE) | (1u << EC_PLACE);
+    } else if (r->kind == ROW_LINK) {
+        const WsEditorApp *a = &apps[r->app];
+        const EditLink *e = &a->links.items[r->link];
+        if (e->deleted) {
+            m |= 1u << EC_RESTORE;
+        } else {
+            m |= 1u << EC_REMOVE;
+            /* Nothing to reorder against when the app has a single link. */
+            if (a->links.count > 1) m |= 1u << EC_REORDER;
+        }
+    }
+    return m;
+}
+
 /* Flattens the editor state into the navigable row list, growing the heap buffer
    as needed; returns the row count. rows and cap are in/out. Links of an app staged
    for deletion are collapsed (the whole app is going). */
@@ -1937,7 +2021,7 @@ static void render_workspace_edit(const char *ws_name,
                                   int cursor, int mode,
                                   const char *typed, const char *app_error,
                                   int type_app, int reordering, int edit_pos,
-                                  const PathSuggest *sg) {
+                                  const PathSuggest *sg, const CmdPalette *pal) {
     char title[140];
     snprintf(title, sizeof(title), "Edit '%s'", ws_name);
     print_picker_header(title, NULL);
@@ -2038,26 +2122,30 @@ static void render_workspace_edit(const char *ws_name,
     } else if (mode == WADD_EDIT_LINK) {
         if (suggest_open(sg)) render_suggestions(sg);
         else printf("\n" ANSI_DIM "\xe2\x86\x90/\xe2\x86\x92 move  \xe2\x80\xa2  type to edit  \xe2\x80\xa2  Enter save  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
+    } else if (reordering) {
+        printf("\n" ANSI_DIM "\xe2\x86\x90/\xe2\x86\x92 reorder  \xe2\x80\xa2  Enter to put it down" ANSI_RESET);
     } else {
-        const WeditRow *r = &rows[cursor];
         if (app_error && app_error[0])
             printf("\n" ANSI_YELLOW "  %s" ANSI_RESET, app_error);
-        if (r->kind == ROW_ADD_APP) {
-            printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  type or Enter to add an app  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
-        } else if (r->kind == ROW_RENAME_WS) {
-            printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  Enter to rename this workspace  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
-        } else if (r->kind == ROW_DEL_WS) {
-            printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  Enter to remove this workspace  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
-        } else if (r->kind == ROW_APP && apps[r->app].marked_delete) {
-            printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  Backspace undo remove  \xe2\x80\xa2  Enter save  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
-        } else if (r->kind == ROW_APP) {
-            printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  type to add link  \xe2\x80\xa2  \\ place  \xe2\x80\xa2  Backspace remove  \xe2\x80\xa2  Enter save  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
-        } else { /* link row */
-            if (reordering)
-                printf("\n" ANSI_DIM "\xe2\x86\x90/\xe2\x86\x92 reorder  \xe2\x80\xa2  Enter to place  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
-            else
-                printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  \xe2\x86\x90/\xe2\x86\x92 reorder  \xe2\x80\xa2  e edit  \xe2\x80\xa2  Backspace remove  \xe2\x80\xa2  Enter save  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
+        if (pal->open) { render_palette(pal); fflush(stdout); return; }
+
+        /* Only Enter varies by row; every other action is a command, so the hint
+           names what Enter opens here and points at "/" for the rest. */
+        const char *act = "Enter";
+        if (nrows > 0) {
+            const WeditRow *r = &rows[cursor];
+            if (r->kind == ROW_ADD_APP)                     act = "Enter add an app";
+            else if (r->kind == ROW_RENAME_WS)              act = "Enter rename this workspace";
+            else if (r->kind == ROW_DEL_WS)                 act = "Enter remove this workspace";
+            else if (r->kind == ROW_APP && !apps[r->app].marked_delete)
+                                                            act = "Enter add a link";
+            else if (r->kind == ROW_LINK && !apps[r->app].links.items[r->link].deleted)
+                                                            act = "Enter edit this link";
+            else                                            act = "/restore to keep it";
         }
+        printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  %s  \xe2\x80\xa2  "
+               ANSI_RESET ANSI_VIOLET "/" ANSI_RESET ANSI_DIM " commands (/save, /back, /exit\xe2\x80\xa6)" ANSI_RESET,
+               act);
     }
     fflush(stdout);
 }
@@ -2079,8 +2167,11 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
     int  edit_app  = 0;   /* app whose link is being edited in WADD_EDIT_LINK */
     int  edit_link = 0;   /* link index being edited in WADD_EDIT_LINK */
     int  done      = 0;
-    int  cancelled = 0;
+    int  outcome   = WSEDIT_BACK;
+    int  touched   = 0;   /* any staged change yet? gates the discard confirmation */
+    int  edit_cmd  = -1;  /* palette command awaiting execution this iteration */
     PathSuggest sg;       /* path completion for whichever text field is open */
+    CmdPalette  pal; memset(&pal, 0, sizeof(pal));
 
     suggest_reset(&sg, typed);
     *delete_workspace = 0;
@@ -2088,7 +2179,7 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
 
     printf(ANSI_CURSOR_HIDE);
     render_workspace_edit(ws_name, apps, rows, nrows, cursor, mode,
-                          typed, app_error, type_app, reordering, edit_pos, &sg);
+                          typed, app_error, type_app, reordering, edit_pos, &sg, &pal);
 
     while (!done) {
         int key = read_key();
@@ -2102,8 +2193,10 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
             if (suggest_key(&sg, key, typed, &typed_len, &edit_pos, sizeof(typed))) {
                 /* consumed by the dropdown */
             } else if (key == KEY_ENTER) {
-                if (typed_len > 0)
+                if (typed_len > 0) {
                     editlink_push(&apps[type_app].links, typed, "", -1);
+                    touched = 1;
+                }
                 typed[0] = '\0'; typed_len = 0; edit_pos = 0;
                 mode = WADD_LIST;
             } else if (key == KEY_ESC) {
@@ -2144,6 +2237,7 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                         ws_display_name(final_app, na->display, sizeof(na->display));
                         na->is_new = 1;
                         (*count)++;
+                        touched = 1;
                         typed[0] = '\0'; typed_len = 0; edit_pos = 0;
                         mode = WADD_LIST;
                         /* park the cursor on the freshly added app row */
@@ -2171,6 +2265,7 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                 strncpy(apps[edit_app].links.items[edit_link].text, typed,
                         WORKSPACE_TARGET_MAX - 1);
                 apps[edit_app].links.items[edit_link].text[WORKSPACE_TARGET_MAX - 1] = '\0';
+                touched = 1;
                 typed[0] = '\0'; typed_len = 0; edit_pos = 0;
                 mode = WADD_LIST;
             } else if (key == KEY_ESC) {
@@ -2181,34 +2276,67 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
             }
         } else if (reordering) {
             /* ── Move mode ──────────────────────────────────────────────────
-               A link is lifted. Only ←/→ reposition it and Enter locks it in;
-               ↑/↓, Backspace and typing are ignored so it can't be deleted or
-               left behind mid-move. Esc still cancels the whole edit. */
+               A link is lifted by /reorder. Only ←/→ reposition it and Enter
+               locks it in; everything else is ignored so it can't be left behind
+               mid-move. */
             const WeditRow *r = &rows[cursor];
             if (key == KEY_LEFT || key == KEY_RIGHT) {
                 reorder_link(&apps[r->app], r->link, key, &cursor);
+                touched = 1;
             } else if (key == KEY_ENTER) {
                 reordering = 0;   /* lock in; the ↕ marker now reflects the new order */
-            } else if (key == KEY_ESC) {
-                cancelled = 1; done = 1;
+            }
+        } else if (pal.open) {
+            unsigned mask = edit_mask(apps, rows, nrows, cursor);
+            if (key == KEY_UP) {
+                if (pal.nmatch) pal.sel = (pal.sel > 0) ? pal.sel - 1 : pal.nmatch - 1;
+            } else if (key == KEY_DOWN) {
+                if (pal.nmatch) pal.sel = (pal.sel + 1) % pal.nmatch;
+            } else if (key == KEY_TAB) {
+                palette_complete(&pal, mask);
+            } else if (key == KEY_ENTER) {
+                int cmd = palette_selected(&pal);
+                pal.open = 0;
+                if (cmd < 0)
+                    snprintf(app_error, sizeof(app_error), "No command matches '%.40s'.", pal.buf);
+                else
+                    edit_cmd = cmd;   /* run below, where the row state is in hand */
+            } else if ((key == KEY_BACKSPACE || key == 127) && pal.len <= 1) {
+                pal.open = 0;   /* clearing the "/" leaves the palette */
+            } else if (edit_buffer_key(key, pal.buf, &pal.len, &pal.pos, sizeof(pal.buf))) {
+                palette_refresh(&pal, mask);
             }
         } else { /* WADD_LIST (normal navigation) */
             const WeditRow *r = &rows[cursor];
             switch (key) {
             case KEY_UP:    if (cursor > 0)         cursor--; break;
             case KEY_DOWN:  if (cursor < nrows - 1) cursor++; break;
-            case KEY_LEFT:
-            case KEY_RIGHT:
-                /* lift a link into move mode (also applies this first nudge) */
-                if (r->kind == ROW_LINK && !apps[r->app].links.items[r->link].deleted) {
-                    reordering = 1;
-                    reorder_link(&apps[r->app], r->link, key, &cursor);
-                }
-                break;
             case KEY_ENTER:
-                if (r->kind == ROW_ADD_APP) {
+                /* Enter opens the row under the cursor: the pseudo-rows open
+                   their dialog, an app opens a field to add a link to it, and a
+                   link opens its text for editing. Everything that isn't opening
+                   something is a "/" command. */
+                if (r->kind == ROW_APP && !apps[r->app].marked_delete) {
+                    mode      = WADD_TYPE_LINK;
+                    type_app  = r->app;
+                    typed[0]  = '\0';
+                    typed_len = 0;
+                    edit_pos  = 0;
+                    suggest_reset(&sg, typed);
+                } else if (r->kind == ROW_LINK &&
+                           !apps[r->app].links.items[r->link].deleted) {
+                    edit_app  = r->app;
+                    edit_link = r->link;
+                    strncpy(typed, apps[r->app].links.items[r->link].text,
+                            sizeof(typed) - 1);
+                    typed[sizeof(typed) - 1] = '\0';
+                    typed_len = (int)strlen(typed);
+                    edit_pos  = typed_len;
+                    mode      = WADD_EDIT_LINK;
+                    suggest_reset(&sg, typed);
+                } else if (r->kind == ROW_ADD_APP) {
                     mode = WADD_TYPE_APP;
-                    edit_pos = 0;
+                    typed[0] = '\0'; typed_len = 0; edit_pos = 0;
                     suggest_reset(&sg, typed);
                 } else if (r->kind == ROW_RENAME_WS) {
                     char newname[WORKSPACE_NAME_MAX];
@@ -2223,6 +2351,7 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                         else {
                             strncpy(ws_name, newname, ws_name_size - 1);
                             ws_name[ws_name_size - 1] = '\0';
+                            touched = 1;
                         }
                     }
                     printf(ANSI_CURSOR_HIDE);   /* input box re-showed the cursor */
@@ -2231,19 +2360,49 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                     snprintf(q, sizeof(q), "Remove workspace '%s'?", ws_name);
                     if (confirm_centered(q)) {
                         *delete_workspace = 1;
+                        outcome = WSEDIT_SAVE;
                         done = 1;
                     } else {
                         printf(ANSI_CURSOR_HIDE);   /* confirm screen re-showed it */
                     }
-                } else {
-                    done = 1;
                 }
                 break;
-            case KEY_ESC:
-                cancelled = 1; done = 1;
+            default:
+                if (key == '/') {
+                    app_error[0] = '\0';
+                    palette_open(&pal, EDIT_CMDS, EC_COUNT,
+                                 edit_mask(apps, rows, nrows, cursor));
+                }
                 break;
-            case KEY_BACKSPACE:
-            case 127:
+            }
+        }
+
+        /* ── Run a palette command ──────────────────────────────────────────
+           Deferred out of the palette's key handling so the row under the
+           cursor is read here, once, after the palette has closed. */
+        if (edit_cmd >= 0) {
+            const WeditRow *r = (nrows > 0) ? &rows[cursor] : NULL;
+            switch (edit_cmd) {
+            case EC_SAVE:
+                outcome = WSEDIT_SAVE; done = 1;
+                break;
+            case EC_BACK:
+            case EC_EXIT: {
+                /* Staged changes are only staged — leaving drops them, so say so
+                   rather than discarding a session's work on one keystroke. */
+                int go = 1;
+                if (touched) {
+                    go = confirm_discard(edit_cmd == EC_BACK
+                                         ? "Discard unsaved changes and go back?"
+                                         : "Discard unsaved changes and exit?");
+                    printf(ANSI_CURSOR_HIDE);
+                }
+                if (go) { outcome = (edit_cmd == EC_BACK) ? WSEDIT_BACK : WSEDIT_EXIT; done = 1; }
+                break;
+            }
+            case EC_REMOVE:
+            case EC_RESTORE:
+                if (r == NULL) break;
                 if (r->kind == ROW_APP) {
                     int ai = r->app;
                     if (apps[ai].is_new) {
@@ -2257,63 +2416,39 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                     } else {
                         apps[ai].marked_delete = !apps[ai].marked_delete;
                     }
+                    touched = 1;
                 } else if (r->kind == ROW_LINK) {
                     EditLink *e = &apps[r->app].links.items[r->link];
                     if (e->orig_pos >= 0)
                         e->deleted = !e->deleted;       /* existing link → toggle removal */
                     else
                         editlink_remove(&apps[r->app].links, r->link);  /* unsaved → drop */
+                    touched = 1;
                 }
-                /* ROW_DEL_WS: Backspace does nothing; use Enter to confirm removal. */
                 break;
-            default:
-                if (key == '\\' && r->kind == ROW_APP && !apps[r->app].marked_delete) {
-                    /* '\' on an app → choose a screen placement. Partitions other
-                       (non-deleted) apps already hold are passed in so they can't
-                       be picked twice. */
-                    const char *taken[WORKSPACE_ENTRIES_MAX];
-                    int tk = 0;
-                    for (int a = 0; a < *count; a++) {
-                        if (a == r->app || apps[a].marked_delete) continue;
-                        if (apps[a].layout[0]) taken[tk++] = apps[a].layout;
-                    }
-                    run_placement_picker(apps[r->app].display, apps[r->app].layout,
-                                         sizeof(apps[r->app].layout), taken, tk);
-                    printf(ANSI_CURSOR_HIDE);   /* chooser re-showed the cursor */
-                } else if (key == 'e' && r->kind == ROW_LINK &&
-                    !apps[r->app].links.items[r->link].deleted) {
-                    /* 'e' on a link → edit its text in place */
-                    edit_app  = r->app;
-                    edit_link = r->link;
-                    strncpy(typed, apps[r->app].links.items[r->link].text,
-                            sizeof(typed) - 1);
-                    typed[sizeof(typed) - 1] = '\0';
-                    typed_len = (int)strlen(typed);
-                    edit_pos  = typed_len;
-                    mode      = WADD_EDIT_LINK;
-                    suggest_reset(&sg, typed);
-                } else if (key >= 33 && key < 127) {
-                    if (r->kind == ROW_APP && !apps[r->app].marked_delete) {
-                        /* printable key on an app row → start adding a link */
-                        mode      = WADD_TYPE_LINK;
-                        type_app  = r->app;
-                        typed[0]  = (char)key;
-                        typed[1]  = '\0';
-                        typed_len = 1;
-                        edit_pos  = 1;
-                        suggest_reset(&sg, typed);
-                    } else if (r->kind == ROW_ADD_APP && *count < max) {
-                        /* printable key on "[+ Add a new app]" → open app-type mode */
-                        mode      = WADD_TYPE_APP;
-                        typed[0]  = (char)key;
-                        typed[1]  = '\0';
-                        typed_len = 1;
-                        edit_pos  = 1;
-                        suggest_reset(&sg, typed);
-                    }
+            case EC_PLACE: {
+                if (r == NULL || r->kind != ROW_APP || apps[r->app].marked_delete) break;
+                /* Partitions other (non-deleted) apps already hold are passed in
+                   so they can't be picked twice. */
+                const char *taken[WORKSPACE_ENTRIES_MAX];
+                int tk = 0;
+                for (int a = 0; a < *count; a++) {
+                    if (a == r->app || apps[a].marked_delete) continue;
+                    if (apps[a].layout[0]) taken[tk++] = apps[a].layout;
                 }
+                run_placement_picker(apps[r->app].display, apps[r->app].layout,
+                                     sizeof(apps[r->app].layout), taken, tk);
+                printf(ANSI_CURSOR_HIDE);   /* chooser re-showed the cursor */
+                touched = 1;
                 break;
             }
+            case EC_REORDER:
+                if (r != NULL && r->kind == ROW_LINK &&
+                    !apps[r->app].links.items[r->link].deleted)
+                    reordering = 1;   /* ←/→ now nudge it, Enter puts it down */
+                break;
+            }
+            edit_cmd = -1;
         }
 
         if (!done) {
@@ -2321,14 +2456,15 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
             if (cursor >= nrows) cursor = nrows - 1;
             if (cursor < 0)      cursor = 0;
             render_workspace_edit(ws_name, apps, rows, nrows, cursor, mode,
-                                  typed, app_error, type_app, reordering, edit_pos, &sg);
+                                  typed, app_error, type_app, reordering, edit_pos,
+                                  &sg, &pal);
         }
     }
 
     free(rows);
     printf(ANSI_CURSOR_SHOW);
     fflush(stdout);
-    return cancelled ? 0 : 1;
+    return outcome;
 }
 
 /* ── Single styled text input box ──────────────────────────────────────── */

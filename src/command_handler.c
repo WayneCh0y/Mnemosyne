@@ -499,7 +499,9 @@ static void cmd_open_run(void) {
     }
     /* Browse only: folders are organised in `mn open edit`, so nothing here can
        write to the store. */
-    int chosen = run_workspace_browser(&st, "Open a workspace", 0, NULL);
+    char cwd[WORKSPACE_FOLDER_MAX] = "";
+    int chosen = run_workspace_browser(&st, "Open a workspace", 0, NULL,
+                                       cwd, sizeof(cwd));
     printf(ANSI_CLEAR ANSI_RESET);
     if (chosen != -1)
         launch_workspace(&st.ws[chosen]);
@@ -533,48 +535,20 @@ static void free_app_links(AppLinks *links, int n) {
     free(links);
 }
 
-static void cmd_open_edit(void) {
-    WorkspaceStore st;
-    workspace_store_load(&st);
-    if (st.ws_count == 0 && st.folders.count == 0) {
-        ui_info("No workspaces yet.");
-        ui_hint("Create one with: mn open create <name>");
-        workspace_store_free(&st);
-        return;
-    }
-    Workspace *ws = st.ws;
-    int count = st.ws_count;
-
-    /* Step 1: browse to a workspace. The "/" palette is live here, so folder work
-       happens during the browse rather than as a step of its own. */
-    int dirty = 0;
-    int ws_idx = run_workspace_browser(&st, "Edit which workspace?", 1, &dirty);
-
-    /* Folder edits are committed on the way out whichever way the browse ended:
-       creating three folders and then pressing Esc is a session's work, not a
-       cancellation of it. */
-    if (dirty && workspace_store_save(&st) != 0) {
-        printf(ANSI_CLEAR ANSI_RESET);
-        ui_err("failed to save folder changes");
-        workspace_store_free(&st);
-        return;
-    }
-
-    if (ws_idx == -1) {
-        printf(ANSI_CLEAR ANSI_RESET);
-        if (dirty) ui_ok("Folders updated.");
-        else       ui_info("Cancelled.");
-        workspace_store_free(&st);
-        return;
-    }
+/* Edits one workspace: builds the editor state, runs the editor, and commits if
+   it saved. Returns the editor's WSEDIT_* outcome, so the caller can tell /back
+   (return to the browser) from /save and /exit (both done). */
+static int edit_one_workspace(WorkspaceStore *st, int ws_idx) {
+    Workspace *ws = st->ws;
+    int count = st->ws_count;
 
     /* Step 2: build workspace editor state from existing entries, one row per entry.
        calloc zeroes every slot, so unused link lists start as {NULL,0,0}. */
     WsEditorApp *editor_apps = calloc(WORKSPACE_ENTRIES_MAX, sizeof(WsEditorApp));
     if (!editor_apps) {
+        printf(ANSI_CLEAR ANSI_RESET);
         ui_err("out of memory");
-        workspace_store_free(&st);
-        return;
+        return WSEDIT_EXIT;
     }
     int editor_count = 0;
 
@@ -593,9 +567,10 @@ static void cmd_open_edit(void) {
             editlink_push(&e->links, src->targets[k], src->targets[k], k);
     }
 
-    /* Step 3: run the editor — Esc cancels, Enter confirms. ws_name is in/out so a
-       rename inside the editor updates it; taken_names lets the editor reject a
-       rename that collides with another workspace. */
+    /* Step 3: run the editor — /save commits, /back returns to the browser, /exit
+       leaves. ws_name is in/out so a rename inside the editor updates it;
+       taken_names lets the editor reject a rename that collides with another
+       workspace. */
     char ws_name[WORKSPACE_NAME_MAX];
     strncpy(ws_name, chosen_ws->name, sizeof(ws_name) - 1);
     ws_name[sizeof(ws_name) - 1] = '\0';
@@ -607,16 +582,15 @@ static void cmd_open_edit(void) {
             if (i != ws_idx) taken_names[taken_count++] = ws[i].name;
 
     int delete_ws = 0;
-    int confirmed = run_workspace_edit_picker(ws_name, sizeof(ws_name),
-                                              taken_names, taken_count,
-                                              editor_apps, &editor_count,
-                                              WORKSPACE_ENTRIES_MAX, &delete_ws);
+    int outcome = run_workspace_edit_picker(ws_name, sizeof(ws_name),
+                                            taken_names, taken_count,
+                                            editor_apps, &editor_count,
+                                            WORKSPACE_ENTRIES_MAX, &delete_ws);
     free(taken_names);
-    if (!confirmed) {
-        printf(ANSI_CLEAR ANSI_RESET); ui_info("Cancelled.");
+    if (outcome != WSEDIT_SAVE) {
         free_editor_apps(editor_apps, WORKSPACE_ENTRIES_MAX);
-        workspace_store_free(&st);
-        return;
+        if (outcome == WSEDIT_EXIT) { printf(ANSI_CLEAR ANSI_RESET); ui_info("Cancelled."); }
+        return outcome;   /* WSEDIT_BACK re-enters the browser; nothing to print */
     }
 
     /* Step 4: commit staged changes. */
@@ -629,8 +603,7 @@ static void cmd_open_edit(void) {
         else
             ui_err("failed to remove workspace '%s'", ws_name);
         free_editor_apps(editor_apps, WORKSPACE_ENTRIES_MAX);
-        workspace_store_free(&st);
-        return;
+        return WSEDIT_SAVE;
     }
 
     /* Rebuild the chosen workspace's entries in place from the editor state, then
@@ -663,12 +636,54 @@ static void cmd_open_edit(void) {
     }
     w->entry_count = ec;
 
-    if (workspace_store_save(&st) == 0)
+    if (workspace_store_save(st) == 0)
         ui_ok("Saved workspace '%s'.", ws_name);
     else
         ui_err("failed to save workspace '%s'", ws_name);
 
     free_editor_apps(editor_apps, WORKSPACE_ENTRIES_MAX);
+    return WSEDIT_SAVE;
+}
+
+static void cmd_open_edit(void) {
+    WorkspaceStore st;
+    workspace_store_load(&st);
+    if (st.ws_count == 0 && st.folders.count == 0) {
+        ui_info("No workspaces yet.");
+        ui_hint("Create one with: mn open create <name>");
+        workspace_store_free(&st);
+        return;
+    }
+
+    /* Browse and edit alternate until something ends the session: the editor's
+       /back returns here rather than to the terminal, so filing a workspace away
+       and then editing it is one trip through `mn open edit`. cwd lives out here
+       so /back reopens the folder you drilled into, not the top level. */
+    char cwd[WORKSPACE_FOLDER_MAX] = "";
+    for (;;) {
+        int dirty = 0;
+        int ws_idx = run_workspace_browser(&st, "Edit which workspace?", 1, &dirty,
+                                           cwd, sizeof(cwd));
+
+        /* Folder edits are committed on the way out however the browse ended:
+           creating three folders and then leaving is a session's work, not a
+           cancellation of it. */
+        if (dirty && workspace_store_save(&st) != 0) {
+            printf(ANSI_CLEAR ANSI_RESET);
+            ui_err("failed to save folder changes");
+            break;
+        }
+
+        if (ws_idx == -1) {   /* /exit */
+            printf(ANSI_CLEAR ANSI_RESET);
+            if (dirty) ui_ok("Folders updated.");
+            else       ui_info("Cancelled.");
+            break;
+        }
+
+        if (edit_one_workspace(&st, ws_idx) != WSEDIT_BACK) break;
+    }
+
     workspace_store_free(&st);
 }
 

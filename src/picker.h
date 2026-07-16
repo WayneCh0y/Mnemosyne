@@ -141,21 +141,32 @@ typedef struct {
     int  is_new;
     int  marked_delete;
     EditLinkList links;
-    char layout[16];        /* screen-partition token ("" = none) chosen via '\' */
+    char layout[16];        /* screen-partition token ("" = none) chosen via /place */
     char orig_layout[16];   /* layout as loaded from disk ("" for a new app) */
 } WsEditorApp;
 
-/* Workspace editor picker for `mn open edit`. Shows existing apps and their links;
-   lets the user add links to existing apps, edit a link's text in place ('e'),
-   reorder links (←/→), rename the workspace, add new (validated) apps, and stage
-   removals of apps/links (Backspace). apps[]/count are in/out: new apps are
-   appended (is_new=1), the links list is filled (new entries have orig_pos=-1),
-   and per-link deleted / marked_delete flags are set.
+/* How run_workspace_edit_picker ended: the user's three ways out (/save, /back,
+   /exit). BACK returns to the workspace browser; EXIT and SAVE both return to the
+   terminal, and only SAVE commits. */
+#define WSEDIT_SAVE   1
+#define WSEDIT_EXIT   0
+#define WSEDIT_BACK (-1)
+
+/* Workspace editor picker for `mn open edit`. Shows existing apps and their links.
+   Driven like the browser: arrows move, Enter opens the row under the cursor (an
+   app → a field to add a link, a link → its text, the pseudo-rows → their
+   dialog), and everything else is a "/" command — /remove and /restore stage and
+   unstage, /place assigns a screen partition, /reorder lifts a link for ←/→, and
+   /save, /back and /exit are the ways out. There is no Esc.
+
+   apps[]/count are in/out: new apps are appended (is_new=1), the links list is
+   filled (new entries have orig_pos=-1), and per-link deleted / marked_delete
+   flags are set. Everything is staged — only WSEDIT_SAVE means commit.
    ws_name is an in/out buffer of ws_name_size bytes holding the workspace name; a
    rename updates it in place (the caller persists it). taken_names (length
    taken_count) lists the other workspaces' names so a rename can reject duplicates.
    *delete_workspace is set to 1 if the whole workspace is staged for removal.
-   Returns 1 if confirmed (Enter), 0 if cancelled (Esc). */
+   Returns WSEDIT_SAVE / WSEDIT_BACK / WSEDIT_EXIT. */
 int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                               const char **taken_names, int taken_count,
                               WsEditorApp *apps, int *count, int max,
@@ -168,14 +179,21 @@ int run_list_picker(IndexEntry *entries, int count,
    Backspace goes back up — expanding the selected row in a left-rail frame: a
    workspace shows its apps, a folder a preview of what it holds.
 
-   With edit_mode set, "/" opens the command palette (/new-folder, /move,
-   /rename, /delete) and st is mutated in place; *dirty is set to 1 if anything
-   changed, so the caller can persist even when the browse itself is cancelled.
-   dirty may be NULL when edit_mode is 0.
+   There is no Esc and no Backspace: "/" opens the command palette, which is both
+   how you act on a row and the only way out (/back, /exit). `mn open` is
+   read-only and gets just those two; with edit_mode set the folder commands
+   (/new-folder, /move, /rename, /delete) join them and st is mutated in place.
+   *dirty is set to 1 if anything changed, so the caller can persist even when the
+   browse itself ends in /exit. dirty may be NULL when edit_mode is 0.
 
-   Returns the chosen workspace's index into st->ws, or -1 (Esc). */
+   cwd is an in/out buffer of cwd_size bytes holding the folder being shown ("" =
+   top level): passing back what the last call left means `mn open edit` reopens
+   where the editor's /back came from rather than at the root.
+
+   Returns the chosen workspace's index into st->ws, or -1 (/exit). */
 int run_workspace_browser(WorkspaceStore *st, const char *title,
-                          int edit_mode, int *dirty);
+                          int edit_mode, int *dirty,
+                          char *cwd, size_t cwd_size);
 /* Strip directory prefix and trailing .exe from app path for a short display name. */
 void ws_display_name(const char *app, char *out, size_t out_size);
 /* Single styled text input box. Returns 1 with out filled, 0 if cancelled (Esc).

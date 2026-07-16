@@ -92,7 +92,13 @@ Routes `argv[1]` to the correct handler and implements all interactive UI logic:
 It also implements the per-platform app/IDE launch logic and `close_terminal()`, which terminates the parent shell after a successful open/launch so the launcher window closes (skipped when stdin isn't a TTY).
 
 ### `picker.c` — Interactive Terminal Pickers
-The interactive pickers (ANSI rendering, raw-mode arrow-key input, `1`–`9` numeric jump) shared across the app: `run_search_picker`, `run_list_picker`, `run_workspace_picker`, `run_ide_picker`, `run_multiselect_picker`, and `run_workspace_edit_picker`.
+The interactive pickers (ANSI rendering, raw-mode arrow-key input, `1`–`9` numeric jump) shared across the app: `run_search_picker`, `run_list_picker`, `run_workspace_browser`, `run_ide_picker`, `run_multiselect_picker`, and `run_workspace_edit_picker`.
+
+Most of them share one control flow through `run_indexed_picker()`, which owns the loop and takes a render callback — only the drawing differs. The two workspace screens don't: they drill through a tree and carry a command palette, so each runs its own loop over rows flattened from state on every keystroke (`wstree_build_rows`, `build_edit_rows`). That keeps drilling and the palette out of the pickers that want neither.
+
+**The `/` palette.** `run_workspace_browser` and `run_workspace_edit_picker` are driven by arrows, `Enter`, and typed commands — no `Esc`, no letter shortcuts. `CmdPalette` is shared between them: each passes its own `CmdDef` table (`BROWSE_CMDS`, `EDIT_CMDS`) plus a bitmask of which entries apply to the row under the cursor, so a command with nothing to act on is filtered out of the list rather than offered and refused. `Enter` runs the highlighted match rather than re-resolving the typed text — typing is what filters the list, so the two can't disagree. Since the palette holds the only ways out (`/back`, `/exit`), it is live in `mn open` too, just masked down to those two.
+
+The palette deliberately mirrors the path-completion dropdown's contract (`↑`/`↓` highlight, `Tab` accepts) so the two overlays feel like one mechanism.
 
 Every text field that accepts a filesystem path (new app, add link, edit link) wraps a `PathSuggest`: it feeds each keypress to the completion dropdown before its own handling, so `↑`/`↓` move the highlight, `Tab` completes it, and `Esc` closes the list without leaving the field. `Enter` only accepts a suggestion once the highlight has been moved by hand — otherwise it submits what was typed, so a path that happens to prefix-match something is never hijacked on the way out. See `pathcomp.c` for the scanning itself.
 
