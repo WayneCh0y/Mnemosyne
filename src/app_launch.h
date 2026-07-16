@@ -12,8 +12,9 @@
    `target` is an optional argument (path / file). For URIs it must be empty;
    the OS protocol handler decides what to do.
    `layout` is a screen-partition token ("" or "full" = maximize on the primary
-   screen, else left/right/top/bottom/tl/tr/bl/br); applied after launch on
-   Windows, ignored elsewhere. */
+   screen, else left/right/top/bottom/tl/tr/bl/br, optionally prefixed "N:" to
+   name a screen); applied after launch on Windows, ignored elsewhere (on macOS
+   the caller drives mac_place_window). */
 void app_launch(const char *app, const char *target, const char *layout);
 
 #ifdef _WIN32
@@ -26,15 +27,28 @@ void  win_place_new(void *before, const char *layout);
 #endif
 
 #ifdef __APPLE__
-/* Moves the front window of `app` into the partition encoded by `layout` using
-   AppleScript / System Events. Main display only; a no-op for "" layout. Needs
-   Accessibility permission for the controlling terminal — prints a hint and
-   does nothing harmful if it isn't granted. */
-void mac_place_window(const char *app, const char *layout);
+/* Standard windows `app` owns right now (0 if it isn't running). Sample this
+   before a launch that adds a window, and pass it as mac_place_window's
+   `prior_windows`. */
+int mac_window_count(const char *app);
+
+/* Moves a window of `app` into the partition encoded by `layout`, on the screen
+   the layout names, using AppleScript / System Events. A no-op for "" layout.
+   `app` is resolved to its bundle identifier, so both the name a workspace
+   stores ("Visual Studio Code") and the launcher name ("code") find the process
+   System Events calls "Code".
+   `prior_windows` is the window count from before the launch: placement waits
+   for a window beyond it, so an already-running app doesn't get an old window
+   snapped in place of the one just opened. Pass 0 when the launch reuses an
+   existing window and there is nothing new to wait for.
+   Needs Accessibility permission for the controlling terminal — prints a hint
+   and does nothing harmful if it isn't granted. */
+void mac_place_window(const char *app, const char *layout, int prior_windows);
 #endif
 
-/* Number of monitors (always >= 1; 1 on non-Windows). Ordered primary-first,
-   then by position, so "screen N" is stable between the chooser and launch. */
+/* Number of screens (always >= 1; 1 on Linux, which has no placement support).
+   Ordered primary-first, then left-to-right, then top-to-bottom, identically on
+   Windows and macOS — so "screen N" is stable between the chooser and launch. */
 int screen_count(void);
 
 /* Splits a layout token "screen:partition" (e.g. "2:left") into its parts.
@@ -53,6 +67,13 @@ int partition_rect(const char *part, int X, int Y, int W, int H,
    scheme made of letters/digits/+/-/. followed by ':'. The 2-char minimum
    excludes Windows drive letters like "C:\...". */
 int is_url(const char *value);
+
+/* The canonical launcher name for one of the IDE apps we drive with
+   --new-window, or NULL if `app` isn't one. Matching ignores case and an
+   optional .exe suffix, so "Code", "code.exe" and "code" all answer "code" —
+   store the returned value rather than what the user typed, so the launcher
+   is invoked by the exact name it has on PATH. */
+const char *new_window_launcher(const char *app);
 
 /* Returns 1 if `app` is one of the IDE launchers handled with --new-window. */
 int is_new_window_app(const char *app);
