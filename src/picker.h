@@ -47,9 +47,11 @@
 
 /* Path-completion dropdown — a silver frame, and violet on the one selected row
    ("> name"). Everything else stays dim: the list is an overlay to glance at,
-   not another highlighted control competing with the picker underneath it. */
-#define ANSI_SILVER    "\033[38;2;192;192;192m"
-#define ANSI_VIOLET    "\033[38;2;167;139;250m"   /* selected suggestion */
+   not another highlighted control competing with the picker underneath it.
+   256-colour, not 24-bit: macOS Terminal.app ignores "38;2;r;g;b" outright and
+   would draw the whole dropdown uncoloured. */
+#define ANSI_SILVER    "\033[38;5;250m"           /* frame  — grey  #bcbcbc */
+#define ANSI_VIOLET    "\033[38;5;141m"           /* selected suggestion #af87ff */
 
 int read_key(void);
 /* Generic numbered string-list picker. Returns the chosen index, or -1 (Esc). */

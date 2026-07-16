@@ -175,16 +175,20 @@ static int edit_buffer_key(int key, char *buf, int *len, int *pos, size_t size) 
 
    Keys, while the list is open: ↑/↓ move the highlight, Tab accepts it (a
    directory gains a trailing separator, so Tab again lists its children), and
-   Esc closes the list without leaving the field. Enter accepts only once the
-   highlight has been moved — otherwise it submits what was typed, so a path
-   that happens to prefix-match something is never hijacked on the way out. */
+   Esc closes the list without leaving the field.
+
+   Enter is never the dropdown's: it always submits the field. Completing and
+   confirming are separate keys because they are separate intentions — you walk
+   a path with Tab as many times as it takes, then press Enter once to commit
+   what the field actually shows. An Enter that sometimes completed and
+   sometimes submitted, depending on whether the highlight had been moved, meant
+   the same keystroke did two different things on two consecutive presses. */
 
 #define SUGGEST_WINDOW 5
 
 typedef struct {
     PathComp pc;
     int sel;         /* highlighted suggestion */
-    int navigated;   /* highlight was moved by hand → Enter accepts it */
     int dismissed;   /* Esc closed the list; the next edit brings it back */
 } PathSuggest;
 
@@ -201,7 +205,6 @@ static void suggest_reset(PathSuggest *s, const char *buf) {
 static void suggest_refresh(PathSuggest *s, const char *buf) {
     pathcomp_update(&s->pc, buf);
     s->sel = 0;
-    s->navigated = 0;
     s->dismissed = 0;
 }
 
@@ -218,11 +221,9 @@ static int suggest_key(PathSuggest *s, int key, char *buf, int *len, int *pos,
     switch (key) {
     case KEY_UP:
         s->sel = (s->sel > 0) ? s->sel - 1 : s->pc.count - 1;
-        s->navigated = 1;
         return 1;
     case KEY_DOWN:
         s->sel = (s->sel + 1) % s->pc.count;
-        s->navigated = 1;
         return 1;
     case KEY_ESC:
         s->dismissed = 1;
@@ -231,13 +232,8 @@ static int suggest_key(PathSuggest *s, int key, char *buf, int *len, int *pos,
         if (pathcomp_apply(&s->pc, s->sel, buf, len, pos, size))
             suggest_refresh(s, buf);
         return 1;
-    case KEY_ENTER:
-        if (!s->navigated) return 0;   /* nothing was picked → the field submits */
-        if (pathcomp_apply(&s->pc, s->sel, buf, len, pos, size))
-            suggest_refresh(s, buf);
-        return 1;
     default:
-        return 0;
+        return 0;   /* Enter included: the field owns it */
     }
 }
 
@@ -287,8 +283,7 @@ static void render_suggestions(const PathSuggest *s) {
         printf(ANSI_SILVER "  \xe2\x94\x82 " ANSI_RESET ANSI_DIM "\xe2\x8b\xaf %d more%s" ANSI_RESET "\n",
                hidden, pc->total > pc->count ? " \xe2\x80\x94 keep typing to narrow" : "");
 
-    printf(ANSI_SILVER "  \xe2\x94\x94 " ANSI_RESET ANSI_DIM "%s  \xe2\x80\xa2  \xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  Esc dismiss" ANSI_RESET,
-           s->navigated ? "Tab/Enter accept" : "Tab complete");
+    printf(ANSI_SILVER "  \xe2\x94\x94 " ANSI_RESET ANSI_DIM "Tab complete  \xe2\x80\xa2  \xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  Enter confirm  \xe2\x80\xa2  Esc dismiss" ANSI_RESET);
 }
 
 /* ── Generic indexed-list navigation loop ───────────────────────────────────
@@ -1610,8 +1605,13 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                     char resolved[WORKSPACE_APP_MAX] = {0};
                     const char *final_app = typed;
                     int valid = 1;
-                    if (is_new_window_app(typed)) {
-                        /* known IDE launcher — skip resolution */
+                    const char *launcher = new_window_launcher(typed);
+                    if (launcher != NULL) {
+                        /* Known IDE launcher — skip resolution, but store the
+                           canonical name: "Code" must be saved as the "code"
+                           CLI, not handed to a bundle-name lookup that can't
+                           find it. */
+                        final_app = launcher;
                     } else {
                         if (app_resolve(typed, resolved, sizeof(resolved)) && resolved[0])
                             final_app = resolved;

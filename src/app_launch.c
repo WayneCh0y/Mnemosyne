@@ -13,8 +13,26 @@
 #include <dwmapi.h>
 #endif
 
+/* Case-insensitive compare of the first n bytes (ASCII only). */
+static int ieq_n(const char *a, const char *b, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        char ca = (a[i] >= 'A' && a[i] <= 'Z') ? (char)(a[i] + 32) : a[i];
+        char cb = (b[i] >= 'A' && b[i] <= 'Z') ? (char)(b[i] + 32) : b[i];
+        if (ca != cb || ca == '\0') return 0;
+    }
+    return 1;
+}
+
+const char *new_window_launcher(const char *app) {
+    if (app == NULL) return NULL;
+    size_t n = strlen(app);
+    if (n >= 4 && ieq_n(app + n - 4, ".exe", 4)) n -= 4;
+    if (n == 4 && ieq_n(app, "code", 4)) return "code";
+    return NULL;
+}
+
 int is_new_window_app(const char *app) {
-    return strcmp(app, "code") == 0;
+    return new_window_launcher(app) != NULL;
 }
 
 int is_url(const char *value) {
@@ -67,7 +85,7 @@ int partition_rect(const char *part, int X, int Y, int W, int H,
     return 1;
 }
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__APPLE__)
 int screen_count(void) { return 1; }
 #endif
 
@@ -155,10 +173,17 @@ static int hwnd_in_set(const HwndSet *s, HWND h) {
     return 0;
 }
 
-typedef struct { const HwndSet *before; HWND found; } NewWinCtx;
+typedef struct { const HwndSet *before; HWND found; HWND any; } NewWinCtx;
 
-/* A "real" app window: visible, top-level (no owner), not a tool window, and a
-   sensible size — and not one that already existed before the launch. */
+/* Scans for a window that is new since the launch, visible, top-level (no
+   owner), not a tool window, and a sensible size. Of those:
+     any   — the first one, whatever it is.
+     found — the first that is also resizable (WS_THICKFRAME), and stops the scan.
+   The resizable test is what separates a real app window from the splash or
+   updater a slow app shows first (Discord's updater, installer progress
+   windows): those are fixed-size, real windows practically never are. Without
+   it we snap the splash — which then closes — and the window the user actually
+   wanted lands wherever the app felt like putting it. */
 static BOOL CALLBACK newwin_cb(HWND h, LPARAM lp) {
     NewWinCtx *c = (NewWinCtx *)lp;
     if (!IsWindowVisible(h))            return TRUE;
@@ -168,8 +193,10 @@ static BOOL CALLBACK newwin_cb(HWND h, LPARAM lp) {
     RECT r;
     if (!GetWindowRect(h, &r)) return TRUE;
     if (r.right - r.left < 200 || r.bottom - r.top < 150) return TRUE;
+    if (c->any == NULL) c->any = h;
+    if (!(GetWindowLongA(h, GWL_STYLE) & WS_THICKFRAME)) return TRUE;
     c->found = h;
-    return FALSE;   /* stop at the first match */
+    return FALSE;   /* stop at the first real window */
 }
 
 /* Thickness of a window's invisible DWM border (the gap between the window
@@ -274,17 +301,31 @@ void *win_capture_before(void) {
     return s;
 }
 
+/* ~15s of polling. A cold-starting app (Discord, Slack) can sit on a splash for
+   ten seconds before its real window exists, and the old 3s budget simply gave
+   up on those. The wait ends the moment that window appears, so a normally
+   quick app pays nothing for the larger budget — only a launch that was going
+   to miss its window anyway now takes longer to admit it. */
+#define WIN_WAIT_TRIES 200
+#define WIN_WAIT_MS    75
+
 void win_place_new(void *before_v, const char *layout) {
     HwndSet *before = (HwndSet *)before_v;
     if (before == NULL) return;
-    HWND w = NULL;
-    for (int tries = 0; tries < 40 && w == NULL; tries++) {   /* ~3s max */
-        NewWinCtx c = { before, NULL };
+
+    HWND w = NULL, fallback = NULL;
+    for (int tries = 0; tries < WIN_WAIT_TRIES; tries++) {
+        NewWinCtx c = { before, NULL, NULL };
         EnumWindows(newwin_cb, (LPARAM)&c);
-        w = c.found;
-        if (w == NULL) Sleep(75);
+        if (c.found != NULL) { w = c.found; break; }
+        if (fallback == NULL) fallback = c.any;
+        Sleep(WIN_WAIT_MS);
     }
-    if (w) win_snap(w, layout);
+    /* Nothing resizable ever appeared, so this app's only window really is
+       fixed-size. Place that rather than nothing — but it may have been a splash
+       that has since closed, hence the liveness check. */
+    if (w == NULL) w = fallback;
+    if (w != NULL && IsWindow(w)) win_snap(w, layout);
     free(before);
 }
 
@@ -355,59 +396,140 @@ static void launch_app_win(const char *app, const char *target, const char *layo
 #endif
 
 #if defined(__APPLE__)
-/* Visible frame of the main display — the usable area with the menu bar and Dock
-   excluded — in System Events' top-left coordinates: *X,*Y is the top-left corner
-   and *W,*H the size. Cached so a multi-app workspace resolves it only once.
+/* ── Screens ─────────────────────────────────────────────────────────────────
+   System Events places windows in one global coordinate space anchored at the
+   *primary* screen's top-left, y growing downward. AppKit reports screens with
+   a bottom-left origin instead, so every frame has to be flipped through the
+   primary screen's height — the primary's, not the screen's own. Flipping a
+   secondary display through its own height (what this code used to do) lands
+   the window at the wrong y whenever the two displays differ in height, which
+   is most of the time.
 
-   Primary source is AppKit's NSScreen.visibleFrame via JXA (converted from Cocoa's
-   bottom-left origin to top-left). If that's unavailable we fall back to Finder's
-   full desktop bounds (origin 0,0) — placement then ignores the menu bar, the old
-   behaviour, but at least still works. Returns 1 on success. */
-static int mac_visible_frame(int *X, int *Y, int *W, int *H) {
-    static int rx = 0, ry = 0, rw = 0, rh = 0, done = 0;
-    if (!done) {
+   The primary is identified as the screen whose frame origin is exactly (0,0) —
+   the anchor of the global space, and the one thing here that is stable.
+   NSScreen.mainScreen is not: it means "the screen holding the key window",
+   which for a background osascript is wherever the user's focus happens to be.
+
+   Screens are then ordered exactly as Windows orders monitors — primary first,
+   then left-to-right, then top-to-bottom — so "screen N" in the placement
+   picker means the same thing on both platforms. Enumerated once per run. */
+
+#define MAC_SCREEN_MAX 16
+
+typedef struct { int x, y, w, h, primary; } MacScreen;
+
+/* a before b? primary first, then left-to-right, then top-to-bottom. */
+static int mac_screen_less(const MacScreen *a, const MacScreen *b) {
+    if (a->primary != b->primary) return a->primary > b->primary;
+    if (a->x != b->x)             return a->x < b->x;
+    return a->y < b->y;
+}
+
+/* Fills `out` with the visible frame (menu bar and Dock excluded) of every
+   screen, in System Events' top-left coordinates, sorted. Returns the count. */
+static int mac_screens(MacScreen *out, int max) {
+    static MacScreen cache[MAC_SCREEN_MAX];
+    static int cached = -1;
+
+    if (cached < 0) {
+        cached = 0;
         FILE *fp = popen(
             "osascript -l JavaScript -e 'ObjC.import(\"AppKit\");"
-            "var s=$.NSScreen.mainScreen,v=s.visibleFrame,f=s.frame;"
             "function R(n){return Math.round(n)}"
-            "[R(v.origin.x),R(f.size.height-(v.origin.y+v.size.height)),"
-            "R(v.size.width),R(v.size.height)].join(\" \")' 2>/dev/null", "r");
+            "var ss=$.NSScreen.screens,H=0,i,f;"
+            "for(i=0;i<ss.count;i++){f=ss.objectAtIndex(i).frame;"
+            "if(R(f.origin.x)===0&&R(f.origin.y)===0)H=f.size.height}"
+            "if(H===0)H=ss.objectAtIndex(0).frame.size.height;"
+            "var o=[];"
+            "for(i=0;i<ss.count;i++){var s=ss.objectAtIndex(i),v=s.visibleFrame;"
+            "f=s.frame;"
+            "o.push([R(v.origin.x),R(H-(v.origin.y+v.size.height)),"
+            "R(v.size.width),R(v.size.height),"
+            "(R(f.origin.x)===0&&R(f.origin.y)===0)?1:0].join(\" \"))}"
+            "o.join(\"\\n\")' 2>/dev/null", "r");
         if (fp != NULL) {
-            char out[160] = {0};
-            char *got = fgets(out, sizeof(out), fp);
+            char line[160];
+            while (cached < MAC_SCREEN_MAX && fgets(line, sizeof(line), fp) != NULL) {
+                MacScreen s;
+                if (sscanf(line, "%d %d %d %d %d",
+                           &s.x, &s.y, &s.w, &s.h, &s.primary) == 5 &&
+                    s.w > 0 && s.h > 0)
+                    cache[cached++] = s;
+            }
             pclose(fp);
-            if (got != NULL && sscanf(out, "%d %d %d %d", &rx, &ry, &rw, &rh) == 4
-                && rw > 0 && rh > 0)
-                done = 1;
         }
-        if (!done) {   /* fallback: full desktop bounds "0, 0, W, H" */
+
+        /* AppKit unreachable (JXA disabled, or a stripped-down system): fall
+           back to Finder's desktop bounds. One screen, and the menu bar / Dock
+           are not excluded — the old behaviour, but placement still works. */
+        if (cached == 0) {
             FILE *fp2 = popen("osascript -e 'tell application \"Finder\" to get "
                               "bounds of window of desktop' 2>/dev/null", "r");
-            if (fp2 == NULL) return 0;
-            char out[128] = {0};
-            char *got = fgets(out, sizeof(out), fp2);
-            pclose(fp2);
-            if (got == NULL) return 0;
-            rx = 0; ry = 0;
-            if (sscanf(out, "%*d, %*d, %d, %d", &rw, &rh) != 2 || rw <= 0 || rh <= 0)
-                return 0;
-            done = 1;
+            if (fp2 != NULL) {
+                char buf[128] = {0};
+                char *got = fgets(buf, sizeof(buf), fp2);
+                pclose(fp2);
+                MacScreen s = { 0, 0, 0, 0, 1 };
+                if (got != NULL &&
+                    sscanf(buf, "%*d, %*d, %d, %d", &s.w, &s.h) == 2 &&
+                    s.w > 0 && s.h > 0)
+                    cache[cached++] = s;
+            }
+        }
+
+        for (int i = 0; i < cached; i++) {      /* selection sort, as on Windows */
+            int best = i;
+            for (int k = i + 1; k < cached; k++)
+                if (mac_screen_less(&cache[k], &cache[best])) best = k;
+            if (best != i) {
+                MacScreen t = cache[i]; cache[i] = cache[best]; cache[best] = t;
+            }
         }
     }
-    *X = rx; *Y = ry; *W = rw; *H = rh;
+
+    int n = (cached < max) ? cached : max;
+    for (int i = 0; i < n; i++) out[i] = cache[i];
+    return n;
+}
+
+int screen_count(void) {
+    MacScreen s[MAC_SCREEN_MAX];
+    int n = mac_screens(s, MAC_SCREEN_MAX);
+    return n > 0 ? n : 1;
+}
+
+/* Visible frame of the 1-based screen `index`; out-of-range falls back to the
+   primary (sorted first), matching screen_work_area on Windows. */
+static int mac_screen_area(int index, int *X, int *Y, int *W, int *H) {
+    MacScreen s[MAC_SCREEN_MAX];
+    int n = mac_screens(s, MAC_SCREEN_MAX);
+    if (n <= 0) return 0;
+    int i = index - 1;
+    if (i < 0 || i >= n) i = 0;
+    *X = s[i].x; *Y = s[i].y; *W = s[i].w; *H = s[i].h;
     return 1;
 }
 
-/* Positions the front window of `app` into the partition `layout` via System
-   Events. Main display only (screen prefix > 1 is ignored).
+/* Positions a window of `app` into the partition `layout` via System Events, on
+   whichever screen the layout names.
 
-   The window is matched by *case-insensitive* process name (AppleScript `whose
-   name is` ignores case, so "mail" matches "Mail"), and we poll until that
-   process exists AND owns a window before moving/sizing it — so a slow-launching
-   app (e.g. Discord) is awaited rather than missed. The script reports back:
-   "ok" placed, "perm" assistive access denied, "timeout" never appeared. The
-   Accessibility hint is printed once; after a denial the rest of the run skips
-   (retrying would only nag). */
+   The process is matched by *case-insensitive* name (AppleScript `whose name is`
+   ignores case, so "mail" matches "Mail"), and we poll until it owns a window
+   that is worth placing — so a slow-launching app is awaited rather than missed.
+
+   "Worth placing" means subrole AXStandardWindow. A cold-starting app shows a
+   splash or updater first (Discord is the usual offender), and that window is
+   what `front window` returns: we would place the splash, the splash would then
+   close, and the real window would open wherever it liked. Only a proper
+   titled window carries the standard subrole. If none ever appears we settle for
+   the front window at the end rather than placing nothing at all.
+
+   Position is re-applied after the resize because moving a window across screens
+   can make the window server clamp it back to the display it came from.
+
+   The script reports back: "ok" placed, "perm" assistive access denied,
+   "timeout" nothing to place. The Accessibility hint is printed once; after a
+   denial the rest of the run skips (retrying would only nag). */
 void mac_place_window(const char *app, const char *layout) {
     static int perm_denied = 0;
     if (perm_denied) return;
@@ -415,33 +537,36 @@ void mac_place_window(const char *app, const char *layout) {
     int screen = 1;
     char part[16];
     layout_parse(layout, &screen, part, sizeof(part));
-    if (screen != 1) return;   /* main display only for now */
 
     int X, Y, W, H;
-    if (!mac_visible_frame(&X, &Y, &W, &H)) return;
+    if (!mac_screen_area(screen, &X, &Y, &W, &H)) return;
 
     int x, y, w, h;
     if (!partition_rect(part, X, Y, W, H, &x, &y, &w, &h)) {
         x = X; y = Y; w = W; h = H;   /* "full" / unknown → whole visible area */
     }
 
-    char cmd[WORKSPACE_APP_MAX + 1024];
+    char cmd[WORKSPACE_APP_MAX + 2048];
     snprintf(cmd, sizeof(cmd),
         "osascript"
+        /* theWin / theProc rather than window / target: bare nouns risk
+           colliding with System Events' own dictionary terms. */
         " -e 'set appName to \"%s\"'"
         " -e 'tell application \"System Events\"'"
-        " -e 'repeat 50 times'"               /* ~10s; returns as soon as ready */
+        " -e 'set theWin to missing value'"
+        " -e 'set theProc to missing value'"
+        " -e 'repeat 75 times'"              /* ~15s; exits as soon as ready */
         " -e 'try'"
-        " -e 'set ps to (every process whose name is appName)'"
-        " -e 'if (count of ps) > 0 then'"
-        " -e 'set p to item 1 of ps'"
-        " -e 'if (count of windows of p) > 0 then'"
-        " -e 'set frontmost of p to true'"
-        " -e 'set position of front window of p to {%d, %d}'"
+        " -e 'set procList to (every process whose name is appName)'"
+        " -e 'if (count of procList) > 0 then'"
+        " -e 'set theProc to item 1 of procList'"
+        " -e 'set winList to {}'"
         " -e 'try'"
-        " -e 'set size of front window of p to {%d, %d}'"
+        " -e 'set winList to (every window of theProc whose subrole is \"AXStandardWindow\")'"
         " -e 'end try'"
-        " -e 'return \"ok\"'"
+        " -e 'if (count of winList) > 0 then'"
+        " -e 'set theWin to item 1 of winList'"
+        " -e 'exit repeat'"
         " -e 'end if'"
         " -e 'end if'"
         " -e 'on error number errNum'"
@@ -449,9 +574,26 @@ void mac_place_window(const char *app, const char *layout) {
         " -e 'end try'"
         " -e 'delay 0.2'"
         " -e 'end repeat'"
-        " -e 'return \"timeout\"'"
+        /* no standard window ever showed up — settle for whatever is in front */
+        " -e 'if theWin is missing value and theProc is not missing value then'"
+        " -e 'try'"
+        " -e 'if (count of windows of theProc) > 0 then set theWin to front window of theProc'"
+        " -e 'end try'"
+        " -e 'end if'"
+        " -e 'if theWin is missing value then return \"timeout\"'"
+        " -e 'try'"
+        " -e 'set frontmost of theProc to true'"
+        " -e 'end try'"
+        " -e 'set position of theWin to {%d, %d}'"
+        " -e 'try'"
+        " -e 'set size of theWin to {%d, %d}'"
+        " -e 'end try'"
+        " -e 'try'"
+        " -e 'set position of theWin to {%d, %d}'"
+        " -e 'end try'"
+        " -e 'return \"ok\"'"
         " -e 'end tell' 2>/dev/null",
-        app, x, y, w, h);
+        app, x, y, w, h, x, y);
 
     FILE *fp = popen(cmd, "r");
     if (fp == NULL) return;
@@ -470,6 +612,11 @@ void mac_place_window(const char *app, const char *layout) {
 #endif
 
 void app_launch(const char *app, const char *target, const char *layout) {
+    /* A workspace saved before app names were canonicalised can hold "Code";
+       invoke the launcher by the name it actually has on PATH. */
+    const char *launcher = new_window_launcher(app);
+    if (launcher != NULL) app = launcher;
+
     /* If the target is a protocol URI (spotify:..., https://..., etc.), let
        the OS route it to the right handler. The chosen app is informational
        — Windows / macOS / Linux already know which app owns each scheme. The OS

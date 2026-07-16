@@ -402,7 +402,12 @@ static void launch_workspace(const Workspace *ws) {
     /* Each entry is one app instance. For IDEs, launch once per target.
        For other apps, pass all targets in one invocation. */
     for (int i = 0; i < ws->entry_count; i++) {
+        /* These branches shell out directly rather than through app_launch, so
+           they canonicalise the app name themselves: a workspace saved before
+           that was enforced can hold "Code" where PATH has "code". */
         const char *app = ws->entries[i].app;
+        const char *launcher = new_window_launcher(app);
+        if (launcher != NULL) app = launcher;
         int tc = ws->entries[i].target_count;
 
 #if defined(__APPLE__)

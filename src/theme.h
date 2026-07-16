@@ -31,8 +31,10 @@
 #define TH_BOLD    "\033[1m"
 #define TH_DIM     "\033[2m"
 
-#define TH_GOLD    "\033[38;2;212;175;55m"   /* brand primary  */
-#define TH_SILVER  "\033[38;2;192;192;192m"  /* brand frame    */
+/* 256-colour rather than 24-bit: macOS Terminal.app has no truecolor support and
+ * ignores "38;2;r;g;b", which would drop the brand colours entirely there. */
+#define TH_GOLD    "\033[38;5;179m"          /* brand primary  #d7af5f */
+#define TH_SILVER  "\033[38;5;250m"          /* brand frame    #bcbcbc */
 #define TH_CYAN    "\033[36m"                /* commands       */
 
 #define TH_OK      "\033[32m"                /* success        */
