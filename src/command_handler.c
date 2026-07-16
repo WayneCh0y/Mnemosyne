@@ -413,17 +413,25 @@ static void launch_workspace(const Workspace *ws) {
 #if defined(__APPLE__)
         const char *layout = ws->entries[i].layout;
         if (is_new_window_app(app)) {
-            /* IDEs: one launch per target (or once standalone). */
+            /* IDEs: one launch per target (or once standalone). Every launch
+               opens its own window, so each is placed individually — sampling
+               the window count first so placement waits for the window this
+               launch adds rather than one the IDE already had open. This mirrors
+               the per-launch placement the Windows branch gets from app_launch. */
             if (tc == 0) {
+                int prior = layout[0] ? mac_window_count(app) : 0;
                 char cmd[WORKSPACE_APP_MAX + 16];
                 snprintf(cmd, sizeof(cmd), "%s --new-window", app);
                 system(cmd);
+                if (layout[0]) mac_place_window(app, layout, prior);
             } else {
                 for (int k = 0; k < tc; k++) {
+                    int prior = layout[0] ? mac_window_count(app) : 0;
                     char cmd[WORKSPACE_APP_MAX + WORKSPACE_TARGET_MAX + 16];
                     snprintf(cmd, sizeof(cmd), "%s --new-window \"%s\"",
                              app, ws->entries[i].targets[k]);
                     system(cmd);
+                    if (layout[0]) mac_place_window(app, layout, prior);
                 }
             }
         } else {
@@ -437,12 +445,11 @@ static void launch_workspace(const Workspace *ws) {
                                 " \"%s\"", ws->entries[i].targets[k]);
             system(cmd);
             free(cmd);
+            /* Snap into the assigned partition. `open -a` reuses a running app's
+               window rather than adding one, so there is no new window to wait
+               for: place the front one. */
+            if (layout[0]) mac_place_window(app, layout, 0);
         }
-        /* Snap into the assigned partition. IDEs are skipped: their System Events
-           process name doesn't match the "code"/"cursor" launcher, so positioning
-           there can't reliably target the right window. */
-        if (layout[0] && !is_new_window_app(app))
-            mac_place_window(app, layout);
 #else
         if (is_new_window_app(app)) {
             /* IDEs: one launch per target (or once standalone). */

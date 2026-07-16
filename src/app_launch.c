@@ -510,12 +510,71 @@ static int mac_screen_area(int index, int *X, int *Y, int *W, int *H) {
     return 1;
 }
 
+/* ── Finding the process that owns an app's windows ──────────────────────────
+   A workspace stores the name `open -a` accepts — a bundle's *display* name
+   ("Visual Studio Code"), or one of the IDE launcher names ("code"). System
+   Events, however, reports a process under its CFBundleName. For most apps the
+   two agree (Safari is "Safari" either way), but for VS Code they do not: it is
+   "Visual Studio Code" on disk and "Code" as a process. Matching on the name
+   therefore silently found no process for exactly those apps, and placement sat
+   out its full timeout doing nothing.
+
+   LaunchServices resolves either spelling to the same bundle identifier without
+   launching anything, so match on that instead and keep the name match as the
+   fallback for an app it can't resolve. */
+
+/* Resolves appName to a bundle identifier in `theID`, or "" on failure. `id of
+   application` is a Standard Additions command, so this has to sit outside the
+   System Events tell block. */
+#define MAC_RESOLVE_APP_ID \
+    " -e 'set theID to \"\"'" \
+    " -e 'try'" \
+    " -e 'set theID to id of application appName'" \
+    " -e 'end try'"
+
+/* Sets procList to the app's running processes. Used inside the tell block. */
+#define MAC_SET_PROCLIST \
+    " -e 'if theID is not \"\" then'" \
+    " -e 'set procList to (every process whose bundle identifier is theID)'" \
+    " -e 'else'" \
+    " -e 'set procList to (every process whose name is appName)'" \
+    " -e 'end if'"
+
+/* Standard windows `app` owns right now; 0 if it isn't running, or if the
+   window query is refused (no Accessibility — placement can't work then either,
+   and mac_place_window reports that itself). Sampled just before a launch that
+   is known to add a window, so the placement can wait for *that* window instead
+   of grabbing one the app already had open. */
+int mac_window_count(const char *app) {
+    char cmd[WORKSPACE_APP_MAX + 512];
+    snprintf(cmd, sizeof(cmd),
+        "osascript"
+        " -e 'set appName to \"%s\"'"
+        MAC_RESOLVE_APP_ID
+        " -e 'tell application \"System Events\"'"
+        MAC_SET_PROCLIST
+        " -e 'if (count of procList) is 0 then return 0'"
+        " -e 'return (count of (every window of item 1 of procList"
+        " whose subrole is \"AXStandardWindow\"))'"
+        " -e 'end tell' 2>/dev/null",
+        app);
+
+    FILE *fp = popen(cmd, "r");
+    if (fp == NULL) return 0;
+    char buf[32] = {0};
+    char *got = fgets(buf, sizeof(buf), fp);
+    pclose(fp);
+
+    int n = (got != NULL) ? atoi(buf) : 0;
+    return n > 0 ? n : 0;
+}
+
 /* Positions a window of `app` into the partition `layout` via System Events, on
    whichever screen the layout names.
 
-   The process is matched by *case-insensitive* name (AppleScript `whose name is`
-   ignores case, so "mail" matches "Mail"), and we poll until it owns a window
-   that is worth placing — so a slow-launching app is awaited rather than missed.
+   The process is found by bundle identifier (see MAC_SET_PROCLIST above), and we
+   poll until it owns a window that is worth placing — so a slow-launching app is
+   awaited rather than missed.
 
    "Worth placing" means subrole AXStandardWindow. A cold-starting app shows a
    splash or updater first (Discord is the usual offender), and that window is
@@ -524,15 +583,23 @@ static int mac_screen_area(int index, int *X, int *Y, int *W, int *H) {
    titled window carries the standard subrole. If none ever appears we settle for
    the front window at the end rather than placing nothing at all.
 
+   `prior_windows` is how many standard windows the app owned before the launch:
+   we wait for one *beyond* that count, which is what stops an already-running
+   app (a second `code --new-window`) from having its existing front window
+   snapped while the newly opened one keeps the geometry it restored. Pass 0 when
+   the launch reuses an existing window (`open -a` on a running app) so the first
+   window found is placed immediately rather than waited on.
+
    Position is re-applied after the resize because moving a window across screens
    can make the window server clamp it back to the display it came from.
 
    The script reports back: "ok" placed, "perm" assistive access denied,
    "timeout" nothing to place. The Accessibility hint is printed once; after a
    denial the rest of the run skips (retrying would only nag). */
-void mac_place_window(const char *app, const char *layout) {
+void mac_place_window(const char *app, const char *layout, int prior_windows) {
     static int perm_denied = 0;
     if (perm_denied) return;
+    if (prior_windows < 0) prior_windows = 0;
 
     int screen = 1;
     char part[16];
@@ -552,25 +619,30 @@ void mac_place_window(const char *app, const char *layout) {
         /* theWin / theProc rather than window / target: bare nouns risk
            colliding with System Events' own dictionary terms. */
         " -e 'set appName to \"%s\"'"
+        MAC_RESOLVE_APP_ID
         " -e 'tell application \"System Events\"'"
         " -e 'set theWin to missing value'"
         " -e 'set theProc to missing value'"
         " -e 'repeat 75 times'"              /* ~15s; exits as soon as ready */
         " -e 'try'"
-        " -e 'set procList to (every process whose name is appName)'"
+        MAC_SET_PROCLIST
         " -e 'if (count of procList) > 0 then'"
         " -e 'set theProc to item 1 of procList'"
-        " -e 'set winList to {}'"
-        " -e 'try'"
+        /* No inner try around this: a transient error (the process is still
+           mid-launch) is caught by the outer handler and simply retried, while
+           an Accessibility refusal has to reach that handler to be reported.
+           Swallowing it here is what used to turn a denial into a silent 15s
+           wait and no hint. */
         " -e 'set winList to (every window of theProc whose subrole is \"AXStandardWindow\")'"
-        " -e 'end try'"
-        " -e 'if (count of winList) > 0 then'"
+        " -e 'if (count of winList) > %d then'"
         " -e 'set theWin to item 1 of winList'"
         " -e 'exit repeat'"
         " -e 'end if'"
         " -e 'end if'"
         " -e 'on error number errNum'"
-        " -e 'if errNum is -1719 then return \"perm\"'"
+        /* -25211 is the one System Events actually raises for a denied
+           terminal; -1719/-1743 cover the other refusal shapes. */
+        " -e 'if errNum is -25211 or errNum is -1719 or errNum is -1743 then return \"perm\"'"
         " -e 'end try'"
         " -e 'delay 0.2'"
         " -e 'end repeat'"
@@ -593,7 +665,7 @@ void mac_place_window(const char *app, const char *layout) {
         " -e 'end try'"
         " -e 'return \"ok\"'"
         " -e 'end tell' 2>/dev/null",
-        app, x, y, w, h, x, y);
+        app, prior_windows, x, y, w, h, x, y);
 
     FILE *fp = popen(cmd, "r");
     if (fp == NULL) return;

@@ -27,11 +27,23 @@ void  win_place_new(void *before, const char *layout);
 #endif
 
 #ifdef __APPLE__
+/* Standard windows `app` owns right now (0 if it isn't running). Sample this
+   before a launch that adds a window, and pass it as mac_place_window's
+   `prior_windows`. */
+int mac_window_count(const char *app);
+
 /* Moves a window of `app` into the partition encoded by `layout`, on the screen
    the layout names, using AppleScript / System Events. A no-op for "" layout.
+   `app` is resolved to its bundle identifier, so both the name a workspace
+   stores ("Visual Studio Code") and the launcher name ("code") find the process
+   System Events calls "Code".
+   `prior_windows` is the window count from before the launch: placement waits
+   for a window beyond it, so an already-running app doesn't get an old window
+   snapped in place of the one just opened. Pass 0 when the launch reuses an
+   existing window and there is nothing new to wait for.
    Needs Accessibility permission for the controlling terminal — prints a hint
    and does nothing harmful if it isn't granted. */
-void mac_place_window(const char *app, const char *layout);
+void mac_place_window(const char *app, const char *layout, int prior_windows);
 #endif
 
 /* Number of screens (always >= 1; 1 on Linux, which has no placement support).
