@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "app_enum.h"
+#include "app_launch.h"
 #include "cJSON.h"
 
 #ifdef _WIN32
@@ -21,21 +22,7 @@ static const char *base_name(const char *path) {
 }
 
 static const char *canonical_launcher(const char *display) {
-    const char *b = base_name(display);
-    size_t n = strlen(b);
-    if (n >= 4) {
-        const char *ext = b + n - 4;
-        if (ext[0] == '.' &&
-            (ext[1] == 'e' || ext[1] == 'E') &&
-            (ext[2] == 'x' || ext[2] == 'X') &&
-            (ext[3] == 'e' || ext[3] == 'E'))
-            n -= 4;
-    }
-    if (n == 4 &&
-        (b[0] == 'c' || b[0] == 'C') && (b[1] == 'o' || b[1] == 'O') &&
-        (b[2] == 'd' || b[2] == 'D') && (b[3] == 'e' || b[3] == 'E'))
-        return "code";
-    return NULL;
+    return new_window_launcher(base_name(display));
 }
 
 /* Append a RunningApp entry.  Display is the process basename only.
