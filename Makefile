@@ -54,7 +54,7 @@ SRCS = src/main.c \
        src/cJSON.c
 
 ifeq ($(OS), Windows_NT)
-    LDFLAGS = -ladvapi32 -lshell32 -luser32 -ldwmapi
+    LDFLAGS = -ladvapi32 -lshell32 -lshlwapi -luser32 -ldwmapi
 else
     LDFLAGS =
 endif

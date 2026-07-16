@@ -275,6 +275,41 @@ static int scan_file_pdf(const char *path, const char *query, const char *raw_qu
                          match_start_out, match_len_out, is_case_sensitive);
 }
 
+/* Returns the 1-based page number of the first word-boundary match of `query`
+   in the extracted PDF text at `doc_path`. pdftotext emits a form-feed (0x0C)
+   between pages, so page = 1 + (form-feeds before the match). Returns 1 if the
+   file is unreadable or the match cannot be located. When `is_case_sensitive`
+   is 0, `query` must already be lowercased. */
+static int find_pdf_page(const char *doc_path, const char *query, int is_case_sensitive) {
+    char *buf = read_file_buf(doc_path);
+    if (buf == NULL) return 1;
+
+    char stored_path[4096] = {0};
+    const char *content = extract_path_line(buf, stored_path, sizeof(stored_path));
+
+    if (!is_case_sensitive) {
+        for (char *c = (char *)content; *c; c++)
+            *c = (char)tolower((unsigned char)*c);
+    }
+
+    int qlen = (int)strlen(query);
+    const char *first_match = NULL;
+    const char *p = content;
+    while ((p = strstr(p, query)) != NULL) {
+        if (is_word_match(content, p, query)) { first_match = p; break; }
+        p += qlen;
+    }
+
+    int page = 1;
+    if (first_match != NULL) {
+        for (const char *q = content; q < first_match; q++)
+            if (*q == '\f') page++;
+    }
+
+    free(buf);
+    return page;
+}
+
 /* Returns 1 if `hash` is in the candidate list, 0 otherwise. */
 static int hash_in_candidates(const InvertedMatch *cands, int n, const char *hash) {
     for (int i = 0; i < n; i++) {
@@ -359,6 +394,9 @@ SearchResult *search(const char *query, const char *raw_query, int *count, int i
             results[found].last_modified = entries[i].last_modified;
             results[found].match_start   = match_start;
             results[found].match_len     = match_len;
+            results[found].page          =
+                (file_type_from_string(entries[i].file_type) == FILE_TYPE_PDF && match_start >= 0)
+                ? find_pdf_page(doc_path, query, is_case_sensitive) : 0;
             found++;
         }
     }

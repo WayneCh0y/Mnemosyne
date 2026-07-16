@@ -61,4 +61,15 @@ int is_new_window_app(const char *app);
    (Windows: ShellExecute "open"; macOS: open; Linux: xdg-open). */
 void open_with_default_app(const char *path);
 
+/* Opens a PDF at 1-based `page` using the OS's registered default viewer when
+   we can identify it. Supported page-jump paths:
+     Windows — Edge/Chrome/Firefox (file:// + #page=N), SumatraPDF, Acrobat.
+     macOS   — Skim (AppleScript); Preview via a best-effort ⌥⌘G keystroke
+               that needs Accessibility for the terminal and silently degrades
+               to page 1 otherwise.
+     Linux   — Evince, Okular, or a browser (via #page=N).
+   Any unrecognized viewer falls back to open_with_default_app at page 1.
+   `page <= 0` opens at page 1. Returns 0 on success. */
+int open_pdf_at_page(const char *path, int page);
+
 #endif

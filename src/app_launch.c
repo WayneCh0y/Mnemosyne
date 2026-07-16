@@ -10,7 +10,10 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
+#include <shlwapi.h>
 #include <dwmapi.h>
+#else
+#include <unistd.h>
 #endif
 
 int is_new_window_app(const char *app) {
@@ -547,5 +550,191 @@ void open_with_default_app(const char *path) {
     char cmd[WORKSPACE_TARGET_MAX + 32];
     snprintf(cmd, sizeof(cmd), "xdg-open \"%s\" &", path);
     system(cmd);
+#endif
+}
+
+/* Writes `path` into `out` as a file:// URL body suitable for a browser: '\'
+   becomes '/', and space/#/? are percent-encoded so they don't collide with
+   URL syntax or the `#page=N` fragment we append. Not a full RFC-3986 encoder,
+   but covers the characters that actually break browsers on the file:// paths
+   we produce. */
+static void encode_file_url_path(const char *path, char *out, size_t out_size) {
+    size_t o = 0;
+    for (size_t i = 0; path[i] != '\0' && o + 4 < out_size; i++) {
+        unsigned char c = (unsigned char)path[i];
+        if      (c == '\\')            { out[o++] = '/'; }
+        else if (c == ' ')             { memcpy(out + o, "%20", 3); o += 3; }
+        else if (c == '#')             { memcpy(out + o, "%23", 3); o += 3; }
+        else if (c == '?')             { memcpy(out + o, "%3F", 3); o += 3; }
+        else                           { out[o++] = (char)c; }
+    }
+    out[o] = '\0';
+}
+
+#ifdef _WIN32
+typedef enum {
+    WIN_PDF_UNKNOWN = 0,
+    WIN_PDF_BROWSER,   /* Edge / Chrome / Firefox — page-jump via #page=N */
+    WIN_PDF_SUMATRA,   /* SumatraPDF — `-page N` */
+    WIN_PDF_ACROBAT,   /* Adobe Reader / Acrobat — `/A "page=N"` */
+} WinPdfViewer;
+
+static int has_basename_icase(const char *path, const char *basename) {
+    const char *slash = strrchr(path, '\\');
+    const char *base  = slash ? slash + 1 : path;
+    return _stricmp(base, basename) == 0;
+}
+
+/* Resolves the .pdf-associated executable via the shell's Assoc API and
+   classifies it. `exe_out` receives the executable path so the caller can
+   invoke it directly (needed because ShellExecute of a file:// URL routes
+   through the URL handler, not the PDF handler). */
+static WinPdfViewer detect_windows_pdf_handler(char *exe_out, size_t exe_size) {
+    DWORD n = (DWORD)exe_size;
+    if (AssocQueryStringA(ASSOCF_NONE, ASSOCSTR_EXECUTABLE, ".pdf", NULL,
+                          exe_out, &n) != S_OK) {
+        exe_out[0] = '\0';
+        return WIN_PDF_UNKNOWN;
+    }
+    if (has_basename_icase(exe_out, "msedge.exe") ||
+        has_basename_icase(exe_out, "chrome.exe") ||
+        has_basename_icase(exe_out, "firefox.exe")) return WIN_PDF_BROWSER;
+    if (has_basename_icase(exe_out, "sumatrapdf.exe")) return WIN_PDF_SUMATRA;
+    if (has_basename_icase(exe_out, "acrord32.exe") ||
+        has_basename_icase(exe_out, "acrobat.exe"))    return WIN_PDF_ACROBAT;
+    return WIN_PDF_UNKNOWN;
+}
+
+static int shell_exec(const char *exe, const char *params) {
+    SHELLEXECUTEINFOA sei = {0};
+    sei.cbSize       = sizeof(sei);
+    sei.lpVerb       = "open";
+    sei.lpFile       = exe;
+    sei.lpParameters = params;
+    sei.nShow        = SW_SHOWNORMAL;
+    return ShellExecuteExA(&sei) ? 0 : -1;
+}
+
+static int launch_browser_pdf_win(const char *exe, const char *path, int page) {
+    char encoded[4096];
+    encode_file_url_path(path, encoded, sizeof(encoded));
+    /* Chromium/Firefox honor "file:///<abs>#page=N" and jump their built-in
+       viewer to the target page. Passed as a bare argument — no outer quotes
+       needed because encode_file_url_path escaped whitespace. */
+    char url[4200];
+    snprintf(url, sizeof(url), "file:///%s#page=%d", encoded, page);
+    return shell_exec(exe, url);
+}
+
+static int launch_sumatra_pdf(const char *exe, const char *path, int page) {
+    char params[4200];
+    snprintf(params, sizeof(params), "-page %d \"%s\"", page, path);
+    return shell_exec(exe, params);
+}
+
+static int launch_acrobat_pdf(const char *exe, const char *path, int page) {
+    char params[4200];
+    /* Acrobat's /A verb takes a comma-separated option list; wrapping it in
+       quotes keeps embedded spaces (none here, but future-proof) intact. */
+    snprintf(params, sizeof(params), "/A \"page=%d\" \"%s\"", page, path);
+    return shell_exec(exe, params);
+}
+#endif /* _WIN32 */
+
+#if defined(__APPLE__)
+static int launch_skim_pdf(const char *path, int page) {
+    /* Skim exposes a proper AppleScript dictionary — no GUI scripting needed.
+       Backgrounded so the caller (close_terminal) doesn't wait on osascript. */
+    char cmd[WORKSPACE_TARGET_MAX + 512];
+    snprintf(cmd, sizeof(cmd),
+        "(osascript"
+        " -e 'tell application \"Skim\" to activate'"
+        " -e 'tell application \"Skim\" to open POSIX file \"%s\"'"
+        " -e 'tell application \"Skim\" to go to page %d of front document'"
+        " 2>/dev/null) &",
+        path, page);
+    return system(cmd);
+}
+
+static int launch_preview_pdf(const char *path, int page) {
+    /* Preview has no CLI page-jump and its AppleScript dictionary has no page
+       entity. We open the file, then send the ⌥⌘G "Go to Page…" shortcut via
+       System Events. This needs Accessibility permission for the terminal —
+       when it isn't granted the keystrokes are dropped silently, which is fine
+       because the PDF is already open at page 1. Delays let the app come to
+       the foreground before we send the chord. */
+    char open_cmd[WORKSPACE_TARGET_MAX + 32];
+    snprintf(open_cmd, sizeof(open_cmd), "open -a Preview \"%s\"", path);
+    system(open_cmd);
+    if (page <= 1) return 0;
+
+    char osa[512];
+    snprintf(osa, sizeof(osa),
+        "(sleep 0.6; osascript"
+        " -e 'tell application \"Preview\" to activate'"
+        " -e 'delay 0.2'"
+        " -e 'tell application \"System Events\" to keystroke \"g\" using {option down, command down}'"
+        " -e 'delay 0.2'"
+        " -e 'tell application \"System Events\" to keystroke \"%d\"'"
+        " -e 'tell application \"System Events\" to key code 36'"
+        " 2>/dev/null) &",
+        page);
+    return system(osa);
+}
+#endif /* __APPLE__ */
+
+#if !defined(_WIN32) && !defined(__APPLE__)
+/* Reads the default .desktop handler for application/pdf (e.g.
+   "org.gnome.Evince.desktop"). Empty string if xdg-mime isn't available. */
+static void query_linux_pdf_handler(char *out, size_t out_size) {
+    out[0] = '\0';
+    FILE *fp = popen("xdg-mime query default application/pdf 2>/dev/null", "r");
+    if (fp == NULL) return;
+    if (fgets(out, out_size, fp) != NULL) {
+        size_t n = strlen(out);
+        while (n > 0 && (out[n-1] == '\n' || out[n-1] == '\r')) out[--n] = '\0';
+    }
+    pclose(fp);
+}
+#endif /* !_WIN32 && !__APPLE__ */
+
+int open_pdf_at_page(const char *path, int page) {
+    if (page < 1) page = 1;
+
+#ifdef _WIN32
+    char exe[MAX_PATH] = {0};
+    switch (detect_windows_pdf_handler(exe, sizeof(exe))) {
+        case WIN_PDF_BROWSER: return launch_browser_pdf_win(exe, path, page);
+        case WIN_PDF_SUMATRA: return launch_sumatra_pdf(exe, path, page);
+        case WIN_PDF_ACROBAT: return launch_acrobat_pdf(exe, path, page);
+        default:              open_with_default_app(path); return 0;
+    }
+#elif defined(__APPLE__)
+    if (access("/Applications/Skim.app", F_OK) == 0)
+        return launch_skim_pdf(path, page);
+    return launch_preview_pdf(path, page);
+#else
+    char handler[256];
+    query_linux_pdf_handler(handler, sizeof(handler));
+
+    char cmd[WORKSPACE_TARGET_MAX + 4200];
+    if (strstr(handler, "evince") != NULL) {
+        snprintf(cmd, sizeof(cmd), "evince --page-label=%d \"%s\" &", page, path);
+        return system(cmd);
+    }
+    if (strstr(handler, "okular") != NULL) {
+        snprintf(cmd, sizeof(cmd), "okular -p %d \"%s\" &", page, path);
+        return system(cmd);
+    }
+    if (strstr(handler, "firefox")  != NULL ||
+        strstr(handler, "chrome")   != NULL ||
+        strstr(handler, "chromium") != NULL) {
+        char encoded[4096];
+        encode_file_url_path(path, encoded, sizeof(encoded));
+        snprintf(cmd, sizeof(cmd), "xdg-open \"file://%s#page=%d\" &", encoded, page);
+        return system(cmd);
+    }
+    open_with_default_app(path);
+    return 0;
 #endif
 }

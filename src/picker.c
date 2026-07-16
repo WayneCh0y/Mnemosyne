@@ -584,9 +584,14 @@ static void print_context(const SearchResult *r, int dimmed) {
     int hl_end   = (hl_start >= 0) ? hl_start + r->match_len : -1;
     int in_hl    = 0;
     int is_md = (strcmp(r->file_type, "md") == 0);
+    int is_pdf = (strcmp(r->file_type, "pdf") == 0);
     int at_line_start = 1;
     if (dimmed) printf(ANSI_DIM);
     printf("    ");
+    /* PDF matches carry a 1-based page number; show it so the user knows where
+       the match sits even when the viewer can't be told to jump there. */
+    if (is_pdf && r->page > 0)
+        printf("%s[p.%d]%s ", color2, r->page, reset);
     const char *p = r->context;
     while (*p != '\0') {
         int idx = (int)(p - r->context);
