@@ -14,6 +14,7 @@
 #include <dwmapi.h>
 #else
 #include <unistd.h>
+#include <fcntl.h>
 #endif
 
 /* Case-insensitive compare of the first n bytes (ASCII only). */
@@ -883,7 +884,7 @@ static int launch_preview_pdf(const char *path, int page) {
        relies on ([mac_place_window]), so a user for whom `mn open` works
        already has everything needed. We deliberately avoid a `tell application
        "Preview"` block so we don't require the *separate* Automation entry for
-       Preview, whose prompt would never surface (backgrounded osascript). If
+       Preview, whose prompt would never surface (detached osascript). If
        Accessibility is missing the keystrokes are dropped silently, leaving
        the PDF open at page 1 — the target page is still printed to the
        terminal as a manual fallback. */
@@ -892,18 +893,24 @@ static int launch_preview_pdf(const char *path, int page) {
     system(open_cmd);
     if (page <= 1) return 0;
 
-    /* Poll for Preview's window and the Go-to-Page sheet rather than sleeping
-       a fixed amount — cold starts and state restoration make fixed delays
-       unreliable. All-System-Events, no direct Preview scripting.
-       Wrapped in `nohup` because close_terminal closes the Terminal window
-       shortly after we return, and Terminal-window closure sends SIGHUP to
-       every process still attached to that PTY. Without `nohup` the polling
-       osascript is killed before it even sees Preview's window appear. This
-       is the same hazard workspace placement dodges by running its osascript
-       *synchronously* before close_terminal fires. */
-    char osa[1024];
-    snprintf(osa, sizeof(osa),
-        "nohup osascript"
+    /* Detach the osascript into its own session with fork + setsid instead of
+       backgrounding via `system("... &")`. close_terminal closes the Terminal
+       window ~0.4s after we return; that closure destroys the PTY and delivers
+       SIGHUP to every process still attached to it. `nohup` alone proved to be
+       unreliable here — the osascript kept dying before it could send the
+       keystroke. setsid drops the controlling terminal entirely, so no SIGHUP
+       is ever delivered. Same mechanism close_terminal itself uses on macOS
+       for its own delayed helper, and it's proven to survive on the same
+       machines where this path was failing.
+
+       The AppleScript itself polls for Preview's window and the Go-to-Page
+       sheet rather than using fixed sleeps — cold starts and state restoration
+       make guessed timings unreliable. All targeted at "System Events" only,
+       no direct Preview scripting, so we don't need a Preview Automation
+       grant on top of the System Events one. */
+    char script[1024];
+    snprintf(script, sizeof(script),
+        "osascript"
         " -e 'tell application \"System Events\"'"
         " -e 'repeat 40 times'"                  /* ~6s to wait for the window */
         " -e 'try'"
@@ -921,10 +928,23 @@ static int launch_preview_pdf(const char *path, int page) {
         " -e 'keystroke \"%d\"'"
         " -e 'delay 0.05'"
         " -e 'key code 36'"                      /* Return */
-        " -e 'end tell'"
-        " </dev/null >/dev/null 2>&1 &",
+        " -e 'end tell'",
         page);
-    return system(osa);
+
+    pid_t helper = fork();
+    if (helper == 0) {
+        setsid();
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+            dup2(devnull, STDIN_FILENO);
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+            if (devnull > STDERR_FILENO) close(devnull);
+        }
+        execl("/bin/sh", "sh", "-c", script, (char *)NULL);
+        _exit(127);
+    }
+    return 0;
 }
 #endif /* __APPLE__ */
 
