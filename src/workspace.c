@@ -276,86 +276,6 @@ int workspace_save_all_with_folders(Workspace *ws, int count, const FolderList *
     return rc;
 }
 
-/* Every existing caller (workspace_add_entry, the editor's commit, ...) touches
-   only workspaces, but a save rewrites the whole document — so the folders on
-   disk are read back and re-emitted rather than silently dropped. */
-int workspace_save_all(Workspace *ws, int count) {
-    FolderList f;
-    if (workspace_load_folders(&f) != 0) memset(&f, 0, sizeof(f));
-    int rc = workspace_save_all_with_folders(ws, count, &f);
-    workspace_free_folders(&f);
-    return rc;
-}
-
-/* New workspaces land at root; `mn open edit`'s /move files them afterwards. */
-int workspace_create(const char *name) {
-    cJSON *doc = load_ws_doc();
-    if (doc == NULL) return -2;
-    cJSON *root = cJSON_GetObjectItem(doc, "workspaces");
-
-    int n = cJSON_GetArraySize(root);
-    for (int i = 0; i < n; i++) {
-        cJSON *obj  = cJSON_GetArrayItem(root, i);
-        cJSON *nm   = cJSON_GetObjectItem(obj, "name");
-        if (nm && strcmp(nm->valuestring, name) == 0) {
-            cJSON_Delete(doc);
-            return -1;
-        }
-    }
-
-    cJSON *obj  = cJSON_CreateObject();
-    cJSON *ents = cJSON_CreateArray();
-    cJSON_AddStringToObject(obj, "name", name);
-    cJSON_AddItemToObject(obj, "entries", ents);
-    cJSON_AddItemToArray(root, obj);
-
-    int rc = save_ws_json(doc);
-    cJSON_Delete(doc);
-    return rc;
-}
-
-int workspace_add_entry_with_targets(const char *name, const char *app,
-                                     const char targets[][WORKSPACE_TARGET_MAX],
-                                     int target_count) {
-    int count;
-    Workspace *ws = workspace_load_all(&count);
-    if (ws == NULL) return -3;
-
-    int idx = -1;
-    for (int i = 0; i < count; i++) {
-        if (strcmp(ws[i].name, name) == 0) { idx = i; break; }
-    }
-    if (idx == -1) { workspace_free_all(ws, count); return -1; }
-    if (ws[idx].entry_count >= WORKSPACE_ENTRIES_MAX) { workspace_free_all(ws, count); return -2; }
-
-    int j = ws[idx].entry_count;
-    WorkspaceEntry *en = &ws[idx].entries[j];
-    strncpy(en->app, app, WORKSPACE_APP_MAX - 1);
-    en->app[WORKSPACE_APP_MAX - 1] = '\0';
-    /* fresh slot beyond the loaded count → init before pushing. */
-    en->targets      = NULL;
-    en->target_count = 0;
-    en->target_cap   = 0;
-    en->layout[0]    = '\0';
-    for (int k = 0; k < target_count; k++)
-        targetlist_push(&en->targets, &en->target_cap, &en->target_count, targets[k]);
-    ws[idx].entry_count++;
-
-    int rc = workspace_save_all(ws, count);
-    workspace_free_all(ws, count);
-    return rc;
-}
-
-int workspace_add_entry(const char *name, const char *app, const char *target) {
-    if (target == NULL || target[0] == '\0') {
-        return workspace_add_entry_with_targets(name, app, NULL, 0);
-    }
-    char single[1][WORKSPACE_TARGET_MAX];
-    strncpy(single[0], target, WORKSPACE_TARGET_MAX - 1);
-    single[0][WORKSPACE_TARGET_MAX - 1] = '\0';
-    return workspace_add_entry_with_targets(name, app, single, 1);
-}
-
 int workspace_remove(const char *name) {
     cJSON *doc = load_ws_doc();
     if (doc == NULL) return -2;
@@ -397,6 +317,27 @@ int workspace_store_load(WorkspaceStore *st) {
 
 int workspace_store_save(const WorkspaceStore *st) {
     return workspace_save_all_with_folders(st->ws, st->ws_count, &st->folders);
+}
+
+/* The array is grown one slot at a time rather than doubled: unlike the target
+   lists, an add here is a person typing a workspace name, so the realloc is never
+   on a hot path and an exact-sized array keeps workspace_store_free simple. */
+int workspace_store_add(WorkspaceStore *st, const char *name, const char *folder) {
+    for (int i = 0; i < st->ws_count; i++)
+        if (strcmp(st->ws[i].name, name) == 0) return -1;
+
+    Workspace *p = realloc(st->ws, (size_t)(st->ws_count + 1) * sizeof(Workspace));
+    if (p == NULL) return -2;
+    st->ws = p;
+
+    /* Zeroed, so entry_count is 0 and every entry's targets pointer is NULL —
+       workspace_free_all walks entries up to entry_count only, but a later
+       targetlist_push into a fresh slot needs the NULL/0/0 start. */
+    Workspace *w = &st->ws[st->ws_count];
+    memset(w, 0, sizeof(*w));
+    snprintf(w->name,   sizeof(w->name),   "%s", name);
+    snprintf(w->folder, sizeof(w->folder), "%s", folder);
+    return st->ws_count++;
 }
 
 void workspace_store_free(WorkspaceStore *st) {

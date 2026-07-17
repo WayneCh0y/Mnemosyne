@@ -29,7 +29,6 @@
 #include "workspace.h"
 #include "app_resolve.h"
 #include "app_launch.h"
-#include "app_enum.h"
 #include "tokenizer.h"
 #include "theme.h"
 
@@ -493,7 +492,7 @@ static void cmd_open_run(void) {
     workspace_store_load(&st);
     if (st.ws_count == 0) {
         ui_info("No workspaces yet.");
-        ui_hint("Create one with: mn open create <name>");
+        ui_hint("Make one with: mn open edit, then /create or /snap");
         workspace_store_free(&st);
         return;
     }
@@ -508,16 +507,6 @@ static void cmd_open_run(void) {
     workspace_store_free(&st);
 }
 
-static void cmd_open_create(const char *name) {
-    int rc = workspace_create(name);
-    if (rc == 0)
-        ui_ok("Workspace '%s' created.", name);
-    else if (rc == -1)
-        ui_err("workspace '%s' already exists", name);
-    else
-        ui_err("failed to create workspace");
-}
-
 /* Frees the heap list each WsEditorApp owns, then the array (over full capacity;
    the no-op on NULL/zeroed slots makes this safe regardless of editor_count). */
 static void free_editor_apps(WsEditorApp *apps, int cap) {
@@ -525,14 +514,6 @@ static void free_editor_apps(WsEditorApp *apps, int cap) {
     for (int i = 0; i < cap; i++)
         editlink_free(&apps[i].links);
     free(apps);
-}
-
-/* Frees each AppLinks' backing list, then the array. */
-static void free_app_links(AppLinks *links, int n) {
-    if (links == NULL) return;
-    for (int i = 0; i < n; i++)
-        targetlist_free(&links[i].items, &links[i].cap, &links[i].count);
-    free(links);
 }
 
 /* Edits one workspace: builds the editor state, runs the editor, and commits if
@@ -648,12 +629,9 @@ static int edit_one_workspace(WorkspaceStore *st, int ws_idx) {
 static void cmd_open_edit(void) {
     WorkspaceStore st;
     workspace_store_load(&st);
-    if (st.ws_count == 0 && st.folders.count == 0) {
-        ui_info("No workspaces yet.");
-        ui_hint("Create one with: mn open create <name>");
-        workspace_store_free(&st);
-        return;
-    }
+    /* No early return on an empty store: /create and /snap live inside the
+       browser, so an empty store is exactly the state you enter this screen to
+       fix. Bailing out here would leave no way to make the first workspace. */
 
     /* Browse and edit alternate until something ends the session: the editor's
        /back returns here rather than to the terminal, so filing a workspace away
@@ -687,107 +665,15 @@ static void cmd_open_edit(void) {
     workspace_store_free(&st);
 }
 
-static void cmd_open_snap(void) {
-    RunningApp apps[WORKSPACE_ENTRIES_MAX];
-    int n = app_enum_running(apps, WORKSPACE_ENTRIES_MAX);
-    if (n < 0) {
-#ifdef __linux__
-        ui_err("snapshot needs 'wmctrl' — install it via your package manager");
-#else
-        ui_err("failed to read running apps on this platform");
-#endif
-        return;
-    }
-    if (n == 0) {
-        ui_info("No running apps detected.");
-        return;
-    }
-
-    const char *labels[WORKSPACE_ENTRIES_MAX];
-    char label_bufs[WORKSPACE_ENTRIES_MAX][256];
-    int selected[WORKSPACE_ENTRIES_MAX];
-    AppLinks *links = calloc(n, sizeof(AppLinks));
-    if (links == NULL) {
-        ui_err("out of memory");
-        return;
-    }
-    for (int i = 0; i < n; i++) {
-        app_display_token(apps[i].app, label_bufs[i], sizeof(label_bufs[i]));
-        labels[i] = label_bufs[i];
-        selected[i] = 1;
-        if (apps[i].target[0] != '\0')
-            targetlist_push(&links[i].items, &links[i].cap,
-                            &links[i].count, apps[i].target);
-    }
-
-    char name[WORKSPACE_NAME_MAX] = {0};
-    int name_taken = 0;
-
-    /* Two-step flow; Esc steps back (and cancels at the review step). */
-    enum { SNAP_REVIEW, SNAP_NAME } state = SNAP_REVIEW;
-    for (;;) {
-        if (state == SNAP_REVIEW) {
-            if (!run_multiselect_picker("Snapshot running apps",
-                                        "Pick apps; press any key on a green app to add a link.",
-                                        labels, n, selected, links)) {
-                printf(ANSI_CLEAR ANSI_RESET); ui_info("Cancelled.");
-                free_app_links(links, n);
-                return;
-            }
-            int any = 0;
-            for (int i = 0; i < n; i++) any += selected[i];
-            if (!any) {
-                printf(ANSI_CLEAR ANSI_RESET); ui_info("Nothing selected.");
-                free_app_links(links, n);
-                return;
-            }
-            state = SNAP_NAME;
-        } else { /* SNAP_NAME */
-            const char *subtitle = name_taken
-                ? TH_WARN "that name already exists — pick another." TH_RESET
-                : "Name for the new workspace.";
-            if (!run_text_input("Snapshot workspace", subtitle, "Name",
-                                name, sizeof(name), 0, NULL)) {
-                state = SNAP_REVIEW;   /* Esc → back to the checklist */
-                name_taken = 0;
-                continue;
-            }
-            int rc = workspace_create(name);
-            if (rc == -1) { name_taken = 1; continue; }   /* exists → re-prompt */
-            if (rc != 0) {
-                printf(ANSI_CLEAR ANSI_RESET);
-                ui_err("failed to create workspace");
-                free_app_links(links, n);
-                return;
-            }
-            break;
-        }
-    }
-
-    int added = 0;
-    for (int i = 0; i < n; i++) {
-        if (!selected[i]) continue;
-        int rc;
-        if (links[i].count == 0) {
-            rc = workspace_add_entry(name, apps[i].app, "");
-        } else {
-            /* All links for this app instance go into one grouped entry. */
-            rc = workspace_add_entry_with_targets(name, apps[i].app,
-                                                  links[i].items, links[i].count);
-        }
-        if (rc == 0) added++;
-    }
-    free_app_links(links, n);
-    printf(ANSI_CLEAR ANSI_RESET);
-    ui_ok("Created workspace '%s' with %d app%s.",
-          name, added, added == 1 ? "" : "s");
-}
-
+/* `mn open` runs a workspace, `mn open edit` organises them, and that is the
+   whole surface. Creating and snapshotting used to be `mn open create <name>` and
+   `mn open snap`, but both make a workspace *somewhere*, and argv has no way to
+   say where: they landed at the root and had to be filed afterwards. They are
+   /create and /snap inside the browser now, where the folder you are looking at
+   is the answer. */
 static void cmd_open(int argc, char *argv[]) {
-    if (argc == 2)                                       { cmd_open_run();           return; }
-    if (argc == 4 && strcmp(argv[2], "create") == 0)     { cmd_open_create(argv[3]); return; }
-    if (argc == 3 && strcmp(argv[2], "edit")   == 0)     { cmd_open_edit();          return; }
-    if (argc == 3 && strcmp(argv[2], "snap")   == 0)     { cmd_open_snap();          return; }
+    if (argc == 2)                                   { cmd_open_run();  return; }
+    if (argc == 3 && strcmp(argv[2], "edit") == 0)   { cmd_open_edit(); return; }
     print_help();
 }
 

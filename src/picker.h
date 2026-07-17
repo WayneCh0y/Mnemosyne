@@ -38,7 +38,6 @@
 #define ANSI_APP_HL      "\033[37;44m"
 #define ANSI_LIFT_HL     "\033[1;37;46m"  /* bold white on cyan — lifted/reordering link */
 #define ANSI_EDIT_HL     "\033[1;37;45m"  /* bold white on magenta — link being edited */
-#define ANSI_REN_HL      "\033[30;43m"    /* black on yellow — rename workspace button */
 #define ANSI_REVERSE     "\033[7m"        /* reverse video — highlight block cursor */
 #define ANSI_REVERSE_OFF "\033[27m"
 #define ANSI_ACCENT      "\033[96m"        /* bright cyan — selection bar */
@@ -154,10 +153,16 @@ typedef struct {
 
 /* Workspace editor picker for `mn open edit`. Shows existing apps and their links.
    Driven like the browser: arrows move, Enter opens the row under the cursor (an
-   app → a field to add a link, a link → its text, the pseudo-rows → their
-   dialog), and everything else is a "/" command — /remove and /restore stage and
-   unstage, /place assigns a screen partition, /reorder lifts a link for ←/→, and
-   /save, /back and /exit are the ways out. There is no Esc.
+   app → a field to add a link, a link → its text), and everything else is a "/"
+   command — /add, /rename and /delete act on the workspace itself, /append gives
+   the selected app a file, folder or URL (the same field Enter opens, named so it
+   can be found), /remove and /restore stage and unstage a row, /place assigns a
+   screen partition, /reorder lifts a link for ←/→, and /save, /back and /exit are
+   the ways out. The list has no Esc; only the palette does, to close itself
+   without running anything.
+
+   A typed link is checked before it is accepted: a URI is trusted, a path must
+   exist. So must an app named to /add.
 
    apps[]/count are in/out: new apps are appended (is_new=1), the links list is
    filled (new entries have orig_pos=-1), and per-link deleted / marked_delete
@@ -179,10 +184,13 @@ int run_list_picker(IndexEntry *entries, int count,
    Backspace goes back up — expanding the selected row in a left-rail frame: a
    workspace shows its apps, a folder a preview of what it holds.
 
-   There is no Esc and no Backspace: "/" opens the command palette, which is both
-   how you act on a row and the only way out (/back, /exit). `mn open` is
-   read-only and gets just those two; with edit_mode set the folder commands
-   (/new-folder, /move, /rename, /delete) join them and st is mutated in place.
+   The list has no Esc and no Backspace: "/" opens the command palette, which is
+   both how you act on a row and the only way out (/back, /exit). Esc inside the
+   palette closes it again without running anything. `mn open` is read-only and
+   gets just those two ways out; with edit_mode set, /create and /snap (which make
+   a workspace in the folder being shown), /new-folder, /move, /rename and /delete
+   join them, /select ticks rows so one /move can carry several, and st is mutated
+   in place.
    *dirty is set to 1 if anything changed, so the caller can persist even when the
    browse itself ends in /exit. dirty may be NULL when edit_mode is 0.
 
@@ -196,10 +204,5 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
                           char *cwd, size_t cwd_size);
 /* Strip directory prefix and trailing .exe from app path for a short display name. */
 void ws_display_name(const char *app, char *out, size_t out_size);
-/* Single styled text input box. Returns 1 with out filled, 0 if cancelled (Esc).
-   When allow_empty is set, Enter on an empty value confirms (used as "skip").
-   If prefill is non-NULL/non-empty, the box opens seeded with that text. */
-int run_text_input(const char *title, const char *subtitle, const char *label,
-                   char *out, size_t out_size, int allow_empty, const char *prefill);
 
 #endif

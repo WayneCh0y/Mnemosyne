@@ -43,17 +43,27 @@ void print_help(void) {
     printf("  %sconfig ide%s Set the default IDE\n\n", p.cyan, p.reset);
 
     print_section("WORKSPACES");
-    printf("%s  Named sets of apps / URLs to launch together.%s\n", p.dim, p.reset);
-    printf("  mn %sopen%s                        Interactive picker\n", p.cyan, p.reset);
-    printf("  mn %sopen create%s <name>          Create a workspace\n", p.cyan, p.reset);
-    printf("  mn %sopen snap%s                   Snapshot running apps into a workspace\n", p.cyan, p.reset);
-    printf("  mn %sopen edit%s                   Edit a workspace: add/remove apps & links (picker)\n\n", p.cyan, p.reset);
+    printf("%s  Named sets of apps / URLs to launch together, kept in folders.%s\n", p.dim, p.reset);
+    printf("  mn %sopen%s                        Pick a workspace and launch it\n", p.cyan, p.reset);
+    printf("  mn %sopen edit%s                   Make, organise and edit workspaces\n\n", p.cyan, p.reset);
+    printf("%s  Inside those screens, type %s/%s%s for commands:%s\n",
+           p.dim, p.reset, p.cyan, p.dim, p.reset);
+    /* Padded to a common column by hand: the colour codes around each command
+       make printf's own %-Ns count bytes, not visible width, and get it wrong. */
+    printf("    %s/create%s %s/snap%s         new workspace, in the folder you're in\n",
+           p.cyan, p.reset, p.cyan, p.reset);
+    printf("    %s/new-folder%s %s/move%s     organise%s (with %s/select%s for several at once)%s\n",
+           p.cyan, p.reset, p.cyan, p.reset, p.dim, p.reset, p.dim, p.reset);
+    printf("    %s/add%s %s/append%s          add an app, or give one a file or URL\n",
+           p.cyan, p.reset, p.cyan, p.reset);
+    printf("    %s/rename%s %s/delete%s       rename or remove the workspace\n",
+           p.cyan, p.reset, p.cyan, p.reset);
+    printf("    %s/save%s %s/back%s %s/exit%s     the ways out\n\n",
+           p.cyan, p.reset, p.cyan, p.reset, p.cyan, p.reset);
 
     print_section("EXAMPLES");
     printf("  mn %sadd%s notes.txt\n", p.cyan, p.reset);
     printf("  mn %ssearch%s \"simplex algorithm\"\n", p.cyan, p.reset);
-    printf("  mn %sopen create%s work\n", p.cyan, p.reset);
-    printf("  mn %sopen snap%s\n", p.cyan, p.reset);
     printf("  mn %sopen edit%s\n", p.cyan, p.reset);
     printf("  mn %sopen%s\n", p.cyan, p.reset);
     printf("  mn %sconfig%s ide\n", p.cyan, p.reset);

@@ -73,32 +73,22 @@ int  workspace_store_load(WorkspaceStore *st);
 int  workspace_store_save(const WorkspaceStore *st);
 void workspace_store_free(WorkspaceStore *st);
 
+/* Appends a new empty workspace called `name`, filed under `folder` ("" = root),
+   to the in-memory store; the caller saves. This is what /create and /snap in the
+   browser go through rather than workspace_create(), which writes to disk on its
+   own and would fight the store the browser is already holding.
+   Returns the new workspace's index, -1 if the name is taken, -2 on out of memory. */
+int workspace_store_add(WorkspaceStore *st, const char *name, const char *folder);
+
 /* Returns heap-allocated array of all workspaces; caller must workspace_free_all(). */
 Workspace *workspace_load_all(int *count);
 
 /* Frees every entry's targets, then the workspace array itself. */
 void workspace_free_all(Workspace *ws, int count);
 
-/* Serialises workspaces array to workspaces.json, preserving the folder registry
-   already on disk. Returns 0 on success. */
-int workspace_save_all(Workspace *ws, int count);
-
-/* As workspace_save_all, but writes the given folder registry too — the one call
-   that can create or remove a folder. Returns 0 on success. */
+/* Serialises the workspaces array and the folder registry to workspaces.json —
+   the whole document, since a save rewrites it. Returns 0 on success. */
 int workspace_save_all_with_folders(Workspace *ws, int count, const FolderList *f);
-
-/* Creates a new empty workspace. Returns 0=ok, -1=already exists, -2=error. */
-int workspace_create(const char *name);
-
-/* Adds an entry to an existing workspace with a single target (empty = standalone).
-   Returns 0=ok, -1=not found, -2=full, -3=error. */
-int workspace_add_entry(const char *name, const char *app, const char *target);
-
-/* Adds an entry with multiple targets (one entry = one app window/instance).
-   Returns 0=ok, -1=not found, -2=full, -3=error. */
-int workspace_add_entry_with_targets(const char *name, const char *app,
-                                     const char targets[][WORKSPACE_TARGET_MAX],
-                                     int target_count);
 
 /* Removes an entire workspace. Returns 0=ok, -1=not found, -2=error. */
 int workspace_remove(const char *name);

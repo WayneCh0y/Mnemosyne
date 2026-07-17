@@ -14,8 +14,10 @@
 #include "picker.h"
 #include "app_resolve.h"
 #include "app_launch.h"
+#include "app_enum.h"
 #include "pathcomp.h"
 #include "tokenizer.h"
+#include "theme.h"
 
 #ifdef _WIN32
 int read_key(void) {
@@ -395,6 +397,36 @@ int run_ide_picker(const char **list, int display) {
     return run_menu_picker("Choose a default IDE", NULL, list, display);
 }
 
+/* ── Link validity ──────────────────────────────────────────────────────────
+   A link is either something the OS routes by scheme (https://…, spotify:…) or a
+   path on this machine. The split is is_url()'s — the launcher's own — rather
+   than a second rule invented here: whatever app_launch will hand to the OS as a
+   URI has to pass as one here, or the editor would reject links that work and
+   accept links that don't.
+
+   A URI can't be checked without following it, so it is taken on trust. A path
+   can be checked, and is: a mistyped path is the one mistake on these screens
+   that stays invisible until launch day, when the app opens on nothing.
+
+   This is existence *now*, not a promise — a file deleted later still leaves a
+   stale link, and a relative path is checked against the shell's cwd rather than
+   the one it will launch from. It catches the typo, which is what actually goes
+   wrong. Both places a link can be typed (the workspace editor's field and the
+   /snap checklist's) go through here, so there is one answer to "is this
+   usable?" rather than one per screen. */
+static int link_ok(const char *s) {
+    if (s == NULL || s[0] == '\0') return 0;
+    if (is_url(s)) return 1;
+#ifdef _WIN32
+    return GetFileAttributesA(s) != INVALID_FILE_ATTRIBUTES;
+#else
+    return access(s, F_OK) == 0;
+#endif
+}
+
+/* What a rejected link says. Shared so the two fields answer identically. */
+#define LINK_BAD_MSG "No file or folder at '%.60s'. Give a full path, or a URL."
+
 /* ── Multi-select checklist picker ─────────────────────────────────────── */
 
 #define MS_MODE_LIST 0
@@ -441,7 +473,7 @@ static void render_multiselect(const char *title, const char *subtitle,
                                const int *selected, const AppLinks *links,
                                const MsRow *rows, int nrows,
                                int cursor, int mode, const char *typed, int type_app,
-                               int edit_pos, const PathSuggest *sg) {
+                               int edit_pos, const PathSuggest *sg, const char *err) {
     print_picker_header(title, subtitle);
     int start = picker_window_start(cursor, nrows);
     int end   = start + (nrows < PICKER_WINDOW ? nrows : PICKER_WINDOW);
@@ -464,6 +496,8 @@ static void render_multiselect(const char *title, const char *subtitle,
         /* highlight block cursor at edit_pos (a space when parked past the end) */
         char cur = typed[edit_pos] ? typed[edit_pos] : ' ';
         const char *rest = typed[edit_pos] ? typed + edit_pos + 1 : "";
+        if (err && err[0])
+            printf("\n" ANSI_YELLOW "  %s" ANSI_RESET, err);
         printf("\n" ANSI_CYAN "  Add link for %s: " ANSI_RESET
                "%.*s" ANSI_REVERSE "%c" ANSI_REVERSE_OFF "%s",
                labels[type_app], edit_pos, typed, cur, rest);
@@ -494,16 +528,18 @@ int run_multiselect_picker(const char *title, const char *subtitle,
     char typed[WORKSPACE_TARGET_MAX] = {0};
     int  typed_len = 0;
     int  edit_pos  = 0;   /* cursor within typed[] */
+    char link_err[160] = {0};
     PathSuggest sg;       /* path completion for the link field */
 
     suggest_reset(&sg, typed);
     int nrows = build_ms_rows(count, selected, links, &rows, &rows_cap);
     printf(ANSI_CURSOR_HIDE);
     render_multiselect(title, subtitle, labels, selected, links,
-                       rows, nrows, cursor, mode, typed, type_app, edit_pos, &sg);
+                       rows, nrows, cursor, mode, typed, type_app, edit_pos, &sg, link_err);
 
     while (!done) {
         int key = read_key();
+        link_err[0] = '\0';   /* a rejection lasts until the next keystroke */
 
         if (mode == MS_MODE_TYPE) {
             /* Path completion sees the key first, so ↑/↓/Tab drive the dropdown
@@ -512,10 +548,17 @@ int run_multiselect_picker(const char *title, const char *subtitle,
             if (suggest_key(&sg, key, typed, &typed_len, &edit_pos, sizeof(typed))) {
                 /* consumed by the dropdown */
             } else if (key == KEY_ENTER) {
-                if (typed_len > 0)
+                /* Same gate as the workspace editor's link field: a snapped app
+                   is no reason to skip checking what gets attached to it. */
+                if (typed_len == 0) {
+                    mode = MS_MODE_LIST;
+                } else if (!link_ok(typed)) {
+                    snprintf(link_err, sizeof(link_err), LINK_BAD_MSG, typed);
+                } else {
                     targetlist_push(&links[type_app].items, &links[type_app].cap,
                                     &links[type_app].count, typed);
-                mode = MS_MODE_LIST; typed[0] = '\0'; typed_len = 0; edit_pos = 0;
+                    mode = MS_MODE_LIST; typed[0] = '\0'; typed_len = 0; edit_pos = 0;
+                }
             } else if (key == KEY_ESC) {
                 mode = MS_MODE_LIST; typed[0] = '\0'; typed_len = 0; edit_pos = 0;
             } else if (edit_buffer_key(key, typed, &typed_len, &edit_pos, sizeof(typed))) {
@@ -558,7 +601,8 @@ int run_multiselect_picker(const char *title, const char *subtitle,
             if (cursor >= nrows) cursor = nrows - 1;
             if (cursor < 0)      cursor = 0;
             render_multiselect(title, subtitle, labels, selected, links,
-                               rows, nrows, cursor, mode, typed, type_app, edit_pos, &sg);
+                               rows, nrows, cursor, mode, typed, type_app, edit_pos,
+                               &sg, link_err);
         }
     }
 
@@ -1018,9 +1062,16 @@ static int confirm_discard(const char *question) {
 
 /* Full-screen, centred single-line text input, matching confirm_centered's layout.
    Seeds the field with prefill (if non-empty). Returns 1 with out filled (Enter on
-   a non-empty value), or 0 if cancelled (Esc). */
+   a non-empty value), or 0 if cancelled (Esc).
+
+   `error` (NULL for none) is shown under the title in yellow. It is a parameter
+   rather than something the box works out because validity is the caller's
+   question — a name already taken, an app that isn't installed — so the caller
+   re-opens the box with the reason and the field seeded, and the retry looks like
+   the same dialog answering back rather than a new one. */
 static int run_text_input_centered(const char *title, const char *label,
-                                   char *out, size_t out_size, const char *prefill) {
+                                   char *out, size_t out_size, const char *prefill,
+                                   const char *error) {
     char typed[4096] = {0};
     int  typed_len   = 0;
     int  edit_pos    = 0;   /* cursor within typed[] */
@@ -1042,11 +1093,13 @@ static int run_text_input_centered(const char *title, const char *label,
         term_size(&cols, &rows);
         printf(ANSI_CLEAR ANSI_RESET);
 
-        int block = 5;                       /* title, gap, field, gap, help */
+        int has_err = (error != NULL && error[0]);
+        int block = 5 + (has_err ? 1 : 0);   /* title, [error], gap, field, gap, help */
         int top = (rows - block) / 2;
         for (int i = 0; i < top; i++) printf("\n");
 
         print_centered(cols, ANSI_BOLD, title, (int)strlen(title));
+        if (has_err) print_centered(cols, ANSI_YELLOW, error, vis_cols(error));
         printf("\n");
         /* field "label: value" with a highlight block cursor at edit_pos; only a
            cursor parked past the end adds a trailing column to the visible width. */
@@ -1135,16 +1188,65 @@ static void print_breadcrumb(const char *cwd) {
     printf(ANSI_CRUMB " /" ANSI_RESET "\n\n");
 }
 
+/* ── Row selection (/select) ────────────────────────────────────────────────
+   A tick remembers what it points at — "f:<folder path>" or "w:<workspace name>"
+   — rather than a row or an array index: rows are rebuilt from the store on every
+   keystroke, and a /move rewrites the paths underneath them. Backed by
+   targetlist_*, the same growable fixed-width list the folder registry uses
+   (WORKSPACE_FOLDER_MAX is the target width, so the types line up).
+
+   Ticks belong to the level they were made on and are dropped when you leave it
+   or when a /move consumes them. That is what lets /move ask for one destination
+   and mean it: everything ticked is somewhere you can currently see. */
+
+typedef struct {
+    char (*keys)[WORKSPACE_FOLDER_MAX];
+    int count, cap;
+} Selection;
+
+static void sel_key(const WorkspaceStore *st, const WsRow *r, char *out, size_t n) {
+    if (r->kind == WSROW_FOLDER) snprintf(out, n, "f:%s", st->folders.paths[r->idx]);
+    else                         snprintf(out, n, "w:%s", st->ws[r->idx].name);
+}
+
+static int sel_find(const Selection *s, const char *key) {
+    for (int i = 0; i < s->count; i++)
+        if (strcmp(s->keys[i], key) == 0) return i;
+    return -1;
+}
+
+static int sel_has(const Selection *s, const WorkspaceStore *st, const WsRow *r) {
+    char key[WORKSPACE_FOLDER_MAX];
+    sel_key(st, r, key, sizeof(key));
+    return sel_find(s, key) >= 0;
+}
+
+static void sel_toggle(Selection *s, const WorkspaceStore *st, const WsRow *r) {
+    char key[WORKSPACE_FOLDER_MAX];
+    sel_key(st, r, key, sizeof(key));
+    int i = sel_find(s, key);
+    if (i >= 0) targetlist_remove(s->keys, &s->count, i);
+    else        targetlist_push(&s->keys, &s->cap, &s->count, key);
+}
+
+static void sel_clear(Selection *s) { s->count = 0; }
+static void sel_free(Selection *s)  { targetlist_free(&s->keys, &s->cap, &s->count); }
+
 /* ── "/" command palette ────────────────────────────────────────────────────
    Modelled on the path-completion dropdown above: an overlay under a field that
    takes keys before the field does, with the same contract so the two feel like
    one mechanism — ↑/↓ move the highlight and Tab accepts it.
 
-   The workspace screens have no Esc and no per-action letter keys: arrows move,
-   Enter opens the selected row, and everything else is a command typed here. So
-   this is the only way out of those screens (/back, /exit) as well as the way to
-   act on them, and it is shared — the browser and the editor pass their own
-   command table plus a mask of which entries currently apply.
+   The workspace screens have no per-action letter keys: arrows move, Enter opens
+   the selected row, and everything else is a command typed here. So this is the
+   only way out of those screens (/back, /exit) as well as the way to act on them,
+   and it is shared — the browser and the editor pass their own command table plus
+   a mask of which entries currently apply.
+
+   Esc closes the palette without running anything, which is the one place those
+   screens do answer to it: the palette is a thing you opened on top of the list,
+   so there is something to back out of. The list underneath still has no Esc —
+   /back and /exit are how you leave it.
 
    A command may carry its argument inline ("/new-folder NUSY4S1"), which skips
    the follow-up prompt; without one, the command asks. */
@@ -1217,28 +1319,52 @@ static void palette_complete(CmdPalette *p, unsigned mask) {
 /* ── The browser's commands ─────────────────────────────────────────────────
    /back and /exit come first: they are the only ways out of the screen, so they
    are what a bare "/" offers before anything is typed. `mn open` is read-only
-   and masks off everything below them. */
+   and masks off everything below them.
 
-enum { BC_BACK, BC_EXIT, BC_NEW_FOLDER, BC_MOVE, BC_RENAME, BC_DELETE, BC_COUNT };
+   /create and /snap make a workspace here — in the folder currently being shown
+   — which is why they are commands on this screen rather than `mn open create`
+   and `mn open snap`: the depth is the thing the argv form had no way to say. */
+
+enum { BC_BACK, BC_EXIT, BC_CREATE, BC_SNAP, BC_NEW_FOLDER,
+       BC_SELECT, BC_DESELECT, BC_CLEAR, BC_MOVE, BC_RENAME, BC_DELETE, BC_COUNT };
 
 static const CmdDef BROWSE_CMDS[BC_COUNT] = {
-    { "/back",       "",        "go up one level"                },
-    { "/exit",       "",        "return to the terminal"         },
-    { "/new-folder", " [name]", "create a folder in here"        },
-    { "/move",       "",        "file this under another folder" },
-    { "/rename",     " [name]", "rename this folder"             },
-    { "/delete",     "",        "remove this folder"             },
+    { "/back",       "",        "go up one level"                       },
+    { "/exit",       "",        "return to the terminal"                },
+    { "/create",     " [name]", "new empty workspace, here"             },
+    { "/snap",       "",        "new workspace from running apps, here" },
+    { "/new-folder", " [name]", "create a folder in here"               },
+    { "/select",     "",        "tick this row, to act on several"      },
+    { "/deselect",   "",        "untick this row"                       },
+    { "/clear",      "",        "untick everything"                     },
+    { "/move",       "",        "file this under another folder"        },
+    { "/rename",     " [name]", "rename this folder"                    },
+    { "/delete",     "",        "remove this folder"                    },
 };
 
 /* Which browser commands apply right now. row_kind is WSROW_FOLDER, WSROW_WS, or
    -1 for an empty level. At the top level /back has nowhere to go, so it isn't
-   offered — the breadcrumb already says you are at the root. */
-static unsigned browse_mask(int edit_mode, int row_kind, const char *cwd) {
+   offered — the breadcrumb already says you are at the root.
+
+   While ticks exist they are what the screen is about, so /move addresses the set
+   and /rename and /delete drop out: both take exactly one target, and offering
+   them next to a set of ticks would invite you to press one and watch it act on
+   the cursor row instead. Untick (/clear) and they come back. */
+static unsigned browse_mask(int edit_mode, int row_kind, const char *cwd,
+                            int nsel, int row_ticked) {
     unsigned m = 1u << BC_EXIT;
     if (cwd[0]) m |= 1u << BC_BACK;
     if (!edit_mode) return m;
-    m |= 1u << BC_NEW_FOLDER;
-    if (row_kind == WSROW_FOLDER || row_kind == WSROW_WS) m |= 1u << BC_MOVE;
+    m |= (1u << BC_NEW_FOLDER) | (1u << BC_CREATE) | (1u << BC_SNAP);
+
+    int on_row = (row_kind == WSROW_FOLDER || row_kind == WSROW_WS);
+    if (on_row) m |= row_ticked ? (1u << BC_DESELECT) : (1u << BC_SELECT);
+
+    if (nsel > 0) {
+        m |= (1u << BC_MOVE) | (1u << BC_CLEAR);
+        return m;
+    }
+    if (on_row) m |= 1u << BC_MOVE;
     if (row_kind == WSROW_FOLDER) m |= (1u << BC_RENAME) | (1u << BC_DELETE);
     return m;
 }
@@ -1270,7 +1396,7 @@ static void render_palette(const CmdPalette *p) {
 
     if (p->nmatch == 0) {
         printf("\n" ANSI_SILVER "  \xe2\x94\x94 " ANSI_RESET
-               ANSI_DIM "no such command  \xe2\x80\xa2  Backspace to clear" ANSI_RESET);
+               ANSI_DIM "no such command  \xe2\x80\xa2  Esc to close" ANSI_RESET);
         return;
     }
 
@@ -1287,15 +1413,19 @@ static void render_palette(const CmdPalette *p) {
             printf(ANSI_DIM "  %-22s %s" ANSI_RESET "\n", label, c->help);
     }
     printf(ANSI_SILVER "  \xe2\x94\x94 " ANSI_RESET ANSI_DIM
-           "Tab complete  \xe2\x80\xa2  \xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  Enter run  \xe2\x80\xa2  Backspace to clear" ANSI_RESET);
+           "Tab complete  \xe2\x80\xa2  \xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  Enter run  \xe2\x80\xa2  Esc close" ANSI_RESET);
 }
 
 /* ── Browser rendering ─────────────────────────────────────────────────── */
 
+/* selset is NULL in read-only `mn open`, where nothing can be ticked: the tick
+   column is then omitted rather than drawn permanently blank, so the browse-only
+   screen stays exactly as wide as it always was. */
 static void render_ws_browser(const WorkspaceStore *st, const WsRow *rows, int nrows,
                               const char *cwd, int cursor, const char *title,
                               int num_input, int show_error,
-                              const char *err, const CmdPalette *pal) {
+                              const char *err, const CmdPalette *pal,
+                              const Selection *selset) {
     print_picker_header(title, NULL);
     print_breadcrumb(cwd);
 
@@ -1314,32 +1444,36 @@ static void render_ws_browser(const WorkspaceStore *st, const WsRow *rows, int n
 
     for (int i = start; i < end; i++) {
         const WsRow *r    = &rows[i];
-        int sel           = (num_input < 0 && i == cursor);
-        const char *arrow = sel ? ANSI_ACCENT CURSOR_TOKEN ANSI_RESET : " ";
+        int cur           = (num_input < 0 && i == cursor);
+        const char *arrow = cur ? ANSI_ACCENT CURSOR_TOKEN ANSI_RESET : " ";
+        const char *tick  = "";
+        if (selset)
+            tick = sel_has(selset, st, r) ? ANSI_BRIGHT_GREEN "\xe2\x9c\x94 " ANSI_RESET
+                                          : "  ";
 
         if (r->kind == WSROW_FOLDER) {
             const char *path = st->folders.paths[r->idx];
             int kids = wstree_count_children(&st->folders, path, st->ws, st->ws_count);
-            if (sel) {
-                printf("  %s " ANSI_FOLDER_HL " \xe2\x96\xb8 [%d] %s " ANSI_RESET
+            if (cur) {
+                printf("  %s %s" ANSI_FOLDER_HL " \xe2\x96\xb8 [%d] %s " ANSI_RESET
                        " " ANSI_DIM "%d item%s" ANSI_RESET "\n",
-                       arrow, i + 1, wstree_leaf(path), kids, kids == 1 ? "" : "s");
+                       arrow, tick, i + 1, wstree_leaf(path), kids, kids == 1 ? "" : "s");
                 if (expand)
                     render_ws_folder_frame(&st->folders, st->ws, st->ws_count, path);
             } else {
-                printf("    " ANSI_FOLDER "\xe2\x96\xb8 [%d] %s" ANSI_RESET
+                printf("    %s" ANSI_FOLDER "\xe2\x96\xb8 [%d] %s" ANSI_RESET
                        " " ANSI_DIM "%d item%s" ANSI_RESET "\n",
-                       i + 1, wstree_leaf(path), kids, kids == 1 ? "" : "s");
+                       tick, i + 1, wstree_leaf(path), kids, kids == 1 ? "" : "s");
             }
         } else {
             const Workspace *w = &st->ws[r->idx];
-            if (sel) {
-                printf("  %s " ANSI_BOLD "[%d] %s" ANSI_RESET " " ANSI_DIM "(%d app%s)" ANSI_RESET "\n",
-                       arrow, i + 1, w->name, w->entry_count, w->entry_count == 1 ? "" : "s");
+            if (cur) {
+                printf("  %s %s" ANSI_BOLD "[%d] %s" ANSI_RESET " " ANSI_DIM "(%d app%s)" ANSI_RESET "\n",
+                       arrow, tick, i + 1, w->name, w->entry_count, w->entry_count == 1 ? "" : "s");
                 if (expand) render_workspace_frame(w);
             } else {
-                printf(ANSI_DIM "    [%d] %s (%d app%s)" ANSI_RESET "\n",
-                       i + 1, w->name, w->entry_count, w->entry_count == 1 ? "" : "s");
+                printf("    %s" ANSI_DIM "[%d] %s (%d app%s)" ANSI_RESET "\n",
+                       tick, i + 1, w->name, w->entry_count, w->entry_count == 1 ? "" : "s");
             }
         }
     }
@@ -1358,6 +1492,18 @@ static void render_ws_browser(const WorkspaceStore *st, const WsRow *rows, int n
         printf("\n" ANSI_YELLOW "Jump target: %d" ANSI_RESET, num_input);
     }
 
+    /* With ticks on the screen, say what they are for: they are the one bit of
+       state here that survives moving the cursor, so the footer has to account
+       for them rather than leave them looking decorative. */
+    if (selset && selset->count > 0) {
+        printf("\n" ANSI_BRIGHT_GREEN "  %d ticked" ANSI_RESET ANSI_DIM
+               "  \xe2\x80\xa2  " ANSI_RESET ANSI_VIOLET "/move" ANSI_RESET ANSI_DIM
+               " them together  \xe2\x80\xa2  " ANSI_RESET ANSI_VIOLET "/clear" ANSI_RESET
+               ANSI_DIM " to untick" ANSI_RESET, selset->count);
+        fflush(stdout);
+        return;
+    }
+
     const char *act = (nrows > 0 && rows[cursor].kind == WSROW_FOLDER) ? "Enter open" : "Enter select";
     printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  %s  \xe2\x80\xa2  "
            ANSI_RESET ANSI_VIOLET "/" ANSI_RESET ANSI_DIM " commands (%s)" ANSI_RESET,
@@ -1366,11 +1512,20 @@ static void render_ws_browser(const WorkspaceStore *st, const WsRow *rows, int n
 }
 
 /* ── Folder chooser (/move) ─────────────────────────────────────────────────
-   A plain menu of every folder plus the root, minus anywhere the thing being
-   moved cannot go. Returns the chosen path in out, or 0 if cancelled. */
+   A plain menu of every folder plus the root, minus anywhere the things being
+   moved cannot go: `exclude` lists subtrees that are off-limits (each moved
+   folder's own, so nothing can be filed inside itself), and `current` is the
+   folder they are leaving.
+
+   `exclude` is a list rather than one path because a /move can carry a whole
+   selection, and every folder in it rules out its own subtree.
+
+   Returns 1 with the chosen path in out, 0 if cancelled, -1 if there is nowhere
+   left to offer. Callers must tell 0 from -1: `if (!ok)` alone treats "nowhere"
+   as success and reads out uninitialised. */
 static int choose_folder(const WorkspaceStore *st, const char *what,
-                         const char *exclude_subtree, const char *current,
-                         char *out, size_t out_size) {
+                         const char *const *exclude, int nexclude,
+                         const char *current, char *out, size_t out_size) {
     const char **labels = malloc((size_t)(st->folders.count + 1) * sizeof(*labels));
     int  *ids = malloc((size_t)(st->folders.count + 1) * sizeof(*ids));
     if (labels == NULL || ids == NULL) { free(labels); free(ids); return 0; }
@@ -1383,8 +1538,11 @@ static int choose_folder(const WorkspaceStore *st, const char *what,
        ordering to learn. Root, when offered, stays pinned at the top. */
     int first = n;
     for (int i = 0; i < st->folders.count; i++) {
-        if (exclude_subtree && exclude_subtree[0] &&
-            wstree_is_descendant(st->folders.paths[i], exclude_subtree)) continue;
+        int barred = 0;
+        for (int e = 0; e < nexclude && !barred; e++)
+            if (exclude[e][0] && wstree_is_descendant(st->folders.paths[i], exclude[e]))
+                barred = 1;
+        if (barred) continue;
         if (strcmp(st->folders.paths[i], current) == 0) continue;   /* already there */
         int j = n++;
         while (j > first && strcmp(labels[j - 1], st->folders.paths[i]) > 0) {
@@ -1403,7 +1561,7 @@ static int choose_folder(const WorkspaceStore *st, const char *what,
 
     int ok = 0;
     char title[220];
-    snprintf(title, sizeof(title), "Move '%.60s' to", what);
+    snprintf(title, sizeof(title), "Move %.60s to", what);
     int pick = run_menu_picker(title, NULL, labels, n);
     if (pick >= 0) {
         snprintf(out, out_size, "%s", ids[pick] < 0 ? "" : st->folders.paths[ids[pick]]);
@@ -1423,16 +1581,206 @@ static int choose_folder(const WorkspaceStore *st, const char *what,
 static int ask_name(const char *arg, const char *title, const char *prefill,
                     char *out, size_t out_size) {
     if (arg[0]) { snprintf(out, out_size, "%s", arg); return 1; }
-    int ok = run_text_input_centered(title, "Name", out, out_size, prefill);
+    int ok = run_text_input_centered(title, "Name", out, out_size, prefill, NULL);
     printf(ANSI_CURSOR_HIDE);
     return ok;
 }
 
+/* ── /snap ──────────────────────────────────────────────────────────────────
+   Builds a workspace from what is running and files it in the folder being
+   browsed. The two steps are the ones `mn open snap` had — tick the apps worth
+   keeping and give their links, then name it — but it writes into the store the
+   browser is holding rather than to disk, so the name lands in `cwd` and the
+   whole browse session still commits as one save.
+
+   Returns 1 if a workspace was added. */
+static int browse_snap(WorkspaceStore *st, const char *cwd, char *err, size_t err_size) {
+    /* Heap, not stack: RunningApp is two 4K path buffers, so an array of
+       WORKSPACE_ENTRIES_MAX of them is half a megabyte. */
+    RunningApp *running = malloc(WORKSPACE_ENTRIES_MAX * sizeof(RunningApp));
+    if (running == NULL) { snprintf(err, err_size, "Out of memory."); return 0; }
+
+    int n = app_enum_running(running, WORKSPACE_ENTRIES_MAX);
+    if (n < 0) {
+#ifdef __linux__
+        snprintf(err, err_size, "Snapshot needs 'wmctrl' \xe2\x80\x94 install it via your package manager.");
+#else
+        snprintf(err, err_size, "Couldn't read the running apps on this platform.");
+#endif
+        free(running);
+        return 0;
+    }
+    if (n == 0) {
+        snprintf(err, err_size, "No running apps detected.");
+        free(running);
+        return 0;
+    }
+
+    const char **labels = malloc((size_t)n * sizeof(*labels));
+    char (*label_bufs)[256] = malloc((size_t)n * sizeof(*label_bufs));
+    int *selected = malloc((size_t)n * sizeof(*selected));
+    AppLinks *links = calloc((size_t)n, sizeof(AppLinks));
+    if (!labels || !label_bufs || !selected || !links) {
+        snprintf(err, err_size, "Out of memory.");
+        free(running); free(labels); free(label_bufs); free(selected); free(links);
+        return 0;
+    }
+    for (int i = 0; i < n; i++) {
+        app_display_token(running[i].app, label_bufs[i], sizeof(label_bufs[i]));
+        labels[i]   = label_bufs[i];
+        selected[i] = 1;
+        if (running[i].target[0] != '\0')
+            targetlist_push(&links[i].items, &links[i].cap, &links[i].count,
+                            running[i].target);
+    }
+
+    char name[WORKSPACE_NAME_MAX] = {0};
+    int added = 0, done = 0;
+    const char *name_err = NULL;
+    enum { SNAP_REVIEW, SNAP_NAME } state = SNAP_REVIEW;
+
+    while (!done) {
+        if (state == SNAP_REVIEW) {
+            if (!run_multiselect_picker("Snapshot running apps",
+                                        "Pick apps; press any key on a green app to add a link.",
+                                        labels, n, selected, links))
+                break;                       /* Esc on the checklist → back to the browser */
+            int any = 0;
+            for (int i = 0; i < n; i++) any += selected[i];
+            if (!any) { snprintf(err, err_size, "Nothing selected."); break; }
+            state = SNAP_NAME;
+        } else {
+            /* name is both the answer and the seed: a rejected name comes back in
+               the field to be edited, not retyped. The box reads prefill into its
+               own buffer before it ever writes out, so passing the same one twice
+               is safe. */
+            if (!run_text_input_centered("Snapshot workspace", "Name",
+                                         name, sizeof(name), name, name_err)) {
+                state = SNAP_REVIEW;         /* Esc → back to the checklist */
+                name_err = NULL;
+                continue;
+            }
+            if (!wstree_name_ok(name)) {
+                name_err = "That isn't a usable name (no '/', no blank ends).";
+                continue;
+            }
+            int idx = workspace_store_add(st, name, cwd);
+            if (idx == -1) { name_err = "A workspace by that name already exists."; continue; }
+            if (idx < 0)   { snprintf(err, err_size, "Out of memory."); break; }
+
+            /* All of one app's links go into a single entry — one entry is one
+               window, which is the shape launch_workspace expects. */
+            Workspace *w = &st->ws[idx];
+            for (int i = 0; i < n && w->entry_count < WORKSPACE_ENTRIES_MAX; i++) {
+                if (!selected[i]) continue;
+                WorkspaceEntry *e = &w->entries[w->entry_count++];
+                snprintf(e->app, sizeof(e->app), "%s", running[i].app);
+                e->targets = NULL; e->target_count = 0; e->target_cap = 0;
+                e->layout[0] = '\0';
+                for (int k = 0; k < links[i].count; k++)
+                    targetlist_push(&e->targets, &e->target_cap, &e->target_count,
+                                    links[i].items[k]);
+            }
+            added = 1;
+            done  = 1;
+        }
+    }
+
+    for (int i = 0; i < n; i++)
+        targetlist_free(&links[i].items, &links[i].cap, &links[i].count);
+    free(running); free(labels); free(label_bufs); free(selected); free(links);
+    printf(ANSI_CURSOR_HIDE);
+    return added;
+}
+
+/* ── /move over a selection ─────────────────────────────────────────────────
+   One destination is chosen for the whole set — things are ticked together
+   precisely because they are going to the same place — and applied to each in
+   turn. A folder that collides with a name already in the destination is counted
+   and skipped rather than aborting the rest: the ticks are independent of each
+   other, and a partial move you can see beats an all-or-nothing rule that leaves
+   you guessing which one was the problem. */
+static int move_selection(WorkspaceStore *st, Selection *sel, const char *cwd,
+                          char *err, size_t err_size) {
+    if (st->folders.count == 0) {
+        snprintf(err, err_size, "There are no folders yet \xe2\x80\x94 make one with /new-folder.");
+        return 0;
+    }
+
+    const char **excl = malloc((size_t)sel->count * sizeof(*excl));
+    if (excl == NULL) { snprintf(err, err_size, "Out of memory."); return 0; }
+    int nexcl = 0;
+    for (int i = 0; i < sel->count; i++)
+        if (sel->keys[i][0] == 'f') excl[nexcl++] = sel->keys[i] + 2;
+
+    char what[64], dest[WORKSPACE_FOLDER_MAX];
+    snprintf(what, sizeof(what), "%d item%s", sel->count, sel->count == 1 ? "" : "s");
+    int ok = choose_folder(st, what, excl, nexcl, cwd, dest, sizeof(dest));
+    free(excl);
+    printf(ANSI_CURSOR_HIDE);
+
+    if (ok == -1) {
+        snprintf(err, err_size, "Nowhere to move these \xe2\x80\x94 every other folder is inside one of them.");
+        return 0;
+    }
+    if (ok == 0) return 0;
+
+    int moved = 0, failed = 0;
+    for (int i = 0; i < sel->count; i++) {
+        const char *key = sel->keys[i];
+        if (key[0] == 'f') {
+            /* Siblings, so moving one never rewrites another's path — each is
+               still findable by the path its tick recorded. */
+            if (wstree_move(&st->folders, key + 2, dest, st->ws, st->ws_count) == 0) moved++;
+            else failed++;
+        } else {
+            for (int w = 0; w < st->ws_count; w++)
+                if (strcmp(st->ws[w].name, key + 2) == 0) {
+                    snprintf(st->ws[w].folder, WORKSPACE_FOLDER_MAX, "%s", dest);
+                    moved++;
+                    break;
+                }
+        }
+    }
+    sel_clear(sel);   /* the ticks have been spent */
+
+    if (failed)
+        snprintf(err, err_size, "Moved %d; %d couldn't go \xe2\x80\x94 %.60s already holds that name.",
+                 moved, failed, dest[0] ? dest : "the top level");
+    return moved > 0;
+}
+
 static int palette_run(int cmd, const char *arg, WorkspaceStore *st, const char *cwd,
                        const WsRow *rows, int nrows, int cursor,
-                       char *err, size_t err_size) {
+                       Selection *sel, char *err, size_t err_size) {
     const WsRow *r = (nrows > 0) ? &rows[cursor] : NULL;
     char name[WORKSPACE_FOLDER_MAX];
+
+    if (cmd == BC_CREATE) {
+        if (!ask_name(arg, "New workspace", "", name, sizeof(name))) return 0;
+        if (!wstree_name_ok(name)) {
+            snprintf(err, err_size, "'%.60s' isn't a usable workspace name (no '/', no blank ends).", name);
+            return 0;
+        }
+        int idx = workspace_store_add(st, name, cwd);
+        if (idx == -1) { snprintf(err, err_size, "A workspace named '%.60s' already exists.", name); return 0; }
+        if (idx < 0)   { snprintf(err, err_size, "Out of memory."); return 0; }
+        return 1;
+    }
+
+    if (cmd == BC_SNAP)
+        return browse_snap(st, cwd, err, err_size);
+
+    if (cmd == BC_SELECT || cmd == BC_DESELECT) {
+        if (r == NULL) return 0;
+        sel_toggle(sel, st, r);
+        return 0;   /* a tick is screen state, not a change to save */
+    }
+
+    if (cmd == BC_CLEAR) {
+        sel_clear(sel);
+        return 0;
+    }
 
     if (cmd == BC_NEW_FOLDER) {
         if (!ask_name(arg, "New folder", "", name, sizeof(name))) return 0;
@@ -1495,8 +1843,12 @@ static int palette_run(int cmd, const char *arg, WorkspaceStore *st, const char 
     }
 
     if (cmd == BC_MOVE) {
+        /* Ticks win over the cursor when there are any: /move is only offered
+           alongside a selection because it is the command that can carry one. */
+        if (sel->count > 0) return move_selection(st, sel, cwd, err, err_size);
+
         if (r == NULL) return 0;
-        char dest[WORKSPACE_FOLDER_MAX];
+        char dest[WORKSPACE_FOLDER_MAX], what[80];
         if (st->folders.count == 0) {
             snprintf(err, err_size, "There are no folders yet \xe2\x80\x94 make one with /new-folder.");
             return 0;
@@ -1508,9 +1860,16 @@ static int palette_run(int cmd, const char *arg, WorkspaceStore *st, const char 
             char parent[WORKSPACE_FOLDER_MAX];
             wstree_parent(path, parent, sizeof(parent));
             /* A folder can go anywhere except into itself or its own subtree. */
-            int ok = choose_folder(st, wstree_leaf(path), path, parent, dest, sizeof(dest));
+            const char *excl[1] = { path };
+            snprintf(what, sizeof(what), "'%.60s'", wstree_leaf(path));
+            int ok = choose_folder(st, what, excl, 1, parent, dest, sizeof(dest));
             printf(ANSI_CURSOR_HIDE);
-            if (!ok) return 0;
+            if (ok == -1) {
+                snprintf(err, err_size, "Nowhere to move '%.60s' \xe2\x80\x94 every other folder is inside it.",
+                         wstree_leaf(path));
+                return 0;
+            }
+            if (ok == 0) return 0;
             int rc = wstree_move(&st->folders, path, dest, st->ws, st->ws_count);
             if (rc == -1) {
                 snprintf(err, err_size, "'%.80s' already holds a folder by that name.",
@@ -1521,9 +1880,14 @@ static int palette_run(int cmd, const char *arg, WorkspaceStore *st, const char 
         }
 
         Workspace *w = &st->ws[r->idx];
-        int ok = choose_folder(st, w->name, NULL, w->folder, dest, sizeof(dest));
+        snprintf(what, sizeof(what), "'%.60s'", w->name);
+        int ok = choose_folder(st, what, NULL, 0, w->folder, dest, sizeof(dest));
         printf(ANSI_CURSOR_HIDE);
-        if (!ok) return 0;
+        if (ok == -1) {
+            snprintf(err, err_size, "There is nowhere else to file '%.60s'.", w->name);
+            return 0;
+        }
+        if (ok == 0) return 0;
         snprintf(w->folder, WORKSPACE_FOLDER_MAX, "%s", dest);
         return 1;
     }
@@ -1541,6 +1905,9 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
     int done = 0, result = -1;
     char err[220] = {0};
     CmdPalette pal; memset(&pal, 0, sizeof(pal));
+    Selection  sel; memset(&sel, 0, sizeof(sel));
+    /* Read-only `mn open` can't tick anything, so it gets no tick column. */
+    Selection *selset = edit_mode ? &sel : NULL;
 
     if (dirty) *dirty = 0;
     /* The caller's remembered folder may have been renamed or removed since —
@@ -1551,7 +1918,7 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
 
     printf(ANSI_CURSOR_HIDE);
     render_ws_browser(st, rows, nrows, cwd, cursor, title, num_input, show_error,
-                      err, &pal);
+                      err, &pal, selset);
 
     while (!done) {
         int key = read_key();
@@ -1560,7 +1927,8 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
 
         if (pal.open) {
             int row_kind = (nrows > 0) ? rows[cursor].kind : -1;
-            unsigned mask = browse_mask(edit_mode, row_kind, cwd);
+            int ticked   = (nrows > 0) && sel_has(&sel, st, &rows[cursor]);
+            unsigned mask = browse_mask(edit_mode, row_kind, cwd, sel.count, ticked);
             if (key == KEY_UP) {
                 if (pal.nmatch) pal.sel = (pal.sel > 0) ? pal.sel - 1 : pal.nmatch - 1;
             } else if (key == KEY_DOWN) {
@@ -1584,19 +1952,32 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
                     char was[WORKSPACE_FOLDER_MAX];
                     snprintf(was, sizeof(was), "%s", cwd);
                     wstree_parent(was, cwd, cwd_size);
+                    sel_clear(&sel);   /* ticks belong to the level being left */
                     nrows = wstree_build_rows(&st->folders, st->ws, st->ws_count,
                                               cwd, &rows, &rows_cap);
                     cursor = 0;
                     for (int i = 0; i < nrows; i++)
                         if (rows[i].kind == WSROW_FOLDER &&
                             strcmp(st->folders.paths[rows[i].idx], was) == 0) { cursor = i; break; }
-                } else if (palette_run(cmd, arg, st, cwd, rows, nrows, cursor,
-                                       err, sizeof(err))) {
-                    if (dirty) *dirty = 1;
-                    nrows = wstree_build_rows(&st->folders, st->ws, st->ws_count,
-                                              cwd, &rows, &rows_cap);
-                    if (cursor >= nrows) cursor = nrows > 0 ? nrows - 1 : 0;
+                } else {
+                    int was_ws = st->ws_count;
+                    if (palette_run(cmd, arg, st, cwd, rows, nrows, cursor,
+                                    &sel, err, sizeof(err))) {
+                        if (dirty) *dirty = 1;
+                        nrows = wstree_build_rows(&st->folders, st->ws, st->ws_count,
+                                                  cwd, &rows, &rows_cap);
+                        if (cursor >= nrows) cursor = nrows > 0 ? nrows - 1 : 0;
+                        /* /create and /snap append: land on what was just made,
+                           the way /back lands on the folder it just left. The new
+                           one sorts in by name, so its row has to be looked up. */
+                        if (st->ws_count > was_ws)
+                            for (int i = 0; i < nrows; i++)
+                                if (rows[i].kind == WSROW_WS &&
+                                    rows[i].idx == st->ws_count - 1) { cursor = i; break; }
+                    }
                 }
+            } else if (key == KEY_ESC) {
+                pal.open = 0;   /* close without running anything */
             } else if ((key == KEY_BACKSPACE || key == 127) && pal.len <= 1) {
                 pal.open = 0;   /* clearing the "/" leaves the palette */
             } else if (edit_buffer_key(key, pal.buf, &pal.len, &pal.pos, sizeof(pal.buf))) {
@@ -1618,7 +1999,9 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
                     err[0] = '\0';
                     palette_open(&pal, BROWSE_CMDS, BC_COUNT,
                                  browse_mask(edit_mode,
-                                             (nrows > 0) ? rows[cursor].kind : -1, cwd));
+                                             (nrows > 0) ? rows[cursor].kind : -1, cwd,
+                                             sel.count,
+                                             (nrows > 0) && sel_has(&sel, st, &rows[cursor])));
                 } else if (key >= '1' && key <= '9') {
                     prev_cursor = cursor;
                     num_input = key - '0';
@@ -1632,6 +2015,7 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
             if (r->kind == WSROW_FOLDER) {
                 snprintf(cwd, cwd_size, "%s", st->folders.paths[r->idx]);
                 cursor = 0; num_input = -1; err[0] = '\0';
+                sel_clear(&sel);   /* ticks belong to the level being left */
                 nrows = wstree_build_rows(&st->folders, st->ws, st->ws_count,
                                           cwd, &rows, &rows_cap);
             } else {
@@ -1642,10 +2026,11 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
 
         if (!done)
             render_ws_browser(st, rows, nrows, cwd, cursor, title, num_input,
-                              show_error, err, &pal);
+                              show_error, err, &pal, selset);
     }
 
     free(rows);
+    sel_free(&sel);
     printf(ANSI_CURSOR_SHOW);
     fflush(stdout);
     return result;
@@ -1832,8 +2217,7 @@ static int run_placement_picker(const char *app_display, char *layout, size_t la
 
 #define WADD_LIST      0
 #define WADD_TYPE_LINK 1
-#define WADD_TYPE_APP  2
-#define WADD_EDIT_LINK 3
+#define WADD_EDIT_LINK 2
 
 /* Friendly, normalized display name for an app value. Delegates to the
    tokenizer so all forms of the same app (path, bare name, UWP marker) and
@@ -1842,9 +2226,11 @@ void ws_display_name(const char *app, char *out, size_t out_size) {
     app_display_token(app, out, out_size);
 }
 
-/* The editor is navigated as a flat list of rows: one per app, one per link
-   under each (non-deleted) app, plus the two trailing pseudo-rows. */
-enum { ROW_APP, ROW_LINK, ROW_ADD_APP, ROW_RENAME_WS, ROW_DEL_WS };
+/* The editor is navigated as a flat list of rows: one per app and one per link
+   under each (non-deleted) app. Nothing else — adding, renaming and deleting are
+   commands now, so every row here is a thing that is in the workspace. An empty
+   workspace therefore has no rows, which is the honest shape for it. */
+enum { ROW_APP, ROW_LINK };
 typedef struct {
     int kind;
     int app;   /* index into apps[] for APP / LINK rows, else -1 */
@@ -1933,33 +2319,59 @@ static int placement_change(const WsEditorApp *a) {
    /remove and /restore are the same toggle split in two, because the palette
    filters by what applies: a row staged for removal offers only /restore, an
    ordinary row only /remove. One entry called "/remove" that sometimes un-removes
-   would read as a no-op on the very row where it does something. */
+   would read as a no-op on the very row where it does something.
 
-enum { EC_SAVE, EC_BACK, EC_EXIT, EC_REMOVE, EC_RESTORE, EC_PLACE, EC_REORDER, EC_COUNT };
+   /add, /rename and /delete act on the workspace and replace the three pseudo-
+   rows that used to sit under the app list ("+ Add a new app", "~ Rename this
+   workspace", "- Remove this workspace"). They were rows you had to scroll past
+   to reach and could land on by holding ↓; as commands they are named, filtered
+   and out of the way, and the list is now only the thing being edited.
+
+   /delete, not /remove, takes the workspace: /remove already means "stage the row
+   under the cursor", and the browser already spends /delete on removing a folder.
+   So /delete destroys the container you are inside, /remove stages a row within
+   it — the same split on both screens. */
+
+enum { EC_SAVE, EC_BACK, EC_EXIT, EC_ADD, EC_APPEND, EC_RENAME, EC_DELETE,
+       EC_REMOVE, EC_RESTORE, EC_PLACE, EC_REORDER, EC_COUNT };
 
 static const CmdDef EDIT_CMDS[EC_COUNT] = {
     { "/save",    "", "save and return to the terminal"        },
     { "/back",    "", "discard changes, back to the workspaces"},
     { "/exit",    "", "discard changes, return to the terminal"},
+    { "/add",     "", "add an app to this workspace"           },
+    { "/append",  "", "give this app a file, folder or URL"    },
+    { "/rename",  "", "rename this workspace"                  },
+    { "/delete",  "", "remove this workspace"                  },
     { "/remove",  "", "remove the selected app or link"        },
     { "/restore", "", "keep the selected app or link after all"},
     { "/place",   "", "put this app on part of the screen"     },
     { "/reorder", "", "move this link among the app's links"   },
 };
 
-/* Which editor commands apply to the row under the cursor. */
+/* Which editor commands apply to the row under the cursor. The workspace-level
+   four don't depend on one: an empty workspace still has to be fillable,
+   nameable, removable and savable, and it has no rows at all. */
 static unsigned edit_mask(const WsEditorApp *apps, const WeditRow *rows,
                           int nrows, int cursor) {
-    unsigned m = (1u << EC_SAVE) | (1u << EC_BACK) | (1u << EC_EXIT);
+    unsigned m = (1u << EC_SAVE) | (1u << EC_BACK) | (1u << EC_EXIT) |
+                 (1u << EC_ADD)  | (1u << EC_RENAME) | (1u << EC_DELETE);
     if (nrows <= 0) return m;
 
     const WeditRow *r = &rows[cursor];
     if (r->kind == ROW_APP) {
         const WsEditorApp *a = &apps[r->app];
-        m |= a->marked_delete ? (1u << EC_RESTORE) : (1u << EC_REMOVE) | (1u << EC_PLACE);
+        m |= a->marked_delete ? (1u << EC_RESTORE)
+                              : (1u << EC_REMOVE) | (1u << EC_PLACE) | (1u << EC_APPEND);
     } else if (r->kind == ROW_LINK) {
         const WsEditorApp *a = &apps[r->app];
         const EditLink *e = &a->links.items[r->link];
+        /* A link row only exists under a live app (build_edit_rows collapses the
+           links of one staged for deletion), so /append always applies here: it
+           extends the app this link belongs to. You are already looking at that
+           app's links — walking back up to its row to add another would be a step
+           with nothing in it. */
+        m |= 1u << EC_APPEND;
         if (e->deleted) {
             m |= 1u << EC_RESTORE;
         } else {
@@ -1976,7 +2388,7 @@ static unsigned edit_mask(const WsEditorApp *apps, const WeditRow *rows,
    for deletion are collapsed (the whole app is going). */
 static int build_edit_rows(const WsEditorApp *apps, int count,
                            WeditRow **rows, int *cap) {
-    int need = 3;   /* the three trailing pseudo-rows */
+    int need = 0;
     for (int i = 0; i < count; i++) {
         need++;
         if (!apps[i].marked_delete)
@@ -1988,18 +2400,17 @@ static int build_edit_rows(const WsEditorApp *apps, int count,
         WeditRow *p = realloc(*rows, (size_t)ncap * sizeof(WeditRow));
         if (p != NULL) { *rows = p; *cap = ncap; }
     }
+    /* The bound is *cap, not need: if the realloc above failed, *cap is still the
+       old (smaller) capacity, and this must not write past it. */
     int n = 0;
     WeditRow *rw = *rows;
-    for (int i = 0; i < count && n + 3 < *cap; i++) {
+    for (int i = 0; i < count && n < *cap; i++) {
         rw[n].kind = ROW_APP; rw[n].app = i; rw[n].link = -1; n++;
         if (apps[i].marked_delete) continue;
-        for (int k = 0; k < apps[i].links.count && n + 3 < *cap; k++) {
+        for (int k = 0; k < apps[i].links.count && n < *cap; k++) {
             rw[n].kind = ROW_LINK; rw[n].app = i; rw[n].link = k; n++;
         }
     }
-    rw[n].kind = ROW_ADD_APP;    rw[n].app = -1; rw[n].link = -1; n++;
-    rw[n].kind = ROW_RENAME_WS;  rw[n].app = -1; rw[n].link = -1; n++;
-    rw[n].kind = ROW_DEL_WS;     rw[n].app = -1; rw[n].link = -1; n++;
     return n;
 }
 
@@ -2015,6 +2426,51 @@ static void reorder_link(WsEditorApp *a, int link, int key, int *cursor) {
     *cursor += (key == KEY_LEFT) ? -1 : 1;
 }
 
+/* ── /add ───────────────────────────────────────────────────────────────────
+   Asks for an app and keeps asking until the answer names one that exists or the
+   user backs out. An app the launcher can't find is the one mistake on this
+   screen that can't be seen afterwards — the row looks like any other until the
+   workspace is opened and nothing happens — so it is refused at the point of
+   entry, with the field seeded with what was typed so a near miss is a small
+   edit rather than a retype.
+
+   The resolution is the launcher's own, so what passes here is what will run.
+   Returns 1 with the resolved launch value in out, 0 if cancelled. */
+static int ask_app(char *out, size_t out_size) {
+    char typed[WORKSPACE_APP_MAX] = {0};
+    char seed[WORKSPACE_APP_MAX]  = {0};
+    char errbuf[160];
+    const char *error = NULL;
+
+    for (;;) {
+        if (!run_text_input_centered("Add an app", "App", typed, sizeof(typed),
+                                     seed, error))
+            return 0;
+        snprintf(seed, sizeof(seed), "%s", typed);
+
+        /* Known IDE launcher — skip resolution, but store the canonical name:
+           "Code" must be saved as the "code" CLI, not handed to a bundle-name
+           lookup that can't find it. */
+        const char *launcher = new_window_launcher(typed);
+        if (launcher != NULL) {
+            snprintf(out, out_size, "%s", launcher);
+            return 1;
+        }
+
+        char resolved[WORKSPACE_APP_MAX] = {0};
+        const char *final_app = typed;
+        if (app_resolve(typed, resolved, sizeof(resolved)) && resolved[0])
+            final_app = resolved;
+        if (app_value_exists(final_app)) {
+            snprintf(out, out_size, "%s", final_app);
+            return 1;
+        }
+        snprintf(errbuf, sizeof(errbuf),
+                 "No app called '%.60s' \xe2\x80\x94 try a full path.", typed);
+        error = errbuf;
+    }
+}
+
 static void render_workspace_edit(const char *ws_name,
                                   const WsEditorApp *apps,
                                   const WeditRow *rows, int nrows,
@@ -2026,19 +2482,17 @@ static void render_workspace_edit(const char *ws_name,
     snprintf(title, sizeof(title), "Edit '%s'", ws_name);
     print_picker_header(title, NULL);
 
+    if (nrows == 0)
+        printf("  " ANSI_DIM "No apps yet \xe2\x80\x94 " ANSI_RESET ANSI_VIOLET "/add" ANSI_RESET
+               ANSI_DIM " one." ANSI_RESET "\n");
+
     int start = picker_window_start(cursor, nrows);
     int end   = start + (nrows < PICKER_WINDOW ? nrows : PICKER_WINDOW);
     print_more_above(start);
     for (int i = start; i < end; i++) {
         const WeditRow *r = &rows[i];
         const char *arrow = (i == cursor) ? ANSI_ACCENT CURSOR_TOKEN ANSI_RESET : " ";
-        if (r->kind == ROW_ADD_APP) {
-            printf("  %s " ANSI_ADD_HL " + Add a new app " ANSI_RESET "\n", arrow);
-        } else if (r->kind == ROW_RENAME_WS) {
-            printf("  %s " ANSI_REN_HL " ~ Rename this workspace " ANSI_RESET "\n", arrow);
-        } else if (r->kind == ROW_DEL_WS) {
-            printf("  %s " ANSI_DEL_HL " - Remove this workspace " ANSI_RESET "\n", arrow);
-        } else if (r->kind == ROW_APP) {
+        if (r->kind == ROW_APP) {
             const WsEditorApp *a = &apps[r->app];
             if (a->marked_delete) {
                 printf("  %s " ANSI_RED "- %s" ANSI_RESET, arrow, a->display);
@@ -2103,23 +2557,18 @@ static void render_workspace_edit(const char *ws_name,
         /* highlight block cursor at edit_pos (a space when parked past the end) */
         char cur = typed[edit_pos] ? typed[edit_pos] : ' ';
         const char *rest = typed[edit_pos] ? typed + edit_pos + 1 : "";
+        /* A rejected path is reported over the field it was typed into, not on
+           the list screen the field is covering. */
+        if (app_error && app_error[0])
+            printf("\n" ANSI_YELLOW "  %s" ANSI_RESET, app_error);
         printf("\n" ANSI_CYAN "  Add link for %s: " ANSI_RESET
                "%.*s" ANSI_REVERSE "%c" ANSI_REVERSE_OFF "%s",
                apps[type_app].display, edit_pos, typed, cur, rest);
         if (suggest_open(sg)) render_suggestions(sg);
         else printf("\n" ANSI_DIM "  \xe2\x86\x90/\xe2\x86\x92 move  \xe2\x80\xa2  Enter add  \xe2\x80\xa2  Esc cancel  \xe2\x80\xa2  Backspace delete" ANSI_RESET);
-    } else if (mode == WADD_TYPE_APP) {
-        /* highlight block cursor at edit_pos (a space when parked past the end) */
-        char cur = typed[edit_pos] ? typed[edit_pos] : ' ';
-        const char *rest = typed[edit_pos] ? typed + edit_pos + 1 : "";
+    } else if (mode == WADD_EDIT_LINK) {
         if (app_error && app_error[0])
             printf("\n" ANSI_YELLOW "  %s" ANSI_RESET, app_error);
-        printf("\n" ANSI_CYAN "  New app: " ANSI_RESET
-               "%.*s" ANSI_REVERSE "%c" ANSI_REVERSE_OFF "%s",
-               edit_pos, typed, cur, rest);
-        if (suggest_open(sg)) render_suggestions(sg);
-        else printf("\n" ANSI_DIM "  \xe2\x86\x90/\xe2\x86\x92 move  \xe2\x80\xa2  Enter add  \xe2\x80\xa2  Esc cancel  \xe2\x80\xa2  Backspace delete" ANSI_RESET);
-    } else if (mode == WADD_EDIT_LINK) {
         if (suggest_open(sg)) render_suggestions(sg);
         else printf("\n" ANSI_DIM "\xe2\x86\x90/\xe2\x86\x92 move  \xe2\x80\xa2  type to edit  \xe2\x80\xa2  Enter save  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
     } else if (reordering) {
@@ -2130,22 +2579,24 @@ static void render_workspace_edit(const char *ws_name,
         if (pal->open) { render_palette(pal); fflush(stdout); return; }
 
         /* Only Enter varies by row; every other action is a command, so the hint
-           names what Enter opens here and points at "/" for the rest. */
-        const char *act = "Enter";
+           names what Enter opens here and points at "/" for the rest. With no
+           rows there is nothing for Enter to open, so it isn't mentioned. */
+        const char *act = NULL;
         if (nrows > 0) {
             const WeditRow *r = &rows[cursor];
-            if (r->kind == ROW_ADD_APP)                     act = "Enter add an app";
-            else if (r->kind == ROW_RENAME_WS)              act = "Enter rename this workspace";
-            else if (r->kind == ROW_DEL_WS)                 act = "Enter remove this workspace";
-            else if (r->kind == ROW_APP && !apps[r->app].marked_delete)
+            if (r->kind == ROW_APP && !apps[r->app].marked_delete)
                                                             act = "Enter add a link";
             else if (r->kind == ROW_LINK && !apps[r->app].links.items[r->link].deleted)
                                                             act = "Enter edit this link";
             else                                            act = "/restore to keep it";
         }
-        printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  %s  \xe2\x80\xa2  "
-               ANSI_RESET ANSI_VIOLET "/" ANSI_RESET ANSI_DIM " commands (/save, /back, /exit\xe2\x80\xa6)" ANSI_RESET,
-               act);
+        if (act)
+            printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 move  \xe2\x80\xa2  %s  \xe2\x80\xa2  "
+                   ANSI_RESET ANSI_VIOLET "/" ANSI_RESET ANSI_DIM " commands (/add, /save, /back\xe2\x80\xa6)" ANSI_RESET,
+                   act);
+        else
+            printf("\n" ANSI_VIOLET "  /" ANSI_RESET ANSI_DIM
+                   " commands (/add, /save, /back\xe2\x80\xa6)" ANSI_RESET);
     }
     fflush(stdout);
 }
@@ -2193,58 +2644,17 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
             if (suggest_key(&sg, key, typed, &typed_len, &edit_pos, sizeof(typed))) {
                 /* consumed by the dropdown */
             } else if (key == KEY_ENTER) {
-                if (typed_len > 0) {
+                if (typed_len == 0) {          /* Enter on an empty field backs out */
+                    mode = WADD_LIST;
+                } else if (!link_ok(typed)) {
+                    /* Hold the field open with the text still in it: the fix is
+                       almost always a small edit to what was typed. */
+                    snprintf(app_error, sizeof(app_error), LINK_BAD_MSG, typed);
+                } else {
                     editlink_push(&apps[type_app].links, typed, "", -1);
                     touched = 1;
-                }
-                typed[0] = '\0'; typed_len = 0; edit_pos = 0;
-                mode = WADD_LIST;
-            } else if (key == KEY_ESC) {
-                typed[0] = '\0'; typed_len = 0; edit_pos = 0;
-                mode = WADD_LIST;
-            } else if (edit_buffer_key(key, typed, &typed_len, &edit_pos, sizeof(typed))) {
-                suggest_refresh(&sg, typed);
-            }
-        } else if (mode == WADD_TYPE_APP) {
-            if (suggest_key(&sg, key, typed, &typed_len, &edit_pos, sizeof(typed))) {
-                /* consumed by the dropdown */
-            } else if (key == KEY_ENTER) {
-                if (typed_len > 0 && *count < max) {
-                    char resolved[WORKSPACE_APP_MAX] = {0};
-                    const char *final_app = typed;
-                    int valid = 1;
-                    const char *launcher = new_window_launcher(typed);
-                    if (launcher != NULL) {
-                        /* Known IDE launcher — skip resolution, but store the
-                           canonical name: "Code" must be saved as the "code"
-                           CLI, not handed to a bundle-name lookup that can't
-                           find it. */
-                        final_app = launcher;
-                    } else {
-                        if (app_resolve(typed, resolved, sizeof(resolved)) && resolved[0])
-                            final_app = resolved;
-                        if (!app_value_exists(final_app)) {
-                            snprintf(app_error, sizeof(app_error),
-                                     "App not found: '%.60s'. Try a full path.", typed);
-                            typed[0] = '\0'; typed_len = 0; edit_pos = 0;
-                            valid = 0;
-                        }
-                    }
-                    if (valid) {
-                        WsEditorApp *na = &apps[*count];
-                        memset(na, 0, sizeof(*na));
-                        strncpy(na->app, final_app, WORKSPACE_APP_MAX - 1);
-                        ws_display_name(final_app, na->display, sizeof(na->display));
-                        na->is_new = 1;
-                        (*count)++;
-                        touched = 1;
-                        typed[0] = '\0'; typed_len = 0; edit_pos = 0;
-                        mode = WADD_LIST;
-                        /* park the cursor on the freshly added app row */
-                        nrows = build_edit_rows(apps, *count, &rows, &rows_cap);
-                        for (int i = 0; i < nrows; i++)
-                            if (rows[i].kind == ROW_APP && rows[i].app == *count - 1) { cursor = i; break; }
-                    }
+                    typed[0] = '\0'; typed_len = 0; edit_pos = 0;
+                    mode = WADD_LIST;
                 }
             } else if (key == KEY_ESC) {
                 typed[0] = '\0'; typed_len = 0; edit_pos = 0;
@@ -2262,12 +2672,19 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
             if (suggest_key(&sg, key, typed, &typed_len, &edit_pos, sizeof(typed))) {
                 /* consumed by the dropdown */
             } else if (key == KEY_ENTER) {
-                strncpy(apps[edit_app].links.items[edit_link].text, typed,
-                        WORKSPACE_TARGET_MAX - 1);
-                apps[edit_app].links.items[edit_link].text[WORKSPACE_TARGET_MAX - 1] = '\0';
-                touched = 1;
-                typed[0] = '\0'; typed_len = 0; edit_pos = 0;
-                mode = WADD_LIST;
+                /* Same gate as adding one: editing a good link into a broken one
+                   is the same mistake, arrived at from the other side. Esc is the
+                   way to leave it as it was. */
+                if (!link_ok(typed)) {
+                    snprintf(app_error, sizeof(app_error), LINK_BAD_MSG, typed);
+                } else {
+                    strncpy(apps[edit_app].links.items[edit_link].text, typed,
+                            WORKSPACE_TARGET_MAX - 1);
+                    apps[edit_app].links.items[edit_link].text[WORKSPACE_TARGET_MAX - 1] = '\0';
+                    touched = 1;
+                    typed[0] = '\0'; typed_len = 0; edit_pos = 0;
+                    mode = WADD_LIST;
+                }
             } else if (key == KEY_ESC) {
                 typed[0] = '\0'; typed_len = 0; edit_pos = 0;
                 mode = WADD_LIST;
@@ -2301,21 +2718,23 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                     snprintf(app_error, sizeof(app_error), "No command matches '%.40s'.", pal.buf);
                 else
                     edit_cmd = cmd;   /* run below, where the row state is in hand */
+            } else if (key == KEY_ESC) {
+                pal.open = 0;   /* close without running anything */
             } else if ((key == KEY_BACKSPACE || key == 127) && pal.len <= 1) {
                 pal.open = 0;   /* clearing the "/" leaves the palette */
             } else if (edit_buffer_key(key, pal.buf, &pal.len, &pal.pos, sizeof(pal.buf))) {
                 palette_refresh(&pal, mask);
             }
         } else { /* WADD_LIST (normal navigation) */
-            const WeditRow *r = &rows[cursor];
             switch (key) {
             case KEY_UP:    if (cursor > 0)         cursor--; break;
             case KEY_DOWN:  if (cursor < nrows - 1) cursor++; break;
-            case KEY_ENTER:
-                /* Enter opens the row under the cursor: the pseudo-rows open
-                   their dialog, an app opens a field to add a link to it, and a
-                   link opens its text for editing. Everything that isn't opening
-                   something is a "/" command. */
+            case KEY_ENTER: {
+                /* Enter opens the row under the cursor: an app opens a field to
+                   add a link to it, and a link opens its text for editing.
+                   Everything that isn't opening something is a "/" command. */
+                if (nrows <= 0) break;
+                const WeditRow *r = &rows[cursor];
                 if (r->kind == ROW_APP && !apps[r->app].marked_delete) {
                     mode      = WADD_TYPE_LINK;
                     type_app  = r->app;
@@ -2334,39 +2753,9 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                     edit_pos  = typed_len;
                     mode      = WADD_EDIT_LINK;
                     suggest_reset(&sg, typed);
-                } else if (r->kind == ROW_ADD_APP) {
-                    mode = WADD_TYPE_APP;
-                    typed[0] = '\0'; typed_len = 0; edit_pos = 0;
-                    suggest_reset(&sg, typed);
-                } else if (r->kind == ROW_RENAME_WS) {
-                    char newname[WORKSPACE_NAME_MAX];
-                    if (run_text_input_centered("Rename workspace", "Name",
-                                                newname, sizeof(newname), ws_name)) {
-                        int taken = 0;
-                        for (int t = 0; t < taken_count; t++)
-                            if (strcmp(newname, taken_names[t]) == 0) { taken = 1; break; }
-                        if (taken)
-                            snprintf(app_error, sizeof(app_error),
-                                     "A workspace named '%.60s' already exists.", newname);
-                        else {
-                            strncpy(ws_name, newname, ws_name_size - 1);
-                            ws_name[ws_name_size - 1] = '\0';
-                            touched = 1;
-                        }
-                    }
-                    printf(ANSI_CURSOR_HIDE);   /* input box re-showed the cursor */
-                } else if (r->kind == ROW_DEL_WS) {
-                    char q[WORKSPACE_NAME_MAX + 32];
-                    snprintf(q, sizeof(q), "Remove workspace '%s'?", ws_name);
-                    if (confirm_centered(q)) {
-                        *delete_workspace = 1;
-                        outcome = WSEDIT_SAVE;
-                        done = 1;
-                    } else {
-                        printf(ANSI_CURSOR_HIDE);   /* confirm screen re-showed it */
-                    }
                 }
                 break;
+            }
             default:
                 if (key == '/') {
                     app_error[0] = '\0';
@@ -2398,6 +2787,80 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                     printf(ANSI_CURSOR_HIDE);
                 }
                 if (go) { outcome = (edit_cmd == EC_BACK) ? WSEDIT_BACK : WSEDIT_EXIT; done = 1; }
+                break;
+            }
+            case EC_ADD: {
+                if (*count >= max) {
+                    snprintf(app_error, sizeof(app_error),
+                             "This workspace is full (%d apps).", max);
+                    break;
+                }
+                char app[WORKSPACE_APP_MAX];
+                if (ask_app(app, sizeof(app))) {
+                    WsEditorApp *na = &apps[*count];
+                    memset(na, 0, sizeof(*na));
+                    strncpy(na->app, app, WORKSPACE_APP_MAX - 1);
+                    ws_display_name(app, na->display, sizeof(na->display));
+                    na->is_new = 1;
+                    (*count)++;
+                    touched = 1;
+                    /* park the cursor on the freshly added app row */
+                    nrows = build_edit_rows(apps, *count, &rows, &rows_cap);
+                    for (int i = 0; i < nrows; i++)
+                        if (rows[i].kind == ROW_APP && rows[i].app == *count - 1) { cursor = i; break; }
+                }
+                printf(ANSI_CURSOR_HIDE);   /* input box re-showed the cursor */
+                break;
+            }
+            case EC_APPEND: {
+                /* Opens the same inline field Enter on an app row opens — the one
+                   with path completion under it, which is most of what makes a
+                   long path typeable. From a link row it extends that link's app. */
+                if (r == NULL) break;
+                if (r->kind != ROW_APP && r->kind != ROW_LINK) break;
+                if (apps[r->app].marked_delete) break;
+                mode      = WADD_TYPE_LINK;
+                type_app  = r->app;
+                typed[0]  = '\0';
+                typed_len = 0;
+                edit_pos  = 0;
+                suggest_reset(&sg, typed);
+                break;
+            }
+            case EC_RENAME: {
+                /* Re-ask on a collision rather than reporting it back on the list
+                   screen: the answer is a small edit to what was just typed, so
+                   the field stays open holding it. */
+                char newname[WORKSPACE_NAME_MAX];
+                char seed[WORKSPACE_NAME_MAX];
+                const char *error = NULL;
+                snprintf(seed, sizeof(seed), "%s", ws_name);
+                for (;;) {
+                    if (!run_text_input_centered("Rename workspace", "Name",
+                                                 newname, sizeof(newname), seed, error))
+                        break;
+                    snprintf(seed, sizeof(seed), "%s", newname);
+                    int taken = 0;
+                    for (int t = 0; t < taken_count; t++)
+                        if (strcmp(newname, taken_names[t]) == 0) { taken = 1; break; }
+                    if (taken) { error = "A workspace by that name already exists."; continue; }
+                    snprintf(ws_name, ws_name_size, "%s", newname);
+                    touched = 1;
+                    break;
+                }
+                printf(ANSI_CURSOR_HIDE);   /* input box re-showed the cursor */
+                break;
+            }
+            case EC_DELETE: {
+                char q[WORKSPACE_NAME_MAX + 32];
+                snprintf(q, sizeof(q), "Remove workspace '%s'?", ws_name);
+                if (confirm_centered(q)) {
+                    *delete_workspace = 1;
+                    outcome = WSEDIT_SAVE;
+                    done = 1;
+                } else {
+                    printf(ANSI_CURSOR_HIDE);   /* confirm screen re-showed it */
+                }
                 break;
             }
             case EC_REMOVE:
@@ -2467,55 +2930,3 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
     return outcome;
 }
 
-/* ── Single styled text input box ──────────────────────────────────────── */
-
-static void render_text_input(const char *title, const char *subtitle,
-                              const char *label, const char *typed, int edit_pos) {
-    print_picker_header(title, subtitle);
-    /* highlight block cursor at edit_pos (a space when parked past the end) */
-    char cur = typed[edit_pos] ? typed[edit_pos] : ' ';
-    const char *rest = typed[edit_pos] ? typed + edit_pos + 1 : "";
-    printf("\n" ANSI_CYAN "  %s: " ANSI_RESET "%.*s" ANSI_REVERSE "%c" ANSI_REVERSE_OFF "%s",
-           label, edit_pos, typed, cur, rest);
-    printf("\n\n" ANSI_DIM "\xe2\x86\x90/\xe2\x86\x92 move  \xe2\x80\xa2  Enter confirm  \xe2\x80\xa2  Backspace delete  \xe2\x80\xa2  Esc cancel" ANSI_RESET);
-    fflush(stdout);
-}
-
-int run_text_input(const char *title, const char *subtitle, const char *label,
-                   char *out, size_t out_size, int allow_empty, const char *prefill) {
-    char typed[4096] = {0};
-    int  typed_len   = 0;
-    int  edit_pos    = 0;   /* cursor within typed[] */
-    int  done        = 0;
-    int  cancelled   = 0;
-
-    if (prefill && prefill[0]) {
-        strncpy(typed, prefill, sizeof(typed) - 1);
-        typed[sizeof(typed) - 1] = '\0';
-        typed_len = (int)strlen(typed);
-        edit_pos  = typed_len;
-    }
-
-    printf(ANSI_CURSOR_HIDE);
-    render_text_input(title, subtitle, label, typed, edit_pos);
-
-    while (!done) {
-        int key = read_key();
-        if (key == KEY_ENTER) {
-            if (typed_len > 0 || allow_empty) {
-                strncpy(out, typed, out_size - 1);
-                out[out_size - 1] = '\0';
-                done = 1;
-            }
-        } else if (key == KEY_ESC) {
-            cancelled = 1; done = 1;
-        } else {
-            edit_buffer_key(key, typed, &typed_len, &edit_pos, sizeof(typed));
-        }
-        if (!done) render_text_input(title, subtitle, label, typed, edit_pos);
-    }
-
-    printf(ANSI_CURSOR_SHOW);
-    fflush(stdout);
-    return cancelled ? 0 : 1;
-}
