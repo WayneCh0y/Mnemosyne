@@ -92,7 +92,13 @@ Routes `argv[1]` to the correct handler and implements all interactive UI logic:
 It also implements the per-platform app/IDE launch logic and `close_terminal()`, which terminates the parent shell after a successful open/launch so the launcher window closes (skipped when stdin isn't a TTY).
 
 ### `picker.c` — Interactive Terminal Pickers
-The interactive pickers (ANSI rendering, raw-mode arrow-key input, `1`–`9` numeric jump) shared across the app: `run_search_picker`, `run_list_picker`, `run_workspace_picker`, `run_ide_picker`, `run_multiselect_picker`, and `run_workspace_edit_picker`.
+The interactive pickers (ANSI rendering, raw-mode arrow-key input, `1`–`9` numeric jump) shared across the app: `run_search_picker`, `run_list_picker`, `run_workspace_browser`, `run_ide_picker`, `run_multiselect_picker`, and `run_workspace_edit_picker`.
+
+Most of them share one control flow through `run_indexed_picker()`, which owns the loop and takes a render callback — only the drawing differs. The two workspace screens don't: they drill through a tree and carry a command palette, so each runs its own loop over rows flattened from state on every keystroke (`wstree_build_rows`, `build_edit_rows`). That keeps drilling and the palette out of the pickers that want neither.
+
+**The `/` palette.** `run_workspace_browser` and `run_workspace_edit_picker` are driven by arrows, `Enter`, and typed commands — no `Esc`, no letter shortcuts. `CmdPalette` is shared between them: each passes its own `CmdDef` table (`BROWSE_CMDS`, `EDIT_CMDS`) plus a bitmask of which entries apply to the row under the cursor, so a command with nothing to act on is filtered out of the list rather than offered and refused. `Enter` runs the highlighted match rather than re-resolving the typed text — typing is what filters the list, so the two can't disagree. Since the palette holds the only ways out (`/back`, `/exit`), it is live in `mn open` too, just masked down to those two.
+
+The palette deliberately mirrors the path-completion dropdown's contract (`↑`/`↓` highlight, `Tab` accepts) so the two overlays feel like one mechanism.
 
 Every text field that accepts a filesystem path (new app, add link, edit link) wraps a `PathSuggest`: it feeds each keypress to the completion dropdown before its own handling, so `↑`/`↓` move the highlight, `Tab` completes it, and `Esc` closes the list without leaving the field. `Enter` only accepts a suggestion once the highlight has been moved by hand — otherwise it submits what was typed, so a path that happens to prefix-match something is never hijacked on the way out. See `pathcomp.c` for the scanning itself.
 
@@ -102,7 +108,18 @@ Backs the completion dropdown in every workspace field that takes a filesystem p
 The engine is stateless between keystrokes; `picker.c` owns the highlight, the dismissal state, and the rendering.
 
 ### `workspace.c` — Workspace Store
-Reads and writes `workspaces.json` (via `cJSON`). A workspace is a named list of entries, each an `app` (either `code`/`cursor`, or a full path to an executable) plus optional `targets` (URLs or file paths). Functions: `workspace_create()`, `workspace_add_entry()`, `workspace_add_entry_with_targets()`, `workspace_remove()`, `workspace_load_all()`, `workspace_save_all()`.
+Reads and writes `workspaces.json` (via `cJSON`). A workspace is a named list of entries, each an `app` (either `code`/`cursor`, or a full path to an executable) plus optional `targets` (URLs or file paths), plus the `folder` it is filed under (`""` = top level). Functions: `workspace_create()`, `workspace_add_entry()`, `workspace_add_entry_with_targets()`, `workspace_remove()`, `workspace_load_all()`, `workspace_save_all()`, and `workspace_store_load()` / `workspace_store_save()` for the whole document (workspaces **and** folders) at once.
+
+The file has two shapes. v1 was a bare array of workspaces; v2 is an object carrying the folder registry alongside them:
+
+```json
+{ "version": 2, "folders": ["NUSY4S1", "NUSY4S1/CS2030S"], "workspaces": [ ... ] }
+```
+
+Reading accepts both and writing always emits v2, so there is no upgrade step — the same read-both/write-new approach the singular `target` → `targets` change used. Folders are registered explicitly rather than inferred from the workspaces' paths, because a folder is created *before* anything is moved into it and an empty one still has to survive a save. Note that `workspace_save_all()` rewrites the whole document, so it re-reads the folders from disk and re-emits them rather than dropping them.
+
+### `wstree.c` — Workspace Folder Tree
+Pure path arithmetic over the folder registry and the workspaces filed into it — no terminal, no I/O, so it can be reasoned about (and sanitised) on its own. A folder is identified by its full `/`-separated path, with every ancestor registered in its own right, which makes existence a string compare and a move/rename a prefix rewrite (`wstree_move()`, `wstree_rename()`). `wstree_remove()` reparents a folder's children to its parent rather than deleting them, and refuses outright if a lifted child would collide with a name already there. `wstree_build_rows()` flattens one level into the rows `picker.c` draws — folders first, then workspaces, each alphabetical — rebuilt on every keystroke rather than cached.
 
 ### `ingest.c` — Ingestor
 Detects file extension, delegates to the correct parser, then writes the resulting plain text into `~/.mnemosyne/index/docs/<sha256>.txt`, updates `manifest.json`, and feeds the parsed text into the inverted index. To avoid rewriting `inverted.bin` once per file in a bulk add, `ingest_path()` loads the index once at the start, accumulates additions in memory across the whole directory walk via the private `ingest_file_impl()`, and saves once at the end.
@@ -198,6 +215,8 @@ Mnemosyne/
 │   ├── picker.h
 │   ├── pathcomp.c
 │   ├── pathcomp.h
+│   ├── wstree.c
+│   ├── wstree.h
 │   ├── workspace.c
 │   ├── workspace.h
 │   ├── types.h

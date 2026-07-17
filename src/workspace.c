@@ -74,6 +74,45 @@ static cJSON *load_ws_json(void) {
     return root;
 }
 
+/* ── Document shape ─────────────────────────────────────────────────────────
+   v1 was a bare array of workspaces. v2 is an object carrying the folder
+   registry alongside them:
+
+     { "version": 2, "folders": ["NUSY4S1", ...], "workspaces": [ ... ] }
+
+   Reading tolerates both and writing always produces v2 — the same read-both,
+   write-new migration the singular "target" → "targets" change used, so there is
+   no upgrade step to run. */
+
+#define WS_SCHEMA_VERSION 2
+
+/* Loads the document normalised to the v2 shape, so no caller has to know which
+   version is on disk: a legacy array is wrapped (folders empty), and a v2 object
+   is guaranteed to have both members as arrays even if hand-edited. */
+static cJSON *load_ws_doc(void) {
+    cJSON *root = load_ws_json();
+    if (root == NULL) return NULL;
+
+    if (cJSON_IsArray(root)) {
+        cJSON *doc = cJSON_CreateObject();
+        if (doc == NULL) { cJSON_Delete(root); return NULL; }
+        cJSON_AddNumberToObject(doc, "version", WS_SCHEMA_VERSION);
+        cJSON_AddItemToObject(doc, "folders", cJSON_CreateArray());
+        cJSON_AddItemToObject(doc, "workspaces", root);   /* doc owns it now */
+        return doc;
+    }
+
+    if (!cJSON_IsArray(cJSON_GetObjectItem(root, "workspaces"))) {
+        cJSON_DeleteItemFromObject(root, "workspaces");
+        cJSON_AddItemToObject(root, "workspaces", cJSON_CreateArray());
+    }
+    if (!cJSON_IsArray(cJSON_GetObjectItem(root, "folders"))) {
+        cJSON_DeleteItemFromObject(root, "folders");
+        cJSON_AddItemToObject(root, "folders", cJSON_CreateArray());
+    }
+    return root;
+}
+
 static int save_ws_json(cJSON *root) {
     char path[4096];
     workspace_path(path, sizeof(path));
@@ -92,20 +131,27 @@ static int save_ws_json(cJSON *root) {
 }
 
 Workspace *workspace_load_all(int *count) {
-    cJSON *root = load_ws_json();
-    if (root == NULL) { *count = 0; return NULL; }
+    cJSON *doc = load_ws_doc();
+    if (doc == NULL) { *count = 0; return NULL; }
+    cJSON *root = cJSON_GetObjectItem(doc, "workspaces");
 
     int n = cJSON_GetArraySize(root);
     Workspace *ws = malloc(n * sizeof(Workspace));
-    if (ws == NULL) { cJSON_Delete(root); *count = 0; return NULL; }
+    if (ws == NULL) { cJSON_Delete(doc); *count = 0; return NULL; }
 
     for (int i = 0; i < n; i++) {
         cJSON *obj  = cJSON_GetArrayItem(root, i);
         cJSON *name = cJSON_GetObjectItem(obj, "name");
         cJSON *ents = cJSON_GetObjectItem(obj, "entries");
+        cJSON *fold = cJSON_GetObjectItem(obj, "folder");
 
         strncpy(ws[i].name, name ? name->valuestring : "", WORKSPACE_NAME_MAX - 1);
         ws[i].name[WORKSPACE_NAME_MAX - 1] = '\0';
+
+        /* malloc leaves this garbage, and a v1 workspace has no folder at all. */
+        strncpy(ws[i].folder, (fold && fold->valuestring) ? fold->valuestring : "",
+                WORKSPACE_FOLDER_MAX - 1);
+        ws[i].folder[WORKSPACE_FOLDER_MAX - 1] = '\0';
 
         ws[i].entry_count = 0;
         if (ents && cJSON_IsArray(ents)) {
@@ -153,9 +199,29 @@ Workspace *workspace_load_all(int *count) {
         }
     }
 
-    cJSON_Delete(root);
+    cJSON_Delete(doc);
     *count = n;
     return ws;
+}
+
+int workspace_load_folders(FolderList *out) {
+    memset(out, 0, sizeof(*out));
+    cJSON *doc = load_ws_doc();
+    if (doc == NULL) return -1;
+
+    cJSON *arr = cJSON_GetObjectItem(doc, "folders");
+    int n = cJSON_GetArraySize(arr);
+    for (int i = 0; i < n; i++) {
+        cJSON *p = cJSON_GetArrayItem(arr, i);
+        if (p && p->valuestring && p->valuestring[0])
+            targetlist_push(&out->paths, &out->cap, &out->count, p->valuestring);
+    }
+    cJSON_Delete(doc);
+    return 0;
+}
+
+void workspace_free_folders(FolderList *f) {
+    targetlist_free(&f->paths, &f->cap, &f->count);
 }
 
 void workspace_free_all(Workspace *ws, int count) {
@@ -168,14 +234,28 @@ void workspace_free_all(Workspace *ws, int count) {
     free(ws);
 }
 
-int workspace_save_all(Workspace *ws, int count) {
+int workspace_save_all_with_folders(Workspace *ws, int count, const FolderList *f) {
+    cJSON *doc = cJSON_CreateObject();
+    if (doc == NULL) return -3;
+    cJSON_AddNumberToObject(doc, "version", WS_SCHEMA_VERSION);
+
+    cJSON *folders = cJSON_CreateArray();
+    if (f != NULL)
+        for (int i = 0; i < f->count; i++)
+            cJSON_AddItemToArray(folders, cJSON_CreateString(f->paths[i]));
+    cJSON_AddItemToObject(doc, "folders", folders);
+
     cJSON *root = cJSON_CreateArray();
-    if (root == NULL) return -3;
+    if (root == NULL) { cJSON_Delete(doc); return -3; }
+    cJSON_AddItemToObject(doc, "workspaces", root);
 
     for (int i = 0; i < count; i++) {
         cJSON *obj  = cJSON_CreateObject();
         cJSON *ents = cJSON_CreateArray();
         cJSON_AddStringToObject(obj, "name", ws[i].name);
+        /* omitted at root, the way an empty layout is */
+        if (ws[i].folder[0])
+            cJSON_AddStringToObject(obj, "folder", ws[i].folder);
         for (int j = 0; j < ws[i].entry_count; j++) {
             cJSON *e    = cJSON_CreateObject();
             cJSON *tgts = cJSON_CreateArray();
@@ -191,81 +271,15 @@ int workspace_save_all(Workspace *ws, int count) {
         cJSON_AddItemToArray(root, obj);
     }
 
-    int rc = save_ws_json(root);
-    cJSON_Delete(root);
+    int rc = save_ws_json(doc);
+    cJSON_Delete(doc);
     return rc;
-}
-
-int workspace_create(const char *name) {
-    cJSON *root = load_ws_json();
-    if (root == NULL) return -2;
-
-    int n = cJSON_GetArraySize(root);
-    for (int i = 0; i < n; i++) {
-        cJSON *obj  = cJSON_GetArrayItem(root, i);
-        cJSON *nm   = cJSON_GetObjectItem(obj, "name");
-        if (nm && strcmp(nm->valuestring, name) == 0) {
-            cJSON_Delete(root);
-            return -1;
-        }
-    }
-
-    cJSON *obj  = cJSON_CreateObject();
-    cJSON *ents = cJSON_CreateArray();
-    cJSON_AddStringToObject(obj, "name", name);
-    cJSON_AddItemToObject(obj, "entries", ents);
-    cJSON_AddItemToArray(root, obj);
-
-    int rc = save_ws_json(root);
-    cJSON_Delete(root);
-    return rc;
-}
-
-int workspace_add_entry_with_targets(const char *name, const char *app,
-                                     const char targets[][WORKSPACE_TARGET_MAX],
-                                     int target_count) {
-    int count;
-    Workspace *ws = workspace_load_all(&count);
-    if (ws == NULL) return -3;
-
-    int idx = -1;
-    for (int i = 0; i < count; i++) {
-        if (strcmp(ws[i].name, name) == 0) { idx = i; break; }
-    }
-    if (idx == -1) { workspace_free_all(ws, count); return -1; }
-    if (ws[idx].entry_count >= WORKSPACE_ENTRIES_MAX) { workspace_free_all(ws, count); return -2; }
-
-    int j = ws[idx].entry_count;
-    WorkspaceEntry *en = &ws[idx].entries[j];
-    strncpy(en->app, app, WORKSPACE_APP_MAX - 1);
-    en->app[WORKSPACE_APP_MAX - 1] = '\0';
-    /* fresh slot beyond the loaded count → init before pushing. */
-    en->targets      = NULL;
-    en->target_count = 0;
-    en->target_cap   = 0;
-    en->layout[0]    = '\0';
-    for (int k = 0; k < target_count; k++)
-        targetlist_push(&en->targets, &en->target_cap, &en->target_count, targets[k]);
-    ws[idx].entry_count++;
-
-    int rc = workspace_save_all(ws, count);
-    workspace_free_all(ws, count);
-    return rc;
-}
-
-int workspace_add_entry(const char *name, const char *app, const char *target) {
-    if (target == NULL || target[0] == '\0') {
-        return workspace_add_entry_with_targets(name, app, NULL, 0);
-    }
-    char single[1][WORKSPACE_TARGET_MAX];
-    strncpy(single[0], target, WORKSPACE_TARGET_MAX - 1);
-    single[0][WORKSPACE_TARGET_MAX - 1] = '\0';
-    return workspace_add_entry_with_targets(name, app, single, 1);
 }
 
 int workspace_remove(const char *name) {
-    cJSON *root = load_ws_json();
-    if (root == NULL) return -2;
+    cJSON *doc = load_ws_doc();
+    if (doc == NULL) return -2;
+    cJSON *root = cJSON_GetObjectItem(doc, "workspaces");
 
     int n = cJSON_GetArraySize(root);
     int found = 0;
@@ -279,8 +293,56 @@ int workspace_remove(const char *name) {
         }
     }
 
-    if (!found) { cJSON_Delete(root); return -1; }
-    int rc = save_ws_json(root);
-    cJSON_Delete(root);
+    if (!found) { cJSON_Delete(doc); return -1; }
+    int rc = save_ws_json(doc);
+    cJSON_Delete(doc);
     return rc;
+}
+
+/* ── Store ─────────────────────────────────────────────────────────────────
+   The two halves are loaded and saved together so a folder edit and a workspace
+   edit made in the same `mn open edit` session commit as one write. */
+
+int workspace_store_load(WorkspaceStore *st) {
+    memset(st, 0, sizeof(*st));
+    st->ws = workspace_load_all(&st->ws_count);
+    if (st->ws == NULL && st->ws_count == 0) {
+        /* Missing/malformed file: load_all already reported it. An empty store
+           is still usable — folders just have nothing to hold yet. */
+        return -1;
+    }
+    workspace_load_folders(&st->folders);
+    return 0;
+}
+
+int workspace_store_save(const WorkspaceStore *st) {
+    return workspace_save_all_with_folders(st->ws, st->ws_count, &st->folders);
+}
+
+/* The array is grown one slot at a time rather than doubled: unlike the target
+   lists, an add here is a person typing a workspace name, so the realloc is never
+   on a hot path and an exact-sized array keeps workspace_store_free simple. */
+int workspace_store_add(WorkspaceStore *st, const char *name, const char *folder) {
+    for (int i = 0; i < st->ws_count; i++)
+        if (strcmp(st->ws[i].name, name) == 0) return -1;
+
+    Workspace *p = realloc(st->ws, (size_t)(st->ws_count + 1) * sizeof(Workspace));
+    if (p == NULL) return -2;
+    st->ws = p;
+
+    /* Zeroed, so entry_count is 0 and every entry's targets pointer is NULL —
+       workspace_free_all walks entries up to entry_count only, but a later
+       targetlist_push into a fresh slot needs the NULL/0/0 start. */
+    Workspace *w = &st->ws[st->ws_count];
+    memset(w, 0, sizeof(*w));
+    snprintf(w->name,   sizeof(w->name),   "%s", name);
+    snprintf(w->folder, sizeof(w->folder), "%s", folder);
+    return st->ws_count++;
+}
+
+void workspace_store_free(WorkspaceStore *st) {
+    workspace_free_all(st->ws, st->ws_count);
+    workspace_free_folders(&st->folders);
+    st->ws = NULL;
+    st->ws_count = 0;
 }

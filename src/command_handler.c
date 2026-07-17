@@ -29,7 +29,6 @@
 #include "workspace.h"
 #include "app_resolve.h"
 #include "app_launch.h"
-#include "app_enum.h"
 #include "tokenizer.h"
 #include "theme.h"
 
@@ -489,29 +488,23 @@ static void launch_workspace(const Workspace *ws) {
 }
 
 static void cmd_open_run(void) {
-    int count;
-    Workspace *ws = workspace_load_all(&count);
-    if (!ws || count == 0) {
+    WorkspaceStore st;
+    workspace_store_load(&st);
+    if (st.ws_count == 0) {
         ui_info("No workspaces yet.");
-        ui_hint("Create one with: mn open create <name>");
-        workspace_free_all(ws, count);
+        ui_hint("Make one with: mn open edit, then /create or /snap");
+        workspace_store_free(&st);
         return;
     }
-    int chosen = run_workspace_picker(ws, count, "Open a workspace", NULL);
+    /* Browse only: folders are organised in `mn open edit`, so nothing here can
+       write to the store. */
+    char cwd[WORKSPACE_FOLDER_MAX] = "";
+    int chosen = run_workspace_browser(&st, "Open a workspace", 0, NULL,
+                                       cwd, sizeof(cwd));
     printf(ANSI_CLEAR ANSI_RESET);
     if (chosen != -1)
-        launch_workspace(&ws[chosen]);
-    workspace_free_all(ws, count);
-}
-
-static void cmd_open_create(const char *name) {
-    int rc = workspace_create(name);
-    if (rc == 0)
-        ui_ok("Workspace '%s' created.", name);
-    else if (rc == -1)
-        ui_err("workspace '%s' already exists", name);
-    else
-        ui_err("failed to create workspace");
+        launch_workspace(&st.ws[chosen]);
+    workspace_store_free(&st);
 }
 
 /* Frees the heap list each WsEditorApp owns, then the array (over full capacity;
@@ -523,39 +516,20 @@ static void free_editor_apps(WsEditorApp *apps, int cap) {
     free(apps);
 }
 
-/* Frees each AppLinks' backing list, then the array. */
-static void free_app_links(AppLinks *links, int n) {
-    if (links == NULL) return;
-    for (int i = 0; i < n; i++)
-        targetlist_free(&links[i].items, &links[i].cap, &links[i].count);
-    free(links);
-}
-
-static void cmd_open_edit(void) {
-    int count;
-    Workspace *ws = workspace_load_all(&count);
-    if (!ws || count == 0) {
-        ui_info("No workspaces yet.");
-        ui_hint("Create one with: mn open create <name>");
-        workspace_free_all(ws, count);
-        return;
-    }
-
-    /* Step 1: pick workspace */
-    int ws_idx = run_workspace_picker(ws, count, "Edit which workspace?", NULL);
-    if (ws_idx == -1) {
-        printf(ANSI_CLEAR ANSI_RESET); ui_info("Cancelled.");
-        workspace_free_all(ws, count);
-        return;
-    }
+/* Edits one workspace: builds the editor state, runs the editor, and commits if
+   it saved. Returns the editor's WSEDIT_* outcome, so the caller can tell /back
+   (return to the browser) from /save and /exit (both done). */
+static int edit_one_workspace(WorkspaceStore *st, int ws_idx) {
+    Workspace *ws = st->ws;
+    int count = st->ws_count;
 
     /* Step 2: build workspace editor state from existing entries, one row per entry.
        calloc zeroes every slot, so unused link lists start as {NULL,0,0}. */
     WsEditorApp *editor_apps = calloc(WORKSPACE_ENTRIES_MAX, sizeof(WsEditorApp));
     if (!editor_apps) {
+        printf(ANSI_CLEAR ANSI_RESET);
         ui_err("out of memory");
-        workspace_free_all(ws, count);
-        return;
+        return WSEDIT_EXIT;
     }
     int editor_count = 0;
 
@@ -574,9 +548,10 @@ static void cmd_open_edit(void) {
             editlink_push(&e->links, src->targets[k], src->targets[k], k);
     }
 
-    /* Step 3: run the editor — Esc cancels, Enter confirms. ws_name is in/out so a
-       rename inside the editor updates it; taken_names lets the editor reject a
-       rename that collides with another workspace. */
+    /* Step 3: run the editor — /save commits, /back returns to the browser, /exit
+       leaves. ws_name is in/out so a rename inside the editor updates it;
+       taken_names lets the editor reject a rename that collides with another
+       workspace. */
     char ws_name[WORKSPACE_NAME_MAX];
     strncpy(ws_name, chosen_ws->name, sizeof(ws_name) - 1);
     ws_name[sizeof(ws_name) - 1] = '\0';
@@ -588,16 +563,15 @@ static void cmd_open_edit(void) {
             if (i != ws_idx) taken_names[taken_count++] = ws[i].name;
 
     int delete_ws = 0;
-    int confirmed = run_workspace_edit_picker(ws_name, sizeof(ws_name),
-                                              taken_names, taken_count,
-                                              editor_apps, &editor_count,
-                                              WORKSPACE_ENTRIES_MAX, &delete_ws);
+    int outcome = run_workspace_edit_picker(ws_name, sizeof(ws_name),
+                                            taken_names, taken_count,
+                                            editor_apps, &editor_count,
+                                            WORKSPACE_ENTRIES_MAX, &delete_ws);
     free(taken_names);
-    if (!confirmed) {
-        printf(ANSI_CLEAR ANSI_RESET); ui_info("Cancelled.");
+    if (outcome != WSEDIT_SAVE) {
         free_editor_apps(editor_apps, WORKSPACE_ENTRIES_MAX);
-        workspace_free_all(ws, count);
-        return;
+        if (outcome == WSEDIT_EXIT) { printf(ANSI_CLEAR ANSI_RESET); ui_info("Cancelled."); }
+        return outcome;   /* WSEDIT_BACK re-enters the browser; nothing to print */
     }
 
     /* Step 4: commit staged changes. */
@@ -610,8 +584,7 @@ static void cmd_open_edit(void) {
         else
             ui_err("failed to remove workspace '%s'", ws_name);
         free_editor_apps(editor_apps, WORKSPACE_ENTRIES_MAX);
-        workspace_free_all(ws, count);
-        return;
+        return WSEDIT_SAVE;
     }
 
     /* Rebuild the chosen workspace's entries in place from the editor state, then
@@ -644,116 +617,63 @@ static void cmd_open_edit(void) {
     }
     w->entry_count = ec;
 
-    if (workspace_save_all(ws, count) == 0)
+    if (workspace_store_save(st) == 0)
         ui_ok("Saved workspace '%s'.", ws_name);
     else
         ui_err("failed to save workspace '%s'", ws_name);
 
     free_editor_apps(editor_apps, WORKSPACE_ENTRIES_MAX);
-    workspace_free_all(ws, count);
+    return WSEDIT_SAVE;
 }
 
-static void cmd_open_snap(void) {
-    RunningApp apps[WORKSPACE_ENTRIES_MAX];
-    int n = app_enum_running(apps, WORKSPACE_ENTRIES_MAX);
-    if (n < 0) {
-#ifdef __linux__
-        ui_err("snapshot needs 'wmctrl' — install it via your package manager");
-#else
-        ui_err("failed to read running apps on this platform");
-#endif
-        return;
-    }
-    if (n == 0) {
-        ui_info("No running apps detected.");
-        return;
-    }
+static void cmd_open_edit(void) {
+    WorkspaceStore st;
+    workspace_store_load(&st);
+    /* No early return on an empty store: /create and /snap live inside the
+       browser, so an empty store is exactly the state you enter this screen to
+       fix. Bailing out here would leave no way to make the first workspace. */
 
-    const char *labels[WORKSPACE_ENTRIES_MAX];
-    char label_bufs[WORKSPACE_ENTRIES_MAX][256];
-    int selected[WORKSPACE_ENTRIES_MAX];
-    AppLinks *links = calloc(n, sizeof(AppLinks));
-    if (links == NULL) {
-        ui_err("out of memory");
-        return;
-    }
-    for (int i = 0; i < n; i++) {
-        app_display_token(apps[i].app, label_bufs[i], sizeof(label_bufs[i]));
-        labels[i] = label_bufs[i];
-        selected[i] = 1;
-        if (apps[i].target[0] != '\0')
-            targetlist_push(&links[i].items, &links[i].cap,
-                            &links[i].count, apps[i].target);
-    }
-
-    char name[WORKSPACE_NAME_MAX] = {0};
-    int name_taken = 0;
-
-    /* Two-step flow; Esc steps back (and cancels at the review step). */
-    enum { SNAP_REVIEW, SNAP_NAME } state = SNAP_REVIEW;
+    /* Browse and edit alternate until something ends the session: the editor's
+       /back returns here rather than to the terminal, so filing a workspace away
+       and then editing it is one trip through `mn open edit`. cwd lives out here
+       so /back reopens the folder you drilled into, not the top level. */
+    char cwd[WORKSPACE_FOLDER_MAX] = "";
     for (;;) {
-        if (state == SNAP_REVIEW) {
-            if (!run_multiselect_picker("Snapshot running apps",
-                                        "Pick apps; press any key on a green app to add a link.",
-                                        labels, n, selected, links)) {
-                printf(ANSI_CLEAR ANSI_RESET); ui_info("Cancelled.");
-                free_app_links(links, n);
-                return;
-            }
-            int any = 0;
-            for (int i = 0; i < n; i++) any += selected[i];
-            if (!any) {
-                printf(ANSI_CLEAR ANSI_RESET); ui_info("Nothing selected.");
-                free_app_links(links, n);
-                return;
-            }
-            state = SNAP_NAME;
-        } else { /* SNAP_NAME */
-            const char *subtitle = name_taken
-                ? TH_WARN "that name already exists — pick another." TH_RESET
-                : "Name for the new workspace.";
-            if (!run_text_input("Snapshot workspace", subtitle, "Name",
-                                name, sizeof(name), 0, NULL)) {
-                state = SNAP_REVIEW;   /* Esc → back to the checklist */
-                name_taken = 0;
-                continue;
-            }
-            int rc = workspace_create(name);
-            if (rc == -1) { name_taken = 1; continue; }   /* exists → re-prompt */
-            if (rc != 0) {
-                printf(ANSI_CLEAR ANSI_RESET);
-                ui_err("failed to create workspace");
-                free_app_links(links, n);
-                return;
-            }
+        int dirty = 0;
+        int ws_idx = run_workspace_browser(&st, "Edit which workspace?", 1, &dirty,
+                                           cwd, sizeof(cwd));
+
+        /* Folder edits are committed on the way out however the browse ended:
+           creating three folders and then leaving is a session's work, not a
+           cancellation of it. */
+        if (dirty && workspace_store_save(&st) != 0) {
+            printf(ANSI_CLEAR ANSI_RESET);
+            ui_err("failed to save folder changes");
             break;
         }
+
+        if (ws_idx == -1) {   /* /exit */
+            printf(ANSI_CLEAR ANSI_RESET);
+            if (dirty) ui_ok("Folders updated.");
+            else       ui_info("Cancelled.");
+            break;
+        }
+
+        if (edit_one_workspace(&st, ws_idx) != WSEDIT_BACK) break;
     }
 
-    int added = 0;
-    for (int i = 0; i < n; i++) {
-        if (!selected[i]) continue;
-        int rc;
-        if (links[i].count == 0) {
-            rc = workspace_add_entry(name, apps[i].app, "");
-        } else {
-            /* All links for this app instance go into one grouped entry. */
-            rc = workspace_add_entry_with_targets(name, apps[i].app,
-                                                  links[i].items, links[i].count);
-        }
-        if (rc == 0) added++;
-    }
-    free_app_links(links, n);
-    printf(ANSI_CLEAR ANSI_RESET);
-    ui_ok("Created workspace '%s' with %d app%s.",
-          name, added, added == 1 ? "" : "s");
+    workspace_store_free(&st);
 }
 
+/* `mn open` runs a workspace, `mn open edit` organises them, and that is the
+   whole surface. Creating and snapshotting used to be `mn open create <name>` and
+   `mn open snap`, but both make a workspace *somewhere*, and argv has no way to
+   say where: they landed at the root and had to be filed afterwards. They are
+   /create and /snap inside the browser now, where the folder you are looking at
+   is the answer. */
 static void cmd_open(int argc, char *argv[]) {
-    if (argc == 2)                                       { cmd_open_run();           return; }
-    if (argc == 4 && strcmp(argv[2], "create") == 0)     { cmd_open_create(argv[3]); return; }
-    if (argc == 3 && strcmp(argv[2], "edit")   == 0)     { cmd_open_edit();          return; }
-    if (argc == 3 && strcmp(argv[2], "snap")   == 0)     { cmd_open_snap();          return; }
+    if (argc == 2)                                   { cmd_open_run();  return; }
+    if (argc == 3 && strcmp(argv[2], "edit") == 0)   { cmd_open_edit(); return; }
     print_help();
 }
 

@@ -200,10 +200,10 @@ Manages workspaces — named collections of apps, URLs, and paths to launch all 
 **Subcommands**
 
 ```
-mn open                          # interactive picker to choose and launch a workspace
+mn open                          # browse folders/workspaces and launch one
 mn open create <name>            # create a new empty workspace
 mn open snap                     # snapshot the apps you have open into a new workspace
-mn open edit                     # interactive picker to add/remove apps & links in a workspace
+mn open edit                     # add/remove apps & links; organise workspaces into folders
 ```
 
 **Creating and populating a workspace**
@@ -213,20 +213,68 @@ mn open create work
 mn open edit
 ```
 
-`mn open edit` is fully interactive (same picker UI as the rest of the app) and is where you add **and** remove apps and links. First pick which workspace to edit; pressing `Esc` cancels.
+`mn open edit` is fully interactive (same picker UI as the rest of the app) and is where you add **and** remove apps and links, and organise workspaces into folders. First browse to the workspace you want to edit.
 
-Inside the editor you see the workspace's apps, each with its links beneath it. Changes are **staged** — nothing is written until you press `Enter` to save (`Esc` discards everything):
+**How the workspace screens are driven**
 
-- **Add an app** — navigate to `[+ Add a new app]` and type a program name (e.g. `chrome`) or a full path (e.g. `C:\Users\you\AppData\Local\Discord\app-1.0\Discord.exe`, `/Applications/Discord.app`, `/usr/bin/foo`); if that value doesn't exist on this machine you'll get a non-blocking warning. New apps show in **green** with a `+`.
-- **Add a link** — with the cursor on an app, press any printable key to type a URL/path inline. New links show in **green** with a `+`.
-- **Remove an app or a single link** — put the cursor on the app row or on an individual link row and press `Backspace`/`Delete`. An already-saved item is staged for removal and shown in **red** with a `-` (press `Backspace` again to undo); a not-yet-saved (green) item is simply dropped.
-- **Remove the whole workspace** — navigate to `[- Remove this workspace]` and press `Enter` or `Backspace`; it highlights red while staged and is deleted when you save.
+Both `mn open` and `mn open edit` follow one rule: **arrows move, `Enter` opens what's under the cursor, and everything else is a `/` command.** There are no letter shortcuts and no `Esc` — the ways out are `/back` and `/exit`, so nothing is hidden behind a key you have to already know about.
 
-When typing an app/link, `Backspace` deletes characters and `Esc` cancels that inline edit (it does not exit the editor).
+| Key | Action |
+|---|---|
+| `↑` / `↓` | Move the cursor |
+| `Enter` | Open the selected row (see below) |
+| `1`–`9` | Jump to a numbered row |
+| `/` | Open the command palette |
+
+Type `/` and a field opens under the list with the commands that apply to whatever is selected — a command with nothing to act on isn't offered. It narrows as you type, `Tab` completes the highlighted one, `Enter` runs it, and `Backspace` over the `/` closes the palette. A command's argument can be given inline (`/new-folder NUSY4S1`) or left off, in which case you're prompted for it.
+
+**Organising workspaces into folders**
+
+Once you have more than a handful of workspaces, a flat list stops helping. Both screens browse a folder tree instead: folders are shown in **gold** with a `▸` and an item count, above the workspaces at that level. A breadcrumb (`mn / NUSY4S1 /`) shows where you are, and selecting a folder previews what's inside it. `Enter` on a folder goes into it; `Enter` on a workspace launches it (`mn open`) or edits it (`mn open edit`).
+
+| Command | Where | Action |
+|---|---|---|
+| `/back` | both | Go up one level — the cursor lands on the folder you just left. Not offered at the top level |
+| `/exit` | both | Return to the terminal |
+| `/new-folder [name]` | `mn open edit` | Create a folder at the level you're currently in. Go into a folder first to nest one inside it |
+| `/move` | `mn open edit` | File the selected folder or workspace under another folder (or back at the top level) |
+| `/rename [name]` | `mn open edit` | Rename the selected folder |
+| `/delete` | `mn open edit` | Remove the selected folder |
+
+`mn open` is read-only, so it offers only `/back` and `/exit`.
+
+Folder changes save as you make them, so `/exit` still keeps them — unlike the app/link edits inside a workspace, which stay staged until you `/save`. Deleting a folder never deletes a workspace: everything inside moves up to the parent, and the confirmation says so. Workspace names are unique across the whole tree, so a workspace can be moved between folders without ever being renamed.
+
+New workspaces from `mn open create` and `mn open snap` start at the top level; use `/move` to file them.
+
+**Inside a workspace**
+
+You see the workspace's apps, each with its links beneath it. Changes are **staged** — nothing is written until you `/save`, and `/back` (return to the workspace list) or `/exit` discards them, asking first if anything is staged.
+
+`Enter` opens the row under the cursor:
+
+- On an **app** — a field to add a link to it. Type a URL or path. New links show in **green** with a `+`.
+- On a **link** — its text, to edit in place.
+- On `[+ Add a new app]` — a field for a program name (e.g. `chrome`) or a full path (e.g. `C:\Users\you\AppData\Local\Discord\app-1.0\Discord.exe`, `/Applications/Discord.app`, `/usr/bin/foo`); if that value doesn't exist on this machine you'll get a non-blocking warning. New apps show in **green** with a `+`.
+- On `[~ Rename this workspace]` or `[- Remove this workspace]` — the matching dialog.
+
+Everything else is a command:
+
+| Command | Action |
+|---|---|
+| `/save` | Write the staged changes and return to the terminal |
+| `/back` | Discard staged changes and return to the workspace list |
+| `/exit` | Discard staged changes and return to the terminal |
+| `/remove` | Stage the selected app or link for removal — shown in **red** with a `-`. A not-yet-saved (green) item is simply dropped |
+| `/restore` | Keep an item you staged for removal. Offered in place of `/remove` on a staged row |
+| `/place` | Give the selected app a screen partition |
+| `/reorder` | Lift the selected link; `←`/`→` move it among the app's links and `Enter` puts it down |
+
+When typing in one of the fields above, `Backspace` deletes characters and `Esc` cancels that field (it does not leave the editor).
 
 **Path completion**
 
-Any field that takes a filesystem path — the new-app field, the add-link field, and a link being edited (`e`) — suggests as you type, so paths don't have to be typed out in full. As soon as what you've typed contains a separator (`C:\`, `/`, `~/`), a dropdown lists the matching children of that directory: directories first (cyan, with a trailing separator), then files, with the part you've already typed highlighted in gold.
+Any field that takes a filesystem path — the new-app field, the add-link field, and a link being edited — suggests as you type, so paths don't have to be typed out in full. As soon as what you've typed contains a separator (`C:\`, `/`, `~/`), a dropdown lists the matching children of that directory: directories first (cyan, with a trailing separator), then files, with the part you've already typed highlighted in gold.
 
 | Key | Action |
 |---|---|

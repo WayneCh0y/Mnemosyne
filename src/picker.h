@@ -4,6 +4,7 @@
 #include "search.h"
 #include "index.h"
 #include "workspace.h"
+#include "wstree.h"
 
 #define CURSOR_TOKEN  "▌"
 
@@ -37,7 +38,6 @@
 #define ANSI_APP_HL      "\033[37;44m"
 #define ANSI_LIFT_HL     "\033[1;37;46m"  /* bold white on cyan — lifted/reordering link */
 #define ANSI_EDIT_HL     "\033[1;37;45m"  /* bold white on magenta — link being edited */
-#define ANSI_REN_HL      "\033[30;43m"    /* black on yellow — rename workspace button */
 #define ANSI_REVERSE     "\033[7m"        /* reverse video — highlight block cursor */
 #define ANSI_REVERSE_OFF "\033[27m"
 #define ANSI_ACCENT      "\033[96m"        /* bright cyan — selection bar */
@@ -52,6 +52,19 @@
    would draw the whole dropdown uncoloured. */
 #define ANSI_SILVER    "\033[38;5;250m"           /* frame  — grey  #bcbcbc */
 #define ANSI_VIOLET    "\033[38;5;141m"           /* selected suggestion #af87ff */
+
+/* Workspace folders. The colours above split along a line worth keeping: the
+   8-colour set names actions on a thing (blue app, green add, red delete,
+   magenta edit, yellow rename) while the 256-colour set is structure and chrome
+   (silver frames, violet highlight). A folder is structure, so it takes a
+   256-colour gold — the colour a folder is everywhere else, and one that reads
+   as a container rather than as something staged for a change.
+   It does not compete with the dim yellow of a link: that yellow only ever
+   appears indented inside the expanded app frame, carries a "→", and is dimmed;
+   a folder row is bright, top-level, and carries a "▸". */
+#define ANSI_FOLDER    "\033[38;5;179m"           /* folder row   #d7af5f */
+#define ANSI_FOLDER_HL "\033[38;5;235;48;5;179m"  /* selected folder — dark on gold */
+#define ANSI_CRUMB     "\033[38;5;245m"           /* breadcrumb ancestors #8a8a8a */
 
 int read_key(void);
 /* Generic numbered string-list picker. Returns the chosen index, or -1 (Esc). */
@@ -127,21 +140,38 @@ typedef struct {
     int  is_new;
     int  marked_delete;
     EditLinkList links;
-    char layout[16];        /* screen-partition token ("" = none) chosen via '\' */
+    char layout[16];        /* screen-partition token ("" = none) chosen via /place */
     char orig_layout[16];   /* layout as loaded from disk ("" for a new app) */
 } WsEditorApp;
 
-/* Workspace editor picker for `mn open edit`. Shows existing apps and their links;
-   lets the user add links to existing apps, edit a link's text in place ('e'),
-   reorder links (←/→), rename the workspace, add new (validated) apps, and stage
-   removals of apps/links (Backspace). apps[]/count are in/out: new apps are
-   appended (is_new=1), the links list is filled (new entries have orig_pos=-1),
-   and per-link deleted / marked_delete flags are set.
+/* How run_workspace_edit_picker ended: the user's three ways out (/save, /back,
+   /exit). BACK returns to the workspace browser; EXIT and SAVE both return to the
+   terminal, and only SAVE commits. */
+#define WSEDIT_SAVE   1
+#define WSEDIT_EXIT   0
+#define WSEDIT_BACK (-1)
+
+/* Workspace editor picker for `mn open edit`. Shows existing apps and their links.
+   Driven like the browser: arrows move, Enter opens the row under the cursor (an
+   app → a field to add a link, a link → its text), and everything else is a "/"
+   command — /add, /rename and /delete act on the workspace itself, /append gives
+   the selected app a file, folder or URL (the same field Enter opens, named so it
+   can be found), /remove and /restore stage and unstage a row, /place assigns a
+   screen partition, /reorder lifts a link for ←/→, and /save, /back and /exit are
+   the ways out. The list has no Esc; only the palette does, to close itself
+   without running anything.
+
+   A typed link is checked before it is accepted: a URI is trusted, a path must
+   exist. So must an app named to /add.
+
+   apps[]/count are in/out: new apps are appended (is_new=1), the links list is
+   filled (new entries have orig_pos=-1), and per-link deleted / marked_delete
+   flags are set. Everything is staged — only WSEDIT_SAVE means commit.
    ws_name is an in/out buffer of ws_name_size bytes holding the workspace name; a
    rename updates it in place (the caller persists it). taken_names (length
    taken_count) lists the other workspaces' names so a rename can reject duplicates.
    *delete_workspace is set to 1 if the whole workspace is staged for removal.
-   Returns 1 if confirmed (Enter), 0 if cancelled (Esc). */
+   Returns WSEDIT_SAVE / WSEDIT_BACK / WSEDIT_EXIT. */
 int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                               const char **taken_names, int taken_count,
                               WsEditorApp *apps, int *count, int max,
@@ -149,16 +179,30 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
 int run_search_picker(SearchResult *results, int count);
 int run_list_picker(IndexEntry *entries, int count,
                     const char *title, const char *subtitle);
-/* Workspace picker: lists workspaces, expanding the selected one's apps in a
-   left-rail frame. Returns the chosen index, or -1 (Esc). */
-int run_workspace_picker(Workspace *ws, int count,
-                         const char *title, const char *subtitle);
+/* Workspace browser for `mn open` and step 1 of `mn open edit`. Drills through
+   the folder tree — Enter descends into a folder or chooses a workspace,
+   Backspace goes back up — expanding the selected row in a left-rail frame: a
+   workspace shows its apps, a folder a preview of what it holds.
+
+   The list has no Esc and no Backspace: "/" opens the command palette, which is
+   both how you act on a row and the only way out (/back, /exit). Esc inside the
+   palette closes it again without running anything. `mn open` is read-only and
+   gets just those two ways out; with edit_mode set, /create and /snap (which make
+   a workspace in the folder being shown), /new-folder, /move, /rename and /delete
+   join them, /select ticks rows so one /move can carry several, and st is mutated
+   in place.
+   *dirty is set to 1 if anything changed, so the caller can persist even when the
+   browse itself ends in /exit. dirty may be NULL when edit_mode is 0.
+
+   cwd is an in/out buffer of cwd_size bytes holding the folder being shown ("" =
+   top level): passing back what the last call left means `mn open edit` reopens
+   where the editor's /back came from rather than at the root.
+
+   Returns the chosen workspace's index into st->ws, or -1 (/exit). */
+int run_workspace_browser(WorkspaceStore *st, const char *title,
+                          int edit_mode, int *dirty,
+                          char *cwd, size_t cwd_size);
 /* Strip directory prefix and trailing .exe from app path for a short display name. */
 void ws_display_name(const char *app, char *out, size_t out_size);
-/* Single styled text input box. Returns 1 with out filled, 0 if cancelled (Esc).
-   When allow_empty is set, Enter on an empty value confirms (used as "skip").
-   If prefill is non-NULL/non-empty, the box opens seeded with that text. */
-int run_text_input(const char *title, const char *subtitle, const char *label,
-                   char *out, size_t out_size, int allow_empty, const char *prefill);
 
 #endif
