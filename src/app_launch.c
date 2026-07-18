@@ -6,6 +6,7 @@
 #include "theme.h"
 #include "app_resolve.h"
 #include "workspace.h"
+#include "config.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -15,6 +16,8 @@
 #else
 #include <unistd.h>
 #include <fcntl.h>
+#include <time.h>
+#include <sys/time.h>
 #endif
 
 /* Case-insensitive compare of the first n bytes (ASCII only). */
@@ -876,84 +879,253 @@ static int launch_skim_pdf(const char *path, int page) {
     return system(cmd);
 }
 
+/* ── Preview "go to page" state machine ──────────────────────────────────────
+   Preview has no CLI page-jump and its AppleScript dictionary has no page
+   entity, so the only way in is to drive its GUI: open the file, then send the
+   ⌥⌘G "Go to Page…" shortcut and type the number. That path is inherently
+   fragile (it depends on focus, permissions and a sheet appearing), so rather
+   than fire one monolithic AppleScript blindly we run it as an explicit state
+   machine — one discrete, observable step per state.
+
+   Two properties make it reliable where the old version was not:
+
+     1. It runs SYNCHRONOUSLY, in mn's own process, and returns only once the
+        jump has succeeded or provably failed. The caller (handle_enter) only
+        closes the terminal *after* we return, so the keystrokes no longer race
+        the terminal teardown, and they fire while the Accessibility/Automation
+        context that authorises them is still intact — the very context
+        mac_place_window relies on and which `mn open` proves is present.
+
+     2. Every transition is logged to <data>/preview-jump.log with the state,
+        result and elapsed time, so a stall is attributable to an exact state
+        (window wait / focus / sheet / typing) instead of guessed at.
+
+   All scripting targets "System Events" only — never `tell application
+   "Preview"` — so we need the System Events Automation grant the workspace
+   flow already uses, not a separate Preview one whose prompt could never
+   surface. If Accessibility is missing every state reports "perm" and we stop;
+   the target page is still printed by the caller as a manual fallback. */
+
+typedef enum {
+    PJ_LAUNCH,       /* open the file in Preview */
+    PJ_WAIT_WINDOW,  /* poll until Preview owns a window */
+    PJ_FOCUS,        /* bring Preview frontmost so keystrokes land on it */
+    PJ_OPEN_SHEET,   /* send ⌥⌘G and wait for the Go-to-Page sheet */
+    PJ_ENTER_PAGE,   /* type the page number and press Return */
+    PJ_DONE,         /* terminal: success */
+    PJ_FAILED,       /* terminal: gave up (see the log for which state) */
+} PjState;
+
+/* Every state's osascript prints exactly one of these tokens on stdout. */
+typedef enum { PJ_R_OK, PJ_R_PERM, PJ_R_TIMEOUT, PJ_R_ERR } PjResult;
+
+static const char *pj_state_name(PjState s) {
+    switch (s) {
+        case PJ_LAUNCH:      return "launch";
+        case PJ_WAIT_WINDOW: return "wait-window";
+        case PJ_FOCUS:       return "focus";
+        case PJ_OPEN_SHEET:  return "open-sheet";
+        case PJ_ENTER_PAGE:  return "enter-page";
+        case PJ_DONE:        return "done";
+        case PJ_FAILED:      return "failed";
+    }
+    return "?";
+}
+
+static long pj_now_ms(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (long)tv.tv_sec * 1000L + tv.tv_usec / 1000L;
+}
+
+/* <data>/preview-jump.log, resolved once. Empty string if we can't place it. */
+static const char *pj_log_path(void) {
+    static char path[1200];
+    static int built = 0;
+    if (!built) {
+        built = 1;
+        const char *base = get_data_path();
+        if (base == NULL || base[0] == '\0') {
+            const char *home = getenv("HOME");
+            if (home == NULL || home[0] == '\0') { path[0] = '\0'; return path; }
+            snprintf(path, sizeof(path), "%s/.mnemosyne/preview-jump.log", home);
+        } else {
+            snprintf(path, sizeof(path), "%s/preview-jump.log", base);
+        }
+    }
+    return path;
+}
+
+/* Appends one transition line. Best-effort: if the log can't be opened the jump
+   still runs, just unobserved. */
+static void pj_log(PjState st, const char *result, long ms, const char *detail) {
+    const char *p = pj_log_path();
+    if (p[0] == '\0') return;
+    FILE *f = fopen(p, "a");
+    if (f == NULL) return;
+    time_t now = time(NULL);
+    struct tm tmv;
+    localtime_r(&now, &tmv);
+    char ts[32];
+    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tmv);
+    fprintf(f, "%s | %-11s | %-7s | %5ldms | %s\n",
+            ts, pj_state_name(st), result, ms, detail ? detail : "");
+    fclose(f);
+}
+
+/* Runs one state's osascript, classifies its single-token output, logs the
+   transition and returns the result. */
+static PjResult pj_run(PjState st, const char *cmd, const char *detail) {
+    long t0 = pj_now_ms();
+    FILE *fp = popen(cmd, "r");
+    if (fp == NULL) { pj_log(st, "err", pj_now_ms() - t0, detail); return PJ_R_ERR; }
+
+    char buf[64] = {0};
+    char *got = fgets(buf, sizeof(buf), fp);
+    pclose(fp);
+    buf[strcspn(buf, "\r\n")] = '\0';
+
+    PjResult r;
+    if      (got == NULL || buf[0] == '\0') r = PJ_R_ERR;
+    else if (strcmp(buf, "ok")      == 0)   r = PJ_R_OK;
+    else if (strcmp(buf, "perm")    == 0)   r = PJ_R_PERM;
+    else if (strcmp(buf, "timeout") == 0)   r = PJ_R_TIMEOUT;
+    else                                    r = PJ_R_ERR;
+
+    pj_log(st, buf[0] ? buf : "(none)", pj_now_ms() - t0, detail);
+    return r;
+}
+
+/* -25211 is what System Events raises for a denied terminal; -1719/-1743 cover
+   the other refusal shapes. Every state's script maps these to "perm". */
+#define PJ_PERM_GUARD \
+    " -e 'on error number errNum'" \
+    " -e 'if errNum is -25211 or errNum is -1719 or errNum is -1743 then return \"perm\"'"
+
 static int launch_preview_pdf(const char *path, int page) {
-    /* Preview has no CLI page-jump and its AppleScript dictionary has no page
-       entity. We open the file, then send the ⌥⌘G "Go to Page…" shortcut via
-       System Events. Requires Accessibility for the terminal plus Automation
-       for System Events — the same permissions the workspace placement flow
-       relies on ([mac_place_window]), so a user for whom `mn open` works
-       already has everything needed. We deliberately avoid a `tell application
-       "Preview"` block so we don't require the *separate* Automation entry for
-       Preview, whose prompt would never surface (detached osascript). If
-       Accessibility is missing the keystrokes are dropped silently, leaving
-       the PDF open at page 1 — the target page is still printed to the
-       terminal as a manual fallback. */
+    char detail[WORKSPACE_TARGET_MAX + 64];
+    snprintf(detail, sizeof(detail), "target=%s page=%d", path, page);
+    pj_log(PJ_LAUNCH, "begin", 0, detail);
+
+    /* PJ_LAUNCH — hand the file to Preview. `open` returns before Preview has
+       finished loading; PJ_WAIT_WINDOW absorbs that. */
     char open_cmd[WORKSPACE_TARGET_MAX + 32];
     snprintf(open_cmd, sizeof(open_cmd), "open -a Preview \"%s\"", path);
-    system(open_cmd);
-    if (page <= 1) return 0;
+    long t0 = pj_now_ms();
+    int rc = system(open_cmd);
+    pj_log(PJ_LAUNCH, rc == 0 ? "ok" : "err", pj_now_ms() - t0, "open -a Preview");
+    if (page <= 1) { pj_log(PJ_DONE, "ok", 0, "page<=1, no jump"); return 0; }
 
-    /* Detach the osascript into its own session with fork + setsid instead of
-       backgrounding via `system("... &")`. close_terminal closes the Terminal
-       window ~0.4s after we return; that closure destroys the PTY and delivers
-       SIGHUP to every process still attached to it. `nohup` alone proved to be
-       unreliable here — the osascript kept dying before it could send the
-       keystroke. setsid drops the controlling terminal entirely, so no SIGHUP
-       is ever delivered. Same mechanism close_terminal itself uses on macOS
-       for its own delayed helper, and it's proven to survive on the same
-       machines where this path was failing.
-
-       The AppleScript itself polls for Preview's window and the Go-to-Page
-       sheet rather than using fixed sleeps — cold starts and state restoration
-       make guessed timings unreliable. All targeted at "System Events" only,
-       no direct Preview scripting, so we don't need a Preview Automation
-       grant on top of the System Events one. */
-    char script[1024];
-    snprintf(script, sizeof(script),
+    /* Per-state scripts. Each ends by printing exactly one token. */
+    const char *s_wait_window =
         "osascript"
         " -e 'tell application \"System Events\"'"
-        " -e 'repeat 40 times'"                  /* ~6s to wait for the window */
+        " -e 'repeat 40 times'"                  /* ~6s for the window */
         " -e 'try'"
-        " -e 'if (count of windows of application process \"Preview\") > 0 then exit repeat'"
+        " -e 'if (count of windows of application process \"Preview\") > 0 then return \"ok\"'"
+        PJ_PERM_GUARD
         " -e 'end try'"
         " -e 'delay 0.15'"
         " -e 'end repeat'"
-        /* Force Preview frontmost before the keystroke: `open -a` activates it
-           but close_terminal is closing the Terminal window in parallel, so
-           focus can land elsewhere at the moment the shortcut fires. Staying
-           under System Events avoids a separate Preview Automation grant. */
-        " -e 'repeat 40 times'"                  /* ~4s for Preview to take focus */
+        " -e 'return \"timeout\"'"
+        " -e 'end tell' 2>/dev/null";
+
+    const char *s_focus =
+        "osascript"
+        " -e 'tell application \"System Events\"'"
+        " -e 'repeat 40 times'"                  /* ~4s to take focus */
         " -e 'try'"
         " -e 'set frontmost of application process \"Preview\" to true'"
-        " -e 'if frontmost of application process \"Preview\" then exit repeat'"
+        " -e 'if frontmost of application process \"Preview\" then return \"ok\"'"
+        PJ_PERM_GUARD
         " -e 'end try'"
         " -e 'delay 0.1'"
         " -e 'end repeat'"
-        " -e 'keystroke \"g\" using {option down, command down}'"
-        " -e 'repeat 20 times'"                  /* ~2s for the sheet to appear */
+        " -e 'return \"timeout\"'"
+        " -e 'end tell' 2>/dev/null";
+
+    const char *s_open_sheet =
+        "osascript"
+        " -e 'tell application \"System Events\"'"
         " -e 'try'"
-        " -e 'if exists (sheet 1 of window 1 of application process \"Preview\") then exit repeat'"
+        " -e 'keystroke \"g\" using {option down, command down}'"
+        PJ_PERM_GUARD
+        " -e 'end try'"
+        " -e 'repeat 20 times'"                  /* ~2s for the sheet */
+        " -e 'try'"
+        " -e 'if exists (sheet 1 of window 1 of application process \"Preview\") then return \"ok\"'"
         " -e 'end try'"
         " -e 'delay 0.1'"
         " -e 'end repeat'"
+        " -e 'return \"timeout\"'"
+        " -e 'end tell' 2>/dev/null";
+
+    char s_enter_page[512];
+    snprintf(s_enter_page, sizeof(s_enter_page),
+        "osascript"
+        " -e 'tell application \"System Events\"'"
+        " -e 'try'"
         " -e 'keystroke \"%d\"'"
         " -e 'delay 0.05'"
         " -e 'key code 36'"                      /* Return */
-        " -e 'end tell'",
+        PJ_PERM_GUARD
+        " -e 'end try'"
+        " -e 'return \"ok\"'"
+        " -e 'end tell' 2>/dev/null",
         page);
 
-    pid_t helper = fork();
-    if (helper == 0) {
-        setsid();
-        int devnull = open("/dev/null", O_RDWR);
-        if (devnull >= 0) {
-            dup2(devnull, STDIN_FILENO);
-            dup2(devnull, STDOUT_FILENO);
-            dup2(devnull, STDERR_FILENO);
-            if (devnull > STDERR_FILENO) close(devnull);
+    PjState st = PJ_WAIT_WINDOW;
+    int perm = 0;
+    while (st != PJ_DONE && st != PJ_FAILED) {
+        switch (st) {
+        case PJ_WAIT_WINDOW: {
+            /* No window ever means nothing to drive — a hard failure. */
+            PjResult r = pj_run(st, s_wait_window, NULL);
+            if      (r == PJ_R_OK)   st = PJ_FOCUS;
+            else                     { perm = (r == PJ_R_PERM); st = PJ_FAILED; }
+            break;
         }
-        execl("/bin/sh", "sh", "-c", script, (char *)NULL);
-        _exit(127);
+        case PJ_FOCUS: {
+            /* Best-effort: a focus timeout still lets us try the shortcut —
+               PJ_OPEN_SHEET is the real test of whether keystrokes land. Only a
+               permission denial short-circuits here. */
+            PjResult r = pj_run(st, s_focus, NULL);
+            if (r == PJ_R_PERM)      { perm = 1; st = PJ_FAILED; }
+            else                     st = PJ_OPEN_SHEET;
+            break;
+        }
+        case PJ_OPEN_SHEET: {
+            /* If the sheet never appears the shortcut didn't register; stop
+               rather than type the page number into nothing (the old bug). */
+            PjResult r = pj_run(st, s_open_sheet, NULL);
+            if      (r == PJ_R_OK)   st = PJ_ENTER_PAGE;
+            else                     { perm = (r == PJ_R_PERM); st = PJ_FAILED; }
+            break;
+        }
+        case PJ_ENTER_PAGE: {
+            PjResult r = pj_run(st, s_enter_page, NULL);
+            if      (r == PJ_R_OK)   st = PJ_DONE;
+            else                     { perm = (r == PJ_R_PERM); st = PJ_FAILED; }
+            break;
+        }
+        default:
+            st = PJ_FAILED;
+            break;
+        }
+    }
+
+    if (st == PJ_FAILED) {
+        if (perm) {
+            static int warned = 0;
+            if (!warned) {
+                warned = 1;
+                fprintf(stderr,
+                    "note: Mnemosyne can't jump Preview to a page until you grant "
+                    "Accessibility access to your terminal (System Settings > "
+                    "Privacy & Security > Accessibility).\n");
+            }
+        }
+        return -1;   /* the target page was already printed as a manual fallback */
     }
     return 0;
 }
