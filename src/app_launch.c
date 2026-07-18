@@ -918,6 +918,17 @@ static int launch_preview_pdf(const char *path, int page) {
         " -e 'end try'"
         " -e 'delay 0.15'"
         " -e 'end repeat'"
+        /* Force Preview frontmost before the keystroke: `open -a` activates it
+           but close_terminal is closing the Terminal window in parallel, so
+           focus can land elsewhere at the moment the shortcut fires. Staying
+           under System Events avoids a separate Preview Automation grant. */
+        " -e 'repeat 40 times'"                  /* ~4s for Preview to take focus */
+        " -e 'try'"
+        " -e 'set frontmost of application process \"Preview\" to true'"
+        " -e 'if frontmost of application process \"Preview\" then exit repeat'"
+        " -e 'end try'"
+        " -e 'delay 0.1'"
+        " -e 'end repeat'"
         " -e 'keystroke \"g\" using {option down, command down}'"
         " -e 'repeat 20 times'"                  /* ~2s for the sheet to appear */
         " -e 'try'"
