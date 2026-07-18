@@ -296,9 +296,31 @@ static void render_suggestions(const PathSuggest *s) {
    loop owns cursor hide/show and key handling. Returns the chosen index, or -1. */
 typedef void (*PickerRender)(void *ctx, int selected, int num_input, int show_error);
 
+/* ── Alternate screen buffer ─────────────────────────────────────────────────
+   All the full-screen pickers clear-and-redraw on every keystroke. On the main
+   buffer, a frame taller than the window scrolls the previous frame off the top
+   into scrollback instead of erasing it, so each keypress leaves a stacked copy
+   behind. The alt buffer has no scrollback: too-tall frames clip, nothing
+   accumulates, and leaving restores the terminal in one step.
+
+   Pickers compose — the editor opens confirm/menu/checklist dialogs that are
+   themselves full-screen — so this is depth-counted: only the outermost
+   enter/leave actually switches buffers, and nested pickers draw on the same
+   surface without flicker. */
+static int g_alt_depth = 0;
+
+void picker_alt_enter(void) {
+    if (g_alt_depth++ == 0) { printf(ANSI_ALT_ENTER); fflush(stdout); }
+}
+
+void picker_alt_leave(void) {
+    if (g_alt_depth > 0 && --g_alt_depth == 0) { printf(ANSI_ALT_LEAVE); fflush(stdout); }
+}
+
 static int run_indexed_picker(int count, PickerRender render, void *ctx) {
     int selected = 0, prev_selected = 0, num_input = -1, show_error = 0, done = 0;
 
+    picker_alt_enter();
     printf(ANSI_CURSOR_HIDE);
     render(ctx, selected, num_input, show_error);
 
@@ -329,6 +351,7 @@ static int run_indexed_picker(int count, PickerRender render, void *ctx) {
 
     printf(ANSI_CURSOR_SHOW);
     fflush(stdout);
+    picker_alt_leave();
     return selected;
 }
 
@@ -533,6 +556,7 @@ int run_multiselect_picker(const char *title, const char *subtitle,
 
     suggest_reset(&sg, typed);
     int nrows = build_ms_rows(count, selected, links, &rows, &rows_cap);
+    picker_alt_enter();
     printf(ANSI_CURSOR_HIDE);
     render_multiselect(title, subtitle, labels, selected, links,
                        rows, nrows, cursor, mode, typed, type_app, edit_pos, &sg, link_err);
@@ -609,6 +633,7 @@ int run_multiselect_picker(const char *title, const char *subtitle,
     free(rows);
     printf(ANSI_CURSOR_SHOW);
     fflush(stdout);
+    picker_alt_leave();
     return cancelled ? 0 : 1;
 }
 
@@ -914,6 +939,7 @@ int run_list_picker(IndexEntry *entries, int count,
     FolderGroup *groups = group_by_folder(entries, count, &gcount);
     if (!groups || gcount == 0) { free(groups); return -1; }
 
+    picker_alt_enter();
     printf(ANSI_CURSOR_HIDE);
 
     int result = -1;
@@ -929,6 +955,7 @@ int run_list_picker(IndexEntry *entries, int count,
 
     printf(ANSI_CURSOR_SHOW);
     fflush(stdout);
+    picker_alt_leave();
     free(groups);
     return result;
 }
@@ -1916,6 +1943,7 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
 
     int nrows = wstree_build_rows(&st->folders, st->ws, st->ws_count, cwd, &rows, &rows_cap);
 
+    picker_alt_enter();
     printf(ANSI_CURSOR_HIDE);
     render_ws_browser(st, rows, nrows, cwd, cursor, title, num_input, show_error,
                       err, &pal, selset);
@@ -2033,6 +2061,7 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
     sel_free(&sel);
     printf(ANSI_CURSOR_SHOW);
     fflush(stdout);
+    picker_alt_leave();
     return result;
 }
 
@@ -2332,15 +2361,16 @@ static int placement_change(const WsEditorApp *a) {
    So /delete destroys the container you are inside, /remove stages a row within
    it — the same split on both screens. */
 
-enum { EC_SAVE, EC_BACK, EC_EXIT, EC_ADD, EC_APPEND, EC_RENAME, EC_DELETE,
+enum { EC_SAVE, EC_BACK, EC_EXIT, EC_ADD, EC_APPEND, EC_EDIT, EC_RENAME, EC_DELETE,
        EC_REMOVE, EC_RESTORE, EC_PLACE, EC_REORDER, EC_COUNT };
 
 static const CmdDef EDIT_CMDS[EC_COUNT] = {
-    { "/save",    "", "save and return to the terminal"        },
+    { "/save",    "", "save and keep editing"                  },
     { "/back",    "", "discard changes, back to the workspaces"},
     { "/exit",    "", "discard changes, return to the terminal"},
     { "/add",     "", "add an app to this workspace"           },
     { "/append",  "", "give this app a file, folder or URL"    },
+    { "/edit",    "", "edit the selected link"                 },
     { "/rename",  "", "rename this workspace"                  },
     { "/delete",  "", "remove this workspace"                  },
     { "/remove",  "", "remove the selected app or link"        },
@@ -2375,7 +2405,7 @@ static unsigned edit_mask(const WsEditorApp *apps, const WeditRow *rows,
         if (e->deleted) {
             m |= 1u << EC_RESTORE;
         } else {
-            m |= 1u << EC_REMOVE;
+            m |= (1u << EC_REMOVE) | (1u << EC_EDIT);
             /* Nothing to reorder against when the app has a single link. */
             if (a->links.count > 1) m |= 1u << EC_REORDER;
         }
@@ -2578,16 +2608,16 @@ static void render_workspace_edit(const char *ws_name,
             printf("\n" ANSI_YELLOW "  %s" ANSI_RESET, app_error);
         if (pal->open) { render_palette(pal); fflush(stdout); return; }
 
-        /* Only Enter varies by row; every other action is a command, so the hint
-           names what Enter opens here and points at "/" for the rest. With no
-           rows there is nothing for Enter to open, so it isn't mentioned. */
+        /* Every action on the list is a "/" command; the hint names the one that
+           fits the row under the cursor and points at "/" for the rest. With no
+           rows there is no row-specific command to name. */
         const char *act = NULL;
         if (nrows > 0) {
             const WeditRow *r = &rows[cursor];
             if (r->kind == ROW_APP && !apps[r->app].marked_delete)
-                                                            act = "Enter add a link";
+                                                            act = "/append to add a link";
             else if (r->kind == ROW_LINK && !apps[r->app].links.items[r->link].deleted)
-                                                            act = "Enter edit this link";
+                                                            act = "/edit this link";
             else                                            act = "/restore to keep it";
         }
         if (act)
@@ -2604,7 +2634,7 @@ static void render_workspace_edit(const char *ws_name,
 int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                               const char **taken_names, int taken_count,
                               WsEditorApp *apps, int *count, int max,
-                              int *delete_workspace) {
+                              int *delete_workspace, const char *entry_status) {
     WeditRow *rows = NULL;
     int  rows_cap  = 0;
     int  cursor    = 0;
@@ -2626,8 +2656,13 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
 
     suggest_reset(&sg, typed);
     *delete_workspace = 0;
+    /* A caller-supplied status (e.g. "Saved.") is shown once on entry, then
+       cleared by the first keypress like any other transient message. */
+    if (entry_status && entry_status[0])
+        snprintf(app_error, sizeof(app_error), "%s", entry_status);
     int nrows = build_edit_rows(apps, *count, &rows, &rows_cap);
 
+    picker_alt_enter();
     printf(ANSI_CURSOR_HIDE);
     render_workspace_edit(ws_name, apps, rows, nrows, cursor, mode,
                           typed, app_error, type_app, reordering, edit_pos, &sg, &pal);
@@ -2729,34 +2764,10 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
             switch (key) {
             case KEY_UP:    if (cursor > 0)         cursor--; break;
             case KEY_DOWN:  if (cursor < nrows - 1) cursor++; break;
-            case KEY_ENTER: {
-                /* Enter opens the row under the cursor: an app opens a field to
-                   add a link to it, and a link opens its text for editing.
-                   Everything that isn't opening something is a "/" command. */
-                if (nrows <= 0) break;
-                const WeditRow *r = &rows[cursor];
-                if (r->kind == ROW_APP && !apps[r->app].marked_delete) {
-                    mode      = WADD_TYPE_LINK;
-                    type_app  = r->app;
-                    typed[0]  = '\0';
-                    typed_len = 0;
-                    edit_pos  = 0;
-                    suggest_reset(&sg, typed);
-                } else if (r->kind == ROW_LINK &&
-                           !apps[r->app].links.items[r->link].deleted) {
-                    edit_app  = r->app;
-                    edit_link = r->link;
-                    strncpy(typed, apps[r->app].links.items[r->link].text,
-                            sizeof(typed) - 1);
-                    typed[sizeof(typed) - 1] = '\0';
-                    typed_len = (int)strlen(typed);
-                    edit_pos  = typed_len;
-                    mode      = WADD_EDIT_LINK;
-                    suggest_reset(&sg, typed);
-                }
-                break;
-            }
             default:
+                /* Enter no longer opens the row: adding a link is /append and
+                   editing one is /edit, so a row action is never bound to a bare
+                   keystroke — everything on the list is a "/" command. */
                 if (key == '/') {
                     app_error[0] = '\0';
                     palette_open(&pal, EDIT_CMDS, EC_COUNT,
@@ -2773,7 +2784,9 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
             const WeditRow *r = (nrows > 0) ? &rows[cursor] : NULL;
             switch (edit_cmd) {
             case EC_SAVE:
-                outcome = WSEDIT_SAVE; done = 1;
+                /* Commit and stay: the caller writes the file and re-enters the
+                   editor with reloaded state, so a save doesn't end the session. */
+                outcome = WSEDIT_SAVE_STAY; done = 1;
                 break;
             case EC_BACK:
             case EC_EXIT: {
@@ -2813,9 +2826,9 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                 break;
             }
             case EC_APPEND: {
-                /* Opens the same inline field Enter on an app row opens — the one
-                   with path completion under it, which is most of what makes a
-                   long path typeable. From a link row it extends that link's app. */
+                /* Opens the inline add-link field — the one with path completion
+                   under it, which is most of what makes a long path typeable.
+                   From a link row it extends that link's app. */
                 if (r == NULL) break;
                 if (r->kind != ROW_APP && r->kind != ROW_LINK) break;
                 if (apps[r->app].marked_delete) break;
@@ -2824,6 +2837,22 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                 typed[0]  = '\0';
                 typed_len = 0;
                 edit_pos  = 0;
+                suggest_reset(&sg, typed);
+                break;
+            }
+            case EC_EDIT: {
+                /* Opens the selected link's text for in-place editing — the same
+                   field the palette mask only offers on a live link row. */
+                if (r == NULL || r->kind != ROW_LINK) break;
+                if (apps[r->app].links.items[r->link].deleted) break;
+                edit_app  = r->app;
+                edit_link = r->link;
+                strncpy(typed, apps[r->app].links.items[r->link].text,
+                        sizeof(typed) - 1);
+                typed[sizeof(typed) - 1] = '\0';
+                typed_len = (int)strlen(typed);
+                edit_pos  = typed_len;
+                mode      = WADD_EDIT_LINK;
                 suggest_reset(&sg, typed);
                 break;
             }
@@ -2927,6 +2956,7 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
     free(rows);
     printf(ANSI_CURSOR_SHOW);
     fflush(stdout);
+    picker_alt_leave();
     return outcome;
 }
 
