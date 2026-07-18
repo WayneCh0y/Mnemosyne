@@ -25,6 +25,13 @@
 #define ANSI_SEL_HL      "\033[30;42m"
 #define ANSI_CURSOR_HIDE "\033[?25l"
 #define ANSI_CURSOR_SHOW "\033[?25h"
+/* Alternate screen buffer — the surface every full-screen TUI (vim, less, htop)
+   draws on. It has no scrollback, so a redraw that is taller than the window
+   clips instead of leaving the scrolled-off copy behind; on exit the terminal is
+   restored exactly as it was, undoing every frame in one step. Entered/left
+   through picker_alt_* (depth-counted) so nested pickers switch buffers once. */
+#define ANSI_ALT_ENTER   "\033[?1049h"
+#define ANSI_ALT_LEAVE   "\033[?1049l"
 #define ANSI_CYAN        "\033[36m"
 #define ANSI_MAGENTA     "\033[35m"
 #define ANSI_BLUE        "\033[34m"
@@ -67,6 +74,13 @@
 #define ANSI_CRUMB     "\033[38;5;245m"           /* breadcrumb ancestors #8a8a8a */
 
 int read_key(void);
+/* Alternate-screen bracket. Every picker enters on the way in and leaves on the
+   way out, but the switch is depth-counted: only the outermost pair actually
+   moves between buffers. Wrap a whole session of composed pickers (the workspace
+   browser and editor alternating) in one enter/leave so the buffer is held for
+   the duration and the screen never flashes back to the shell between them. */
+void picker_alt_enter(void);
+void picker_alt_leave(void);
 /* Generic numbered string-list picker. Returns the chosen index, or -1 (Esc). */
 int run_menu_picker(const char *title, const char *subtitle,
                     const char **list, int display);
@@ -144,20 +158,21 @@ typedef struct {
     char orig_layout[16];   /* layout as loaded from disk ("" for a new app) */
 } WsEditorApp;
 
-/* How run_workspace_edit_picker ended: the user's three ways out (/save, /back,
-   /exit). BACK returns to the workspace browser; EXIT and SAVE both return to the
-   terminal, and only SAVE commits. */
+/* How run_workspace_edit_picker ended. BACK returns to the workspace browser;
+   EXIT returns to the terminal discarding staged changes; SAVE_STAY commits and
+   the caller re-enters the editor; SAVE means commit-and-end and is now only
+   produced by /delete (with *delete_workspace set). */
+#define WSEDIT_SAVE_STAY 2
 #define WSEDIT_SAVE   1
 #define WSEDIT_EXIT   0
 #define WSEDIT_BACK (-1)
 
 /* Workspace editor picker for `mn open edit`. Shows existing apps and their links.
-   Driven like the browser: arrows move, Enter opens the row under the cursor (an
-   app → a field to add a link, a link → its text), and everything else is a "/"
-   command — /add, /rename and /delete act on the workspace itself, /append gives
-   the selected app a file, folder or URL (the same field Enter opens, named so it
-   can be found), /remove and /restore stage and unstage a row, /place assigns a
-   screen partition, /reorder lifts a link for ←/→, and /save, /back and /exit are
+   Driven like the browser: arrows move and every action is a "/" command — /add,
+   /rename and /delete act on the workspace itself, /append gives the selected app
+   a file, folder or URL, /edit opens the selected link's text, /remove and
+   /restore stage and unstage a row, /place assigns a screen partition, /reorder
+   lifts a link for ←/→, and /save (commit and keep editing), /back and /exit are
    the ways out. The list has no Esc; only the palette does, to close itself
    without running anything.
 
@@ -166,16 +181,18 @@ typedef struct {
 
    apps[]/count are in/out: new apps are appended (is_new=1), the links list is
    filled (new entries have orig_pos=-1), and per-link deleted / marked_delete
-   flags are set. Everything is staged — only WSEDIT_SAVE means commit.
+   flags are set. Everything is staged — /save (WSEDIT_SAVE_STAY) is what commits.
    ws_name is an in/out buffer of ws_name_size bytes holding the workspace name; a
    rename updates it in place (the caller persists it). taken_names (length
    taken_count) lists the other workspaces' names so a rename can reject duplicates.
    *delete_workspace is set to 1 if the whole workspace is staged for removal.
-   Returns WSEDIT_SAVE / WSEDIT_BACK / WSEDIT_EXIT. */
+   entry_status, if non-NULL, is shown once on the status line on entry (e.g.
+   "Saved." after a /save re-opens the editor).
+   Returns WSEDIT_SAVE_STAY / WSEDIT_SAVE / WSEDIT_BACK / WSEDIT_EXIT. */
 int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                               const char **taken_names, int taken_count,
                               WsEditorApp *apps, int *count, int max,
-                              int *delete_workspace);
+                              int *delete_workspace, const char *entry_status);
 int run_search_picker(SearchResult *results, int count);
 int run_list_picker(IndexEntry *entries, int count,
                     const char *title, const char *subtitle);
