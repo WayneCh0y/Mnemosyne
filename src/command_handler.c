@@ -387,7 +387,8 @@ static void launch_workspace(const Workspace *ws) {
                 for (int k = 0; k < tc && pos < (int)cap - 1; k++)
                     pos += snprintf(params + pos, cap - pos,
                                     " \"%s\"", ws->entries[i].targets[k]);
-                void *before = win_capture_before();
+                int   running = win_app_running(app);   /* before our launch */
+                void *before  = win_capture_before();
                 SHELLEXECUTEINFOA sei = {0};
                 sei.cbSize       = sizeof(sei);
                 sei.lpVerb       = "open";
@@ -396,7 +397,7 @@ static void launch_workspace(const Workspace *ws) {
                 sei.nShow        = SW_SHOWNORMAL;
                 if (!ShellExecuteExA(&sei))
                     ui_err("failed to launch '%s'", app);
-                win_place_new(before, layout);
+                win_place_new(before, layout, running);
                 free(params);
             }
         }

@@ -21,9 +21,20 @@ void app_launch(const char *app, const char *target, const char *layout);
 /* Window-placement helpers for launches that don't go through app_launch (e.g.
    the multi-target browser path). Snapshot the existing top-level windows just
    before launching, then move the window that newly appears to `layout`.
-   win_place_new frees the snapshot. Both no-op safely on allocation failure. */
+   win_place_new frees the snapshot. Both no-op safely on allocation failure.
+
+   `app_running` is whether the app was already running before this launch
+   (sample win_app_running *before* launching): a live app surfaces any new
+   window fast, so placement uses a short wait and won't stall re-opening a
+   workspace on an app that just refocuses; a cold start keeps the full budget
+   for a slow splash. */
 void *win_capture_before(void);
-void  win_place_new(void *before, const char *layout);
+void  win_place_new(void *before, const char *layout, int app_running);
+
+/* 1 if a process matching `app` (a full exe path, an IDE launcher name like
+   "code", or a UWP marker) is already running. Sample before launching so the
+   result reflects state prior to the window this launch may add. */
+int   win_app_running(const char *app);
 #endif
 
 #ifdef __APPLE__
