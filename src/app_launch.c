@@ -13,6 +13,7 @@
 #include <shellapi.h>
 #include <shlwapi.h>
 #include <dwmapi.h>
+#include <tlhelp32.h>
 #else
 #include <unistd.h>
 #include <fcntl.h>
@@ -308,20 +309,74 @@ void *win_capture_before(void) {
     return s;
 }
 
-/* ~15s of polling. A cold-starting app (Discord, Slack) can sit on a splash for
-   ten seconds before its real window exists, and the old 3s budget simply gave
-   up on those. The wait ends the moment that window appears, so a normally
-   quick app pays nothing for the larger budget — only a launch that was going
-   to miss its window anyway now takes longer to admit it. */
-#define WIN_WAIT_TRIES 200
-#define WIN_WAIT_MS    75
+/* Visible length of `name` up to a trailing ".exe" or ".lnk" (case-insensitive),
+   i.e. its stem: "Discord.exe" and "Discord.lnk" both give 7, "code" gives 4. */
+static size_t basename_stem_len(const char *name) {
+    size_t n = strlen(name);
+    if (n >= 4 && (ieq_n(name + n - 4, ".exe", 4) || ieq_n(name + n - 4, ".lnk", 4)))
+        return n - 4;
+    return n;
+}
 
-void win_place_new(void *before_v, const char *layout) {
+/* True if a process whose basename stem matches `app`'s is already running.
+   Sampled *before* a launch so window placement can pick its wait budget: an app
+   that is already up surfaces any new window it opens almost at once, so there's
+   no reason to sit through the cold-start budget when it opens none at all — a
+   re-launched single-instance app (Discord, Slack, a browser reusing its window)
+   just refocuses what it already had, and the old code then waited the full 15s
+   per such app, which is what made re-opening a live workspace appear to hang.
+
+   Matching is on the stem (basename minus a trailing .exe/.lnk), case-insensitive,
+   so it covers a stored exe path ("...\chrome.exe" → chrome.exe), an IDE launcher
+   ("code" → Code.exe), and the common shortcut case where the .lnk is named after
+   its program (Discord.lnk → Discord.exe). A shortcut whose name differs from its
+   target exe (e.g. "Microsoft Edge.lnk" → msedge.exe) won't match — but those go
+   through the --new-window path, which surfaces its window fast regardless of the
+   budget, so a missed match there costs nothing. A UWP marker has no discoverable
+   image name; treat it as running (short wait) since re-launching one reuses its
+   window too. */
+int win_app_running(const char *app) {
+    if (app == NULL || app[0] == '\0') return 0;
+    if (is_uwp_app(app)) return 1;
+
+    const char *slash = strrchr(app, '\\');
+    const char *want  = slash ? slash + 1 : app;
+    size_t ws = basename_stem_len(want);
+    if (ws == 0) return 0;
+
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return 0;
+
+    int found = 0;
+    PROCESSENTRY32 pe = { .dwSize = sizeof(pe) };
+    if (Process32First(snap, &pe)) {
+        do {
+            size_t ps = basename_stem_len(pe.szExeFile);   /* e.g. "Code.exe" → 4 */
+            if (ps == ws && ieq_n(pe.szExeFile, want, ws)) { found = 1; break; }
+        } while (Process32Next(snap, &pe));
+    }
+    CloseHandle(snap);
+    return found;
+}
+
+/* Placement wait budgets, in WIN_WAIT_MS steps. A cold-starting app (Discord,
+   Slack) can sit on a splash for ten seconds before its real window exists, so a
+   launch of an app that wasn't already running keeps the generous cold budget.
+   An already-running app that will open a new window does so almost immediately
+   (its process is live), so it gets the short warm budget — and when it opens no
+   window at all, that's how long re-opening waits instead of the full 15s. Every
+   wait still ends the instant the window appears, so a quick app pays nothing. */
+#define WIN_WAIT_MS       75
+#define WIN_WAIT_WARM     27    /* ~2s: app already running */
+#define WIN_WAIT_COLD     200   /* ~15s: possible cold start with a splash */
+
+void win_place_new(void *before_v, const char *layout, int app_running) {
     HwndSet *before = (HwndSet *)before_v;
     if (before == NULL) return;
 
+    int max_tries = app_running ? WIN_WAIT_WARM : WIN_WAIT_COLD;
     HWND w = NULL, fallback = NULL;
-    for (int tries = 0; tries < WIN_WAIT_TRIES; tries++) {
+    for (int tries = 0; tries < max_tries; tries++) {
         NewWinCtx c = { before, NULL, NULL };
         EnumWindows(newwin_cb, (LPARAM)&c);
         if (c.found != NULL) { w = c.found; break; }
@@ -352,7 +407,8 @@ static void launch_url_win(const char *url) {
    explorer.exe. Every other app is a full executable path supplied by the
    user, launched directly via ShellExecuteEx. */
 static void launch_app_win(const char *app, const char *target, const char *layout) {
-    void *before = win_capture_before();   /* snapshot windows before launch */
+    int   running = win_app_running(app);  /* before we add one of our own */
+    void *before  = win_capture_before();  /* snapshot windows before launch */
 
     if (is_uwp_app(app)) {
         char params[WORKSPACE_APP_MAX + 4];
@@ -398,7 +454,7 @@ static void launch_app_win(const char *app, const char *target, const char *layo
             ui_err("failed to launch '%s'", app);
     }
 
-    win_place_new(before, layout);   /* move the new window into its partition */
+    win_place_new(before, layout, running);   /* move the new window into its partition */
 }
 #endif
 
