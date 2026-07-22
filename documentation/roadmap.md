@@ -46,16 +46,21 @@ Mnemosyne is designed to grow incrementally. Each version builds directly on the
 
 ---
 
-## v3 — TF-IDF Ranking
+## v3 — BM25 Ranking
 
 **Goal:** Surface the most relevant results first, not just the most frequent ones.
 
-**Search strategy:** Score each document with TF-IDF (Term Frequency × Inverse Document Frequency). Documents that contain a rare query term score higher than documents that happen to contain a common word many times.
+**Search strategy:** Score each document with Okapi BM25 (Lucene variant), the ranking function used by every mainstream search engine (Lucene, Elasticsearch, tantivy, SQLite FTS5). BM25 extends TF-IDF with two crucial refinements: (a) term-frequency saturation — the 20th mention of a word contributes almost nothing more than the 5th, so repetition can't game the ranking; and (b) document-length normalisation — a short focused doc mentioning the query terms once beats a long doc that mentions them a few times amid unrelated content. Standard hyperparameters: `k1 = 1.2`, `b = 0.75`.
+
+**Index changes**
+- Per-document token count stored alongside the hash, needed for length normalisation.
+- On-disk format bumped to v2 (magic still `MNIV`). Upgrading from v1 is automatic — the first `mn search` after upgrade prints a one-line notice and rebuilds `inverted.bin` from `docs/`.
 
 **New features**
-- Significantly better result ordering for multi-word queries
-- `mn search <query> --top N` to limit output to N results
-- Stemming support (e.g. `"run"` matches `"running"`, `"runs"`)
+- Significantly better result ordering for multi-word queries.
+- `mn search <query> --top N` to limit output to N results (follow-up PR).
+
+**Deferred:** Stemming (`"run"` matching `"running"`) was scoped for v3 but held after implementation, pending real-world use of BM25 alone. May return in v3.1 or be dropped.
 
 ---
 
