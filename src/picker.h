@@ -26,10 +26,13 @@
 #define ANSI_CURSOR_HIDE "\033[?25l"
 #define ANSI_CURSOR_SHOW "\033[?25h"
 /* Alternate screen buffer — the surface every full-screen TUI (vim, less, htop)
-   draws on. It has no scrollback, so a redraw that is taller than the window
-   clips instead of leaving the scrolled-off copy behind; on exit the terminal is
-   restored exactly as it was, undoing every frame in one step. Entered/left
-   through picker_alt_* (depth-counted) so nested pickers switch buffers once. */
+   draws on. It has no scrollback, so redraws don't stack scrolled-off copies
+   into history behind them; on exit the terminal is restored exactly as it was,
+   undoing every frame in one step. But it still scrolls: a frame taller than
+   the terminal loses its top irrecoverably (no scrollback to recover it from),
+   so every renderer must size its window against term_size — see
+   picker_window_size in picker.c. Entered/left through picker_alt_*
+   (depth-counted) so nested pickers switch buffers once. */
 #define ANSI_ALT_ENTER   "\033[?1049h"
 #define ANSI_ALT_LEAVE   "\033[?1049l"
 #define ANSI_CYAN        "\033[36m"
