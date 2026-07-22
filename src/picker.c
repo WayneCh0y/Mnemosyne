@@ -72,18 +72,44 @@ int read_key(void) {
 }
 #endif
 
-/* ── Sliding window (show at most PICKER_WINDOW rows, keep selection visible) ── */
+/* ── Sliding window (show at most `window` rows, keep selection visible) ────
+   Every renderer sizes its own window at runtime with picker_window_size so a
+   frame taller than the terminal can never overflow the alt buffer (which
+   scrolls without scrollback — the top would be irrecoverably lost). */
 
-#define PICKER_WINDOW 5
+#define PICKER_WINDOW_MAX 5
 
-/* Top index of a 5-row window that keeps `selected` visible: centered, clamped to
-   the ends. e.g. count=10 → selected 0,1,2 ⇒ rows 1-5; 3 ⇒ 2-6; 4 ⇒ 3-7; 9 ⇒ 6-10. */
-static int picker_window_start(int selected, int count) {
-    if (count <= PICKER_WINDOW) return 0;
-    int start = selected - PICKER_WINDOW / 2;   /* center the selection (offset 2) */
+/* Forward decl — defined further down alongside the centred dialogs. */
+static void term_size(int *cols, int *rows);
+
+/* Top index of a `window`-row viewport that keeps `selected` visible: centered
+   on the selection, clamped to the ends. e.g. window=5, count=10 → selected
+   0,1,2 ⇒ rows 1-5; 3 ⇒ 2-6; 4 ⇒ 3-7; 9 ⇒ 6-10. */
+static int picker_window_start(int selected, int count, int window) {
+    if (window < 1) window = 1;
+    if (count <= window) return 0;
+    int start = selected - window / 2;   /* center the selection */
     if (start < 0) start = 0;
-    if (start > count - PICKER_WINDOW) start = count - PICKER_WINDOW;
+    if (start > count - window) start = count - window;
     return start;
+}
+
+/* How many rows the sliding window can afford, given the picker's fixed chrome
+   (header + footer + hint lines that always print) and each row's line cost.
+   `extra_selected` is any extra lines the selected row costs on top of a
+   non-selected one (e.g. a per-row frame that expands only under the cursor).
+   Return is clamped to [1, PICKER_WINDOW_MAX]: never less than one row (so the
+   selection is always visible) and never more than the ceiling (so a huge
+   terminal doesn't turn the picker into a wall of options). */
+static int picker_window_size(int chrome, int per_row, int extra_selected) {
+    int cols, rows;
+    term_size(&cols, &rows);
+    (void)cols;
+    int available = rows - chrome - extra_selected;
+    int window = available / (per_row > 0 ? per_row : 1);
+    if (window < 1) window = 1;
+    if (window > PICKER_WINDOW_MAX) window = PICKER_WINDOW_MAX;
+    return window;
 }
 
 static void print_more_above(int start) {
@@ -262,7 +288,7 @@ static void render_suggestions(const PathSuggest *s) {
     printf("\n" ANSI_SILVER "  \xe2\x94\x8c " ANSI_RESET ANSI_DIM "%d match%s in %s" ANSI_RESET "\n",
            pc->total, pc->total == 1 ? "" : "es", where);
 
-    int start = picker_window_start(s->sel, pc->count);
+    int start = picker_window_start(s->sel, pc->count, SUGGEST_WINDOW);
     int end   = start + (pc->count < SUGGEST_WINDOW ? pc->count : SUGGEST_WINDOW);
     for (int i = start; i < end; i++) {
         const PathCompItem *it = &pc->items[i];
@@ -300,8 +326,14 @@ typedef void (*PickerRender)(void *ctx, int selected, int num_input, int show_er
    All the full-screen pickers clear-and-redraw on every keystroke. On the main
    buffer, a frame taller than the window scrolls the previous frame off the top
    into scrollback instead of erasing it, so each keypress leaves a stacked copy
-   behind. The alt buffer has no scrollback: too-tall frames clip, nothing
-   accumulates, and leaving restores the terminal in one step.
+   behind. The alt buffer has no scrollback: nothing accumulates behind the
+   picker, and leaving restores the terminal in one step.
+
+   The alt buffer still scrolls when a frame is taller than the viewport — it
+   just doesn't preserve the scrolled-off top in history — so every renderer
+   sizes its sliding window via picker_window_size (and per-row expansions like
+   render_workspace_frame / render_folder_frame accept a matching cap) to keep
+   the header and the selection on-screen.
 
    Pickers compose — the editor opens confirm/menu/checklist dialogs that are
    themselves full-screen — so this is depth-counted: only the outermost
@@ -498,8 +530,10 @@ static void render_multiselect(const char *title, const char *subtitle,
                                int cursor, int mode, const char *typed, int type_app,
                                int edit_pos, const PathSuggest *sg, const char *err) {
     print_picker_header(title, subtitle);
-    int start = picker_window_start(cursor, nrows);
-    int end   = start + (nrows < PICKER_WINDOW ? nrows : PICKER_WINDOW);
+    /* Chrome: 3 (header) + 2 (more-above/below) + 2 (text-field or footer). */
+    int window = picker_window_size(7, 1, 0);
+    int start = picker_window_start(cursor, nrows, window);
+    int end   = start + (nrows < window ? nrows : window);
     print_more_above(start);
     for (int i = start; i < end; i++) {
         const MsRow *r = &rows[i];
@@ -639,7 +673,12 @@ int run_multiselect_picker(const char *title, const char *subtitle,
 
 /* ── Search results picker ─────────────────────────────────────────────── */
 
-static void print_context(const SearchResult *r, int dimmed) {
+/* Renders a result's context snippet as at most `max_lines` terminal lines. The
+   alt buffer scrolls without scrollback, so an unbounded context (256 bytes of
+   arbitrary text with embedded newlines) could push the top of the frame off
+   the screen; capping per result keeps the whole picker frame within the
+   budget picker_window_size was sized against. */
+static void print_context(const SearchResult *r, int dimmed, int max_lines) {
     const char *reset  = dimmed ? "\033[0;2m"  : ANSI_RESET;
     const char *color1 = dimmed ? "\033[2;35m" : ANSI_MAGENTA;
     const char *color2 = dimmed ? "\033[2;34m" : ANSI_BLUE;
@@ -650,6 +689,8 @@ static void print_context(const SearchResult *r, int dimmed) {
     int is_md = (strcmp(r->file_type, "md") == 0);
     int is_pdf = (strcmp(r->file_type, "pdf") == 0);
     int at_line_start = 1;
+    int lines = 1;   /* the `    ` prefix below is on line 1 */
+    if (max_lines < 1) max_lines = 1;
     if (dimmed) printf(ANSI_DIM);
     printf("    ");
     /* PDF matches carry a 1-based page number; show it so the user knows where
@@ -657,6 +698,7 @@ static void print_context(const SearchResult *r, int dimmed) {
     if (is_pdf && r->page > 0)
         printf("%s[p.%d]%s ", color2, r->page, reset);
     const char *p = r->context;
+    int truncated = 0;
     while (*p != '\0') {
         int idx = (int)(p - r->context);
         if (!in_hl && idx == hl_start) { printf("%s", hl); in_hl = 1; }
@@ -678,18 +720,21 @@ static void print_context(const SearchResult *r, int dimmed) {
         } else if (is_md && strncmp(p, "[LIST] ", 7) == 0) {
             printf("- "); p += 7; at_line_start = 0;
         } else if (is_md && strncmp(p, " | ", 3) == 0) {
-            printf("\n    - "); p += 3; at_line_start = 0;
+            if (lines + 1 > max_lines) { truncated = 1; break; }
+            printf("\n    - "); p += 3; at_line_start = 0; lines++;
         } else if (is_md && strncmp(p, "[/LIST]", 7) == 0) {
             p += 7;
         } else if (is_md && strncmp(p, "[LINK]", 6) == 0) {
             printf("%slink%s", color2, reset); p += 6; at_line_start = 0;
         } else if (*p == '\n') {
-            printf("\n    "); p++; at_line_start = 1;
+            if (lines + 1 > max_lines) { truncated = 1; break; }
+            printf("\n    "); p++; at_line_start = 1; lines++;
         } else {
             putchar(*p++); at_line_start = 0;
         }
     }
-    if (in_hl) printf(ANSI_RESET);
+    if (in_hl) printf("%s", reset);
+    if (truncated) printf(ANSI_DIM " \xe2\x80\xa6" ANSI_RESET);   /* " …" */
     printf(ANSI_RESET "\n");
 }
 
@@ -699,20 +744,31 @@ static void print_result_divider(int dimmed) {
     printf(ANSI_RESET);
 }
 
+/* Per-result context caps. The selected row gets more room because it's the
+   one the user is actually reading; the rest are just for orientation. */
+#define PRINT_CTX_LINES_SEL 4
+#define PRINT_CTX_LINES_DIM 2
+
 static void render_results(SearchResult *results, int count, int selected,
                            int num_input, int show_error) {
     print_picker_header("Search results", NULL);
-    int start = picker_window_start(selected, count);
-    int end   = start + (count < PICKER_WINDOW ? count : PICKER_WINDOW);
+    /* Chrome: 3 (header) + 2 (more-above/below) + 2 (footer).
+       Per row: 1 (divider) + 1 (path line) + PRINT_CTX_LINES_DIM + 1 (blank).
+       Selected row adds (PRINT_CTX_LINES_SEL - PRINT_CTX_LINES_DIM) extra. */
+    int per_row = 1 + 1 + PRINT_CTX_LINES_DIM + 1;
+    int extra_sel = PRINT_CTX_LINES_SEL - PRINT_CTX_LINES_DIM;
+    int window = picker_window_size(7, per_row, extra_sel);
+    int start = picker_window_start(selected, count, window);
+    int end   = start + (count < window ? count : window);
     print_more_above(start);
     for (int i = start; i < end; i++) {
         if (i > start) print_result_divider(i != selected || num_input >= 0);
         if (num_input < 0 && i == selected) {
             printf("  " ANSI_ACCENT CURSOR_TOKEN ANSI_RESET " " ANSI_BOLD "[%d] %s" ANSI_RESET "\n", i + 1, results[i].original_path);
-            print_context(&results[i], 0);
+            print_context(&results[i], 0, PRINT_CTX_LINES_SEL);
         } else {
             printf(ANSI_DIM "    [%d] %s" ANSI_RESET "\n", i + 1, results[i].original_path);
-            print_context(&results[i], 1);
+            print_context(&results[i], 1, PRINT_CTX_LINES_DIM);
         }
         printf("\n");
     }
@@ -789,13 +845,13 @@ static const char *path_basename(const char *path) {
     return base ? base + 1 : path;
 }
 
-/* Dim-yellow rail listing the files of the selected folder, capped so a large
-   folder can't overflow. Mirrors render_workspace_frame. */
-static void render_folder_frame(IndexEntry *entries, const FolderGroup *g) {
-    if (g->count == 0) return;
+/* Dim-yellow rail listing the files of the selected folder, capped at
+   `max_lines` so the folder frame plus the row list fits the terminal. */
+static void render_folder_frame(IndexEntry *entries, const FolderGroup *g, int max_lines) {
+    if (g->count == 0 || max_lines < 1) return;
     int lines = 0;
     for (int k = 0; k < g->count; k++) {
-        if (lines >= FOLDER_FRAME_MAX_ENTRIES) {
+        if (lines >= max_lines) {
             printf(ANSI_DIM ANSI_BRIGHT_YELLOW "    \xe2\x94\x82 \xe2\x8b\xaf \xe2\x80\xa6" ANSI_RESET "\n");
             break;
         }
@@ -805,13 +861,30 @@ static void render_folder_frame(IndexEntry *entries, const FolderGroup *g) {
     }
 }
 
+/* How many frame lines the selected folder can afford: capped by the static
+   FOLDER_FRAME_MAX_ENTRIES ceiling, but shrunk further if the terminal is too
+   short to fit chrome + one visible row + the full 8-line frame. */
+static int folder_frame_budget(void) {
+    int cols, rows;
+    term_size(&cols, &rows);
+    (void)cols;
+    /* Chrome (header 3 + more-above/below 2 + footer 2) + one visible row. */
+    int available = rows - 7 - 1;
+    if (available < 1) available = 1;
+    return available < FOLDER_FRAME_MAX_ENTRIES ? available : FOLDER_FRAME_MAX_ENTRIES;
+}
+
 static void render_folder_list(IndexEntry *entries,
                                FolderGroup *groups, int count, int selected,
                                int num_input, int show_error,
                                const char *title, const char *subtitle) {
     print_picker_header(title, subtitle);
-    int start = picker_window_start(selected, count);
-    int end   = start + (count < PICKER_WINDOW ? count : PICKER_WINDOW);
+    /* Chrome: 3 (header) + 2 (more-above/below) + 2 (footer).
+       Non-selected rows: 1 line. Selected row: 1 line + up to frame_lines. */
+    int frame_lines = folder_frame_budget();
+    int window = picker_window_size(7, 1, frame_lines);
+    int start = picker_window_start(selected, count, window);
+    int end   = start + (count < window ? count : window);
     print_more_above(start);
     for (int i = start; i < end; i++) {
 #ifdef _WIN32
@@ -823,7 +896,7 @@ static void render_folder_list(IndexEntry *entries,
             printf("  " ANSI_ACCENT CURSOR_TOKEN ANSI_RESET " " ANSI_BOLD "[%d] %s%s" ANSI_RESET "  " ANSI_DIM "(%d file%s)" ANSI_RESET "\n",
                    i + 1, groups[i].dir, sep,
                    groups[i].count, groups[i].count == 1 ? "" : "s");
-            render_folder_frame(entries, &groups[i]);
+            render_folder_frame(entries, &groups[i], frame_lines);
         } else {
             printf(ANSI_DIM "    [%d] %s%s  (%d file%s)" ANSI_RESET "\n",
                    i + 1, groups[i].dir, sep,
@@ -878,8 +951,10 @@ static int run_folder_select(IndexEntry *entries, FolderGroup *groups, int count
 static void render_file_list(IndexEntry *entries, const FolderGroup *g, int selected,
                              int num_input, int show_error, const char *title) {
     print_picker_header(title, g->dir);
-    int start = picker_window_start(selected, g->count);
-    int end   = start + (g->count < PICKER_WINDOW ? g->count : PICKER_WINDOW);
+    /* Chrome: 3 (header incl. subtitle) + 2 (more-above/below) + 2 (footer). */
+    int window = picker_window_size(7, 1, 0);
+    int start = picker_window_start(selected, g->count, window);
+    int end   = start + (g->count < window ? g->count : window);
     print_more_above(start);
     for (int i = start; i < end; i++) {
         const char *base = path_basename(entries[g->start + i].original_path);
@@ -976,12 +1051,13 @@ static void placement_brief(const char *layout, char *out, size_t n);
 /* Render the selected workspace's entries along a left rail (a dimmed-yellow
    vertical bar, no right border so long paths/URLs are never truncated). Apps
    match the editor's blue highlight and show their placement label; each
-   target/link sits on its own yellow line beneath its app. */
-static void render_workspace_frame(const Workspace *w) {
-    if (w->entry_count == 0) return;
+   target/link sits on its own yellow line beneath its app. Capped at
+   `max_lines` so the frame plus the row list fits the terminal. */
+static void render_workspace_frame(const Workspace *w, int max_lines) {
+    if (w->entry_count == 0 || max_lines < 1) return;
     int lines = 0;
     for (int j = 0; j < w->entry_count; j++) {
-        if (lines >= WS_FRAME_MAX_ENTRIES) {
+        if (lines >= max_lines) {
             printf(ANSI_DIM ANSI_BRIGHT_YELLOW "    │ \xe2\x8b\xaf \xe2\x80\xa6" ANSI_RESET "\n");
             break;
         }
@@ -999,7 +1075,7 @@ static void render_workspace_frame(const Workspace *w) {
 
         /* Each target on its own line (single target included). */
         int tc = w->entries[j].target_count;
-        for (int k = 0; k < tc && lines < WS_FRAME_MAX_ENTRIES; k++) {
+        for (int k = 0; k < tc && lines < max_lines; k++) {
             printf(ANSI_DIM_YELLOW "    │    \xe2\x86\x92 %s" ANSI_RESET "\n",
                    w->entries[j].targets[k]);
             lines++;
@@ -1175,17 +1251,18 @@ static int run_text_input_centered(const char *title, const char *label,
    something rather than leave a hole where the frame was. Nested folders keep
    their "▸" so the preview reads as a level, not a flat dump. */
 static void render_ws_folder_frame(const FolderList *f, const Workspace *ws, int ws_count,
-                                   const char *path) {
+                                   const char *path, int max_lines) {
+    if (max_lines < 1) return;
     int lines = 0, shown = 0;
     int total = wstree_count_children(f, path, ws, ws_count);
 
-    for (int i = 0; i < f->count && lines < WS_FOLDER_PREVIEW_MAX; i++) {
+    for (int i = 0; i < f->count && lines < max_lines; i++) {
         if (!wstree_is_child_of(f->paths[i], path)) continue;
         printf(ANSI_DIM_YELLOW "    │ " ANSI_RESET ANSI_DIM ANSI_FOLDER "\xe2\x96\xb8 %s" ANSI_RESET "\n",
                wstree_leaf(f->paths[i]));
         lines++; shown++;
     }
-    for (int i = 0; i < ws_count && lines < WS_FOLDER_PREVIEW_MAX; i++) {
+    for (int i = 0; i < ws_count && lines < max_lines; i++) {
         if (strcmp(ws[i].folder, path) != 0) continue;
         printf(ANSI_DIM_YELLOW "    │ " ANSI_RESET ANSI_DIM "%s" ANSI_RESET "\n", ws[i].name);
         lines++; shown++;
@@ -1461,8 +1538,15 @@ static void render_ws_browser(const WorkspaceStore *st, const WsRow *rows, int n
                cwd[0] ? "This folder is empty." : "No workspaces yet.");
     }
 
-    int start = picker_window_start(cursor, nrows);
-    int end   = start + (nrows < PICKER_WINDOW ? nrows : PICKER_WINDOW);
+    /* Chrome: 3 (header) + 2 (breadcrumb + blank) + 2 (more-above/below)
+       + 3 (footer / palette / status). Selected row expands to at most
+       frame_lines; capped further on short terminals. */
+    int cols_, rows_; term_size(&cols_, &rows_); (void)cols_;
+    int frame_cap = (rows_ < 15) ? WS_FOLDER_PREVIEW_MAX / 2 : WS_FRAME_MAX_ENTRIES;
+    if (frame_cap < 1) frame_cap = 1;
+    int window = picker_window_size(10, 1, frame_cap);
+    int start = picker_window_start(cursor, nrows, window);
+    int end   = start + (nrows < window ? nrows : window);
     print_more_above(start);
     /* The palette needs the rows below it for context but not their detail, and
        an 8-line app frame plus the command list overruns a short terminal and
@@ -1486,7 +1570,7 @@ static void render_ws_browser(const WorkspaceStore *st, const WsRow *rows, int n
                        " " ANSI_DIM "%d item%s" ANSI_RESET "\n",
                        arrow, tick, i + 1, wstree_leaf(path), kids, kids == 1 ? "" : "s");
                 if (expand)
-                    render_ws_folder_frame(&st->folders, st->ws, st->ws_count, path);
+                    render_ws_folder_frame(&st->folders, st->ws, st->ws_count, path, frame_cap);
             } else {
                 printf("    %s" ANSI_FOLDER "\xe2\x96\xb8 [%d] %s" ANSI_RESET
                        " " ANSI_DIM "%d item%s" ANSI_RESET "\n",
@@ -1497,7 +1581,7 @@ static void render_ws_browser(const WorkspaceStore *st, const WsRow *rows, int n
             if (cur) {
                 printf("  %s %s" ANSI_BOLD "[%d] %s" ANSI_RESET " " ANSI_DIM "(%d app%s)" ANSI_RESET "\n",
                        arrow, tick, i + 1, w->name, w->entry_count, w->entry_count == 1 ? "" : "s");
-                if (expand) render_workspace_frame(w);
+                if (expand) render_workspace_frame(w, frame_cap);
             } else {
                 printf("    %s" ANSI_DIM "[%d] %s (%d app%s)" ANSI_RESET "\n",
                        tick, i + 1, w->name, w->entry_count, w->entry_count == 1 ? "" : "s");
@@ -2516,8 +2600,13 @@ static void render_workspace_edit(const char *ws_name,
         printf("  " ANSI_DIM "No apps yet \xe2\x80\x94 " ANSI_RESET ANSI_VIOLET "/add" ANSI_RESET
                ANSI_DIM " one." ANSI_RESET "\n");
 
-    int start = picker_window_start(cursor, nrows);
-    int end   = start + (nrows < PICKER_WINDOW ? nrows : PICKER_WINDOW);
+    /* Chrome: 3 (header) + 2 (more-above/below) + 4 (row-action hint, error,
+       palette or text field). Rows are variable — an app row is 1 line and a
+       link row is 1 line, so a per-row cost of 1 with no selected extras is a
+       safe under-estimate that still keeps the header on-screen. */
+    int window = picker_window_size(9, 1, 0);
+    int start = picker_window_start(cursor, nrows, window);
+    int end   = start + (nrows < window ? nrows : window);
     print_more_above(start);
     for (int i = start; i < end; i++) {
         const WeditRow *r = &rows[i];
