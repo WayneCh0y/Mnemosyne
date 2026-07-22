@@ -38,14 +38,16 @@ See [file-types.md](file-types.md) for how each format is parsed.
 
 Searches all indexed documents for the given keyword or phrase. The query is case-insensitive by default and matches whole words only — `"for"` will not match `"format"` or `"before"`. Pass `-c` to require an exact-case match. Modified files are automatically re-indexed before searching.
 
-Searches also match file paths using segment matching — `"README.md"`, `"Mnemosyne/"`, and `"C:/Users/Wayne"` each return matching files, but `"Proj"` does not match `"Projects"` and `"README"` does not match `"README.md"`. Path matching follows the same case rule as content matching: insensitive by default, exact case with `-c`. When a file is found by path, the start of the document is shown as the preview. Up to 5 results are shown, ranked by recency then match count.
+Searches also match file paths using segment matching — `"README.md"`, `"Mnemosyne/"`, and `"C:/Users/Wayne"` each return matching files, but `"Proj"` does not match `"Projects"` and `"README"` does not match `"README.md"`. Path matching follows the same case rule as content matching: insensitive by default, exact case with `-c`. When a file is found by path, the start of the document is shown as the preview. Results are ranked by BM25 relevance; ties fall back to recency.
+
+Pass `--top N` to keep only the top N ranked results (drops the tail below the cutoff). Useful when a query would otherwise return dozens of hits and you only want to skim the strongest few.
 
 **Usage**
 ```
-mn search [-c] <query>
+mn search [-c] [--top N] <query>
 ```
 
-The flag can appear anywhere in the command — before, after, or between query words.
+Flags can appear anywhere in the command — before, after, or between query words.
 
 **Examples**
 ```
@@ -54,6 +56,7 @@ mn search "linear programming"
 mn search docker compose
 mn search -c TODO                  # only matches "TODO", not "todo" or "Todo"
 mn search "linear programming" -c
+mn search bm25 --top 5             # keep only the 5 highest-scoring hits
 ```
 
 **Output format**
