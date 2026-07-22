@@ -58,21 +58,41 @@ static void update_files(void) {
     free(entries);
 }
 
-static char* build_query(int argc, char *argv[], char *raw_out, int raw_size, int *is_case_sensitive) {
+/* Parses `mn search`'s argv into a query string plus its flags:
+     -c            → *is_case_sensitive = 1
+     --top N       → *top_n = N (positive integer); *invalid_top = 1 on missing
+                     or non-positive N so the caller can bail with an error.
+   Everything else is joined into the query string. `top_n` is left at 0
+   when the flag is absent, meaning "no cap". */
+static char* build_query(int argc, char *argv[], char *raw_out, int raw_size,
+                          int *is_case_sensitive, int *top_n, int *invalid_top) {
     static char query[256];
     query[0] = '\0';
     *is_case_sensitive = 0;
+    *top_n   = 0;
+    *invalid_top = 0;
 
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "-c") == 0) {
             *is_case_sensitive = 1;
             continue;
         }
+        if (strcmp(argv[i], "--top") == 0) {
+            if (i + 1 >= argc) { *invalid_top = 1; continue; }
+            /* strtol (not atoi) so trailing garbage — `--top 5x`, `--top 5run` —
+               is rejected rather than silently truncated to the leading digits. */
+            char *end = NULL;
+            long n = strtol(argv[i + 1], &end, 10);
+            if (end == argv[i + 1] || *end != '\0' || n <= 0) *invalid_top = 1;
+            else                                              *top_n = (int)n;
+            i++;  /* consume the number arg regardless */
+            continue;
+        }
         strncat(query, argv[i], sizeof(query) - strlen(query) - 1);
         if (i < argc - 1) strncat(query, " ", sizeof(query) - strlen(query) - 1);
     }
 
-    /* trim trailing space if the last arg was the flag */
+    /* trim trailing space if the last arg was a flag */
     int qend = (int)strlen(query);
     if (qend > 0 && query[qend - 1] == ' ') query[qend - 1] = '\0';
 
@@ -213,8 +233,14 @@ static void cmd_search(int argc, char *argv[]) {
 
     char raw_query[256] = {0};
     int is_case_sensitive = 0;
-    char *query = build_query(argc, argv, raw_query, sizeof(raw_query), &is_case_sensitive);
+    int top_n = 0, invalid_top = 0;
+    char *query = build_query(argc, argv, raw_query, sizeof(raw_query),
+                              &is_case_sensitive, &top_n, &invalid_top);
 
+    if (invalid_top) {
+        ui_err("--top requires a positive integer, e.g. --top 5");
+        return;
+    }
     if (query[0]=='\0') { print_help(); return; }
 
     int count;
@@ -226,6 +252,10 @@ static void cmd_search(int argc, char *argv[]) {
         free(results);
         return;
     }
+
+    /* --top N: results is already sorted by BM25 score (highest first) in
+       search(), so the top-N slice is just the first N entries. */
+    if (top_n > 0 && count > top_n) count = top_n;
 
     int chosen = run_search_picker(results, count);
     printf(ANSI_CLEAR ANSI_RESET);
