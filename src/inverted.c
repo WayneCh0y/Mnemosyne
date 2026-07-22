@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +11,14 @@
 #include "index.h"
 
 #define MAX_TOKEN_LEN 128
+
+/* BM25 hyperparameters. k1 controls how fast term frequency saturates —
+   larger values let repeat mentions matter more; standard is 1.2. b
+   controls how much document length is penalised (0 = no penalty,
+   1 = full length normalisation); standard is 0.75. These are the values
+   Lucene, Elasticsearch, and tantivy all default to. */
+#define BM25_K1 1.2f
+#define BM25_B  0.75f
 
 typedef void (*token_callback)(const char *word, uint32_t position, void *userdata);
 
@@ -56,8 +65,11 @@ struct InvertedIndex {
     WordEntry *buckets[BUCKET_COUNT];
     uint32_t   word_count;
 
-    /* Doc table: doc_id is the index into this array. */
+    /* Doc table: doc_id is the index into these two parallel arrays.
+       doc_lengths[i] is the token count of the i-th document, used as |D|
+       in the BM25 length-normalisation term. */
     char     (*doc_hashes)[65];
+    uint32_t  *doc_lengths;
     uint32_t   doc_count;
     uint32_t   doc_cap;
 };
@@ -76,13 +88,17 @@ static uint32_t intern_doc(InvertedIndex *idx, const char *hash) {
     }
     if (idx->doc_count == idx->doc_cap) {
         uint32_t new_cap = idx->doc_cap ? idx->doc_cap * 2 : 16;
-        char (*resized)[65] = realloc(idx->doc_hashes, new_cap * 65);
-        if (resized == NULL) return idx->doc_count; /* allocation failure: best-effort */
-        idx->doc_hashes = resized;
+        char (*resized_hashes)[65] = realloc(idx->doc_hashes, new_cap * 65);
+        if (resized_hashes == NULL) return idx->doc_count; /* allocation failure: best-effort */
+        uint32_t *resized_lengths = realloc(idx->doc_lengths, new_cap * sizeof(uint32_t));
+        if (resized_lengths == NULL) { idx->doc_hashes = resized_hashes; return idx->doc_count; }
+        idx->doc_hashes  = resized_hashes;
+        idx->doc_lengths = resized_lengths;
         idx->doc_cap = new_cap;
     }
     strncpy(idx->doc_hashes[idx->doc_count], hash, 64);
     idx->doc_hashes[idx->doc_count][64] = '\0';
+    idx->doc_lengths[idx->doc_count] = 0;  /* filled in by inverted_add_doc after tokenising */
     return idx->doc_count++;
 }
 
@@ -116,6 +132,7 @@ static void word_add_hit(WordEntry *e, uint32_t doc_id, uint32_t position) {
 typedef struct {
     InvertedIndex *idx;
     uint32_t       doc_id;
+    uint32_t       token_count;  /* accumulated by add_token_cb; used as |D| in BM25 */
 } AddCtx;
 
 static void add_token_cb(const char *word, uint32_t position, void *userdata) {
@@ -123,6 +140,7 @@ static void add_token_cb(const char *word, uint32_t position, void *userdata) {
     WordEntry *e = find_or_create_word(ctx->idx, word);
     if (e == NULL) return;
     word_add_hit(e, ctx->doc_id, position);
+    ctx->token_count++;
 }
 
 InvertedIndex *inverted_load(void) {
@@ -137,23 +155,34 @@ InvertedIndex *inverted_load(void) {
 
     char     magic[4];
     uint32_t version, doc_count, word_count;
-    if (fread(magic, 1, 4, f) != 4 || memcmp(magic, "MNIV", 4) != 0
-        || fread(&version,    sizeof(uint32_t), 1, f) != 1 || version != 1
-        || fread(&doc_count,  sizeof(uint32_t), 1, f) != 1
-        || fread(&word_count, sizeof(uint32_t), 1, f) != 1) {
+    int header_ok = fread(magic, 1, 4, f) == 4 && memcmp(magic, "MNIV", 4) == 0
+                 && fread(&version,    sizeof(uint32_t), 1, f) == 1
+                 && fread(&doc_count,  sizeof(uint32_t), 1, f) == 1
+                 && fread(&word_count, sizeof(uint32_t), 1, f) == 1;
+    if (!header_ok) {
         fclose(f);
-        ui_warn("inverted.bin is corrupt or unrecognized; starting empty");
+        ui_warn("inverted.bin is corrupt; starting empty (will rebuild on next search)");
+        return idx;
+    }
+    if (version != 2) {
+        /* Pre-BM25 files (version=1) lack the per-doc token count we need for
+           length normalisation. Return an empty index; search.c's existing
+           auto-rebuild path re-tokenises every doc and writes a v2 file. */
+        fclose(f);
+        ui_warn("inverted.bin is from an older mnemosyne (v%u); rebuilding with BM25 ranking", version);
         return idx;
     }
 
     if (doc_count > 0) {
-        idx->doc_hashes = malloc(doc_count * 65);
-        if (idx->doc_hashes == NULL) { fclose(f); return idx; }
+        idx->doc_hashes  = malloc(doc_count * 65);
+        idx->doc_lengths = malloc(doc_count * sizeof(uint32_t));
+        if (idx->doc_hashes == NULL || idx->doc_lengths == NULL) { fclose(f); return idx; }
         idx->doc_cap = doc_count;
         for (uint32_t i = 0; i < doc_count; i++) {
             uint32_t doc_id;
-            if (fread(&doc_id, sizeof(uint32_t), 1, f) != 1
-                || fread(idx->doc_hashes[i], 1, 65, f) != 65) {
+            if (fread(&doc_id,               sizeof(uint32_t), 1, f) != 1
+                || fread(idx->doc_hashes[i], 1,                65, f) != 65
+                || fread(&idx->doc_lengths[i], sizeof(uint32_t), 1, f) != 1) {
                 fclose(f);
                 return idx;
             }
@@ -188,8 +217,9 @@ InvertedIndex *inverted_load(void) {
 
 void inverted_add_doc(InvertedIndex *idx, const char *hash, const char *text) {
     if (idx == NULL || hash == NULL || text == NULL) return;
-    AddCtx ctx = { idx, intern_doc(idx, hash) };
+    AddCtx ctx = { idx, intern_doc(idx, hash), 0 };
     tokenize(text, add_token_cb, &ctx);
+    idx->doc_lengths[ctx.doc_id] = ctx.token_count;
 }
 
 void inverted_save(InvertedIndex *idx) {
@@ -205,7 +235,7 @@ void inverted_save(InvertedIndex *idx) {
     }
 
     const char magic[4]   = { 'M', 'N', 'I', 'V' };
-    const uint32_t version = 1;
+    const uint32_t version = 2;  /* v2: per-doc token count appended to each doc-table entry, for BM25. */
     fwrite(magic,             1, 4, f);
     fwrite(&version,          sizeof(uint32_t), 1, f);
     fwrite(&idx->doc_count,   sizeof(uint32_t), 1, f);
@@ -213,8 +243,9 @@ void inverted_save(InvertedIndex *idx) {
 
     for (uint32_t i = 0; i < idx->doc_count; i++) {
         uint32_t doc_id = i;
-        fwrite(&doc_id,            sizeof(uint32_t), 1, f);
-        fwrite(idx->doc_hashes[i], 1,                65, f);
+        fwrite(&doc_id,               sizeof(uint32_t), 1, f);
+        fwrite(idx->doc_hashes[i],    1,                65, f);
+        fwrite(&idx->doc_lengths[i],  sizeof(uint32_t), 1, f);
     }
 
     for (uint32_t b = 0; b < BUCKET_COUNT; b++) {
@@ -243,6 +274,7 @@ void inverted_free(InvertedIndex *idx) {
         }
     }
     free(idx->doc_hashes);
+    free(idx->doc_lengths);
     free(idx);
 }
 
@@ -333,6 +365,69 @@ static int has_hit_at(const WordEntry *e, uint32_t doc_id, uint32_t position) {
     return 0;
 }
 
+/* BM25 helpers. All three walk a single word's postings list, which is
+   inexpensive at Mnemosyne's scale (personal notes, postings typically well
+   under 1000 entries). */
+
+/* Number of distinct documents this word appears in. Postings are appended
+   doc-at-a-time during ingest, so hits from the same doc are contiguous —
+   counting transitions between neighbouring doc_ids gives the right answer
+   in one linear pass. */
+static uint32_t doc_frequency(const WordEntry *e) {
+    if (e->hit_count == 0) return 0;
+    uint32_t count = 1;
+    uint32_t last  = e->hits[0].doc_id;
+    for (uint32_t i = 1; i < e->hit_count; i++) {
+        if (e->hits[i].doc_id != last) {
+            count++;
+            last = e->hits[i].doc_id;
+        }
+    }
+    return count;
+}
+
+/* Raw term frequency: how many times this word occurs in the given doc. */
+static uint32_t term_frequency_in_doc(const WordEntry *e, uint32_t doc_id) {
+    uint32_t tf = 0;
+    for (uint32_t i = 0; i < e->hit_count; i++) {
+        if (e->hits[i].doc_id == doc_id) tf++;
+    }
+    return tf;
+}
+
+/* Mean document length across the whole collection, used to normalise long
+   docs down and short docs up in the BM25 score. Returns 1.0 for an empty
+   collection to keep division safe. */
+static float average_doc_length(const InvertedIndex *idx) {
+    if (idx->doc_count == 0) return 1.0f;
+    double sum = 0.0;
+    for (uint32_t i = 0; i < idx->doc_count; i++)
+        sum += idx->doc_lengths[i];
+    double avg = sum / idx->doc_count;
+    return avg > 0.0 ? (float)avg : 1.0f;
+}
+
+/* Uses log((N - df + 0.5) / (df + 0.5) + 1) for IDF. The +1 inside the log keeps it 
+   non-negative even when a term appears in more than half of the collection, which 
+   matters for small personal-notes corpora. */
+static float bm25_term_score(uint32_t tf, uint32_t df, uint32_t N,
+                              uint32_t doc_len, float avgdl) {
+    if (tf == 0) return 0.0f;
+    float idf = logf(((float)N - (float)df + 0.5f) / ((float)df + 0.5f) + 1.0f);
+    float norm = 1.0f - BM25_B + BM25_B * ((float)doc_len / avgdl);
+    float weighted_tf = ((float)tf * (BM25_K1 + 1.0f)) / ((float)tf + BM25_K1 * norm);
+    return idf * weighted_tf;
+}
+
+/* Find the doc_id for a given hash. Linear scan; the doc table is small
+   compared to postings and this only fires once per result during scoring. */
+static uint32_t doc_id_from_hash(const InvertedIndex *idx, const char *hash) {
+    for (uint32_t i = 0; i < idx->doc_count; i++) {
+        if (strcmp(idx->doc_hashes[i], hash) == 0) return i;
+    }
+    return 0;  /* unreachable in practice: results only ever contain interned hashes */
+}
+
 InvertedMatch *inverted_query(InvertedIndex *idx, const char *query, int *out_count) {
     *out_count = 0;
     if (idx == NULL || query == NULL) return NULL;
@@ -389,8 +484,31 @@ InvertedMatch *inverted_query(InvertedIndex *idx, const char *query, int *out_co
             strncpy(results[*out_count].hash, idx->doc_hashes[doc_id], 64);
             results[*out_count].hash[64] = '\0';
             results[*out_count].match_count = 1;
+            results[*out_count].score       = 0.0f;  /* filled in below */
             (*out_count)++;
         }
+    }
+
+    /* Second pass: BM25 score each candidate doc. Sum per-term contributions
+       across the query tokens — a doc scores higher for matching rare terms
+       (high idf), for containing the terms more times up to a saturation
+       point (k1), and for being close to the average length (b). Precompute
+       df and avgdl once so the O(candidates × query_tokens) loop stays
+       tight. */
+    uint32_t N     = idx->doc_count;
+    float    avgdl = average_doc_length(idx);
+    uint32_t df[16];
+    for (int i = 0; i < qt.count; i++) df[i] = doc_frequency(entries[i]);
+
+    for (int j = 0; j < *out_count; j++) {
+        uint32_t doc_id  = doc_id_from_hash(idx, results[j].hash);
+        uint32_t doc_len = idx->doc_lengths[doc_id];
+        float    score   = 0.0f;
+        for (int i = 0; i < qt.count; i++) {
+            uint32_t tf = term_frequency_in_doc(entries[i], doc_id);
+            score += bm25_term_score(tf, df[i], N, doc_len, avgdl);
+        }
+        results[j].score = score;
     }
 
     return results;

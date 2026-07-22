@@ -57,7 +57,9 @@ SRCS = src/main.c \
 ifeq ($(OS), Windows_NT)
     LDFLAGS = -ladvapi32 -lshell32 -lshlwapi -luser32 -ldwmapi
 else
-    LDFLAGS =
+    # -lm is needed for logf (BM25 IDF). MinGW folds libm into the default set;
+    # Linux and older macOS toolchains need the explicit flag.
+    LDFLAGS = -lm
 endif
 
 # Vendored poppler-windows release (Windows only). Override the version with:
