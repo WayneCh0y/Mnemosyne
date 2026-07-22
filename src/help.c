@@ -34,8 +34,8 @@ void print_help(void) {
 
     print_section("COMMANDS");
     printf("  %sadd%s        Index a file (.txt .md .tex .pdf)\n", p.cyan, p.reset);
-    printf("  %ssearch%s     Search indexed files (add %s-c%s for case-sensitive)\n",
-           p.cyan, p.reset, p.cyan, p.reset);
+    printf("  %ssearch%s     Search indexed files (add %s-c%s for case-sensitive, %s--top N%s to cap results)\n",
+           p.cyan, p.reset, p.cyan, p.reset, p.cyan, p.reset);
     printf("  %slist%s       Browse all indexed files\n", p.cyan, p.reset);
     printf("  %sremove%s     Remove a file from the index (picker)\n", p.cyan, p.reset);
     printf("  %sreindex%s    Re-parse every indexed file from disk\n", p.cyan, p.reset);
@@ -64,6 +64,7 @@ void print_help(void) {
     print_section("EXAMPLES");
     printf("  mn %sadd%s notes.txt\n", p.cyan, p.reset);
     printf("  mn %ssearch%s \"simplex algorithm\"\n", p.cyan, p.reset);
+    printf("  mn %ssearch%s bm25 --top 5\n", p.cyan, p.reset);
     printf("  mn %sopen edit%s\n", p.cyan, p.reset);
     printf("  mn %sopen%s\n", p.cyan, p.reset);
     printf("  mn %sconfig%s ide\n", p.cyan, p.reset);
