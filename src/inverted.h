@@ -37,6 +37,7 @@ void inverted_rebuild(void);
 typedef struct {
     char     hash[65];
     uint32_t match_count;  /* number of times the query (or phrase) hits this doc */
+    float    score;        /* BM25 relevance score, higher = more relevant */
 } InvertedMatch;
 
 /* Looks up the query in `idx`. For a single-word query, returns docs whose

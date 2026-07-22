@@ -47,6 +47,11 @@ int search_find_line(const char *path, const char *query, int is_case_sensitive)
 
 static int cmp(const void *a, const void *b) {
     const SearchResult *ra = a, *rb = b;
+    /* Primary sort key is the BM25 score — higher is more relevant. Ties
+       (including all path-only hits, which have score = 0) fall back to
+       recency, matching v2's ordering for that class of result. */
+    if (rb->score != ra->score)
+        return (rb->score > ra->score) ? 1 : -1;
     if (rb->last_modified != ra->last_modified)
         return (rb->last_modified > ra->last_modified) ? 1 : -1;
     return rb->match_count - ra->match_count;
@@ -310,14 +315,6 @@ static int find_pdf_page(const char *doc_path, const char *query, int is_case_se
     return page;
 }
 
-/* Returns 1 if `hash` is in the candidate list, 0 otherwise. */
-static int hash_in_candidates(const InvertedMatch *cands, int n, const char *hash) {
-    for (int i = 0; i < n; i++) {
-        if (strcmp(cands[i].hash, hash) == 0) return 1;
-    }
-    return 0;
-}
-
 /* Returns 1 if `path` contains `needle` as a substring (case-insensitive when
    the global search is case-insensitive). Cheap — paths are short. */
 static int path_contains(const char *path, const char *needle, int is_case_sensitive) {
@@ -363,7 +360,11 @@ SearchResult *search(const char *query, const char *raw_query, int *count, int i
     int found = 0;
 
     for (int i = 0; i < total; i++) {
-        int is_content_candidate = hash_in_candidates(cands, cand_count, entries[i].hash);
+        const InvertedMatch *cand = NULL;
+        for (int j = 0; j < cand_count; j++) {
+            if (strcmp(cands[j].hash, entries[i].hash) == 0) { cand = &cands[j]; break; }
+        }
+        int is_content_candidate = cand != NULL;
         int is_path_candidate    = path_contains(entries[i].original_path, raw_query, is_case_sensitive);
         if (!is_content_candidate && !is_path_candidate) continue;
 
@@ -394,6 +395,7 @@ SearchResult *search(const char *query, const char *raw_query, int *count, int i
             results[found].last_modified = entries[i].last_modified;
             results[found].match_start   = match_start;
             results[found].match_len     = match_len;
+            results[found].score         = cand != NULL ? cand->score : 0.0f;
             results[found].page          =
                 (file_type_from_string(entries[i].file_type) == FILE_TYPE_PDF && match_start >= 0)
                 ? find_pdf_page(doc_path, query, is_case_sensitive) : 0;
