@@ -1430,7 +1430,8 @@ static void palette_complete(CmdPalette *p, unsigned mask) {
    and `mn open snap`: the depth is the thing the argv form had no way to say. */
 
 enum { BC_BACK, BC_EXIT, BC_CREATE, BC_SNAP, BC_NEW_FOLDER,
-       BC_SELECT, BC_DESELECT, BC_CLEAR, BC_MOVE, BC_RENAME, BC_DELETE, BC_COUNT };
+       BC_SELECT, BC_DESELECT, BC_CLEAR, BC_MOVE, BC_REORDER,
+       BC_RENAME, BC_DELETE, BC_COUNT };
 
 static const CmdDef BROWSE_CMDS[BC_COUNT] = {
     { "/back",       "",        "go up one level"                       },
@@ -1442,20 +1443,27 @@ static const CmdDef BROWSE_CMDS[BC_COUNT] = {
     { "/deselect",   "",        "untick this row"                       },
     { "/clear",      "",        "untick everything"                     },
     { "/move",       "",        "file this under another folder"        },
-    { "/rename",     " [name]", "rename this folder"                    },
-    { "/delete",     "",        "remove this folder"                    },
+    { "/reorder",    "",        "move this among its siblings"          },
+    { "/rename",     " [name]", "rename this folder or workspace"       },
+    { "/delete",     "",        "remove this folder or workspace"       },
 };
 
 /* Which browser commands apply right now. row_kind is WSROW_FOLDER, WSROW_WS, or
-   -1 for an empty level. At the top level /back has nowhere to go, so it isn't
-   offered — the breadcrumb already says you are at the root.
+   -1 for an empty level. can_reorder is 1 when the cursor row has a same-kind
+   sibling to move against (nothing to reorder against otherwise). At the top level
+   /back has nowhere to go, so it isn't offered — the breadcrumb already says you
+   are at the root.
+
+   /rename and /delete act on the row under the cursor, folder or workspace alike:
+   the browser is where a workspace is named and removed, so those commands live
+   here rather than inside the editor.
 
    While ticks exist they are what the screen is about, so /move addresses the set
-   and /rename and /delete drop out: both take exactly one target, and offering
-   them next to a set of ticks would invite you to press one and watch it act on
-   the cursor row instead. Untick (/clear) and they come back. */
+   and /reorder, /rename and /delete drop out: each acts on exactly one row, and
+   offering them next to a set of ticks would invite you to press one and watch it
+   act on the cursor row instead. Untick (/clear) and they come back. */
 static unsigned browse_mask(int edit_mode, int row_kind, const char *cwd,
-                            int nsel, int row_ticked) {
+                            int nsel, int row_ticked, int can_reorder) {
     unsigned m = 1u << BC_EXIT;
     if (cwd[0]) m |= 1u << BC_BACK;
     if (!edit_mode) return m;
@@ -1468,8 +1476,8 @@ static unsigned browse_mask(int edit_mode, int row_kind, const char *cwd,
         m |= (1u << BC_MOVE) | (1u << BC_CLEAR);
         return m;
     }
-    if (on_row) m |= 1u << BC_MOVE;
-    if (row_kind == WSROW_FOLDER) m |= (1u << BC_RENAME) | (1u << BC_DELETE);
+    if (on_row) m |= (1u << BC_MOVE) | (1u << BC_RENAME) | (1u << BC_DELETE);
+    if (on_row && can_reorder) m |= 1u << BC_REORDER;
     return m;
 }
 
@@ -1529,7 +1537,7 @@ static void render_ws_browser(const WorkspaceStore *st, const WsRow *rows, int n
                               const char *cwd, int cursor, const char *title,
                               int num_input, int show_error,
                               const char *err, const CmdPalette *pal,
-                              const Selection *selset) {
+                              const Selection *selset, int reordering) {
     print_picker_header(title, NULL);
     print_breadcrumb(cwd);
 
@@ -1550,8 +1558,9 @@ static void render_ws_browser(const WorkspaceStore *st, const WsRow *rows, int n
     print_more_above(start);
     /* The palette needs the rows below it for context but not their detail, and
        an 8-line app frame plus the command list overruns a short terminal and
-       scrolls the header away. Keep the highlight, drop the expansion. */
-    int expand = !pal->open;
+       scrolls the header away. Keep the highlight, drop the expansion. A lifted
+       row (reordering) is likewise kept compact so it stays put as it moves. */
+    int expand = !pal->open && !reordering;
 
     for (int i = start; i < end; i++) {
         const WsRow *r    = &rows[i];
@@ -1562,10 +1571,15 @@ static void render_ws_browser(const WorkspaceStore *st, const WsRow *rows, int n
             tick = sel_has(selset, st, r) ? ANSI_BRIGHT_GREEN "\xe2\x9c\x94 " ANSI_RESET
                                           : "  ";
 
+        int lifted = cur && reordering;   /* this row is the one being moved */
         if (r->kind == WSROW_FOLDER) {
             const char *path = st->folders.paths[r->idx];
             int kids = wstree_count_children(&st->folders, path, st->ws, st->ws_count);
-            if (cur) {
+            if (lifted) {
+                printf("  %s %s" ANSI_LIFT_HL " \xe2\x86\x95 [%d] %s " ANSI_RESET
+                       " " ANSI_DIM "%d item%s" ANSI_RESET "\n",
+                       arrow, tick, i + 1, wstree_leaf(path), kids, kids == 1 ? "" : "s");
+            } else if (cur) {
                 printf("  %s %s" ANSI_FOLDER_HL " \xe2\x96\xb8 [%d] %s " ANSI_RESET
                        " " ANSI_DIM "%d item%s" ANSI_RESET "\n",
                        arrow, tick, i + 1, wstree_leaf(path), kids, kids == 1 ? "" : "s");
@@ -1578,7 +1592,11 @@ static void render_ws_browser(const WorkspaceStore *st, const WsRow *rows, int n
             }
         } else {
             const Workspace *w = &st->ws[r->idx];
-            if (cur) {
+            if (lifted) {
+                printf("  %s %s" ANSI_LIFT_HL " \xe2\x86\x95 [%d] %s " ANSI_RESET
+                       " " ANSI_DIM "(%d app%s)" ANSI_RESET "\n",
+                       arrow, tick, i + 1, w->name, w->entry_count, w->entry_count == 1 ? "" : "s");
+            } else if (cur) {
                 printf("  %s %s" ANSI_BOLD "[%d] %s" ANSI_RESET " " ANSI_DIM "(%d app%s)" ANSI_RESET "\n",
                        arrow, tick, i + 1, w->name, w->entry_count, w->entry_count == 1 ? "" : "s");
                 if (expand) render_workspace_frame(w, frame_cap);
@@ -1592,6 +1610,12 @@ static void render_ws_browser(const WorkspaceStore *st, const WsRow *rows, int n
 
     if (err && err[0])
         printf("\n" ANSI_YELLOW "  %s" ANSI_RESET, err);
+
+    if (reordering) {
+        printf("\n" ANSI_DIM "\xe2\x86\x91/\xe2\x86\x93 reorder  \xe2\x80\xa2  Enter to put it down" ANSI_RESET);
+        fflush(stdout);
+        return;
+    }
 
     if (pal->open) { render_palette(pal); fflush(stdout); return; }
 
@@ -1908,7 +1932,28 @@ static int palette_run(int cmd, const char *arg, WorkspaceStore *st, const char 
     }
 
     if (cmd == BC_RENAME) {
-        if (r == NULL || r->kind != WSROW_FOLDER) return 0;
+        if (r == NULL) return 0;
+
+        if (r->kind == WSROW_WS) {
+            /* Workspace names are globally unique, so a rename is checked against
+               every other workspace, not just the ones in this folder. */
+            char title[220];
+            snprintf(title, sizeof(title), "Rename '%.60s'", st->ws[r->idx].name);
+            if (!ask_name(arg, title, st->ws[r->idx].name, name, sizeof(name))) return 0;
+            if (!wstree_name_ok(name)) {
+                snprintf(err, err_size, "'%.60s' isn't a usable workspace name (no '/', no blank ends).", name);
+                return 0;
+            }
+            for (int i = 0; i < st->ws_count; i++)
+                if (i != r->idx && strcmp(st->ws[i].name, name) == 0) {
+                    snprintf(err, err_size, "A workspace named '%.60s' already exists.", name);
+                    return 0;
+                }
+            strncpy(st->ws[r->idx].name, name, WORKSPACE_NAME_MAX - 1);
+            st->ws[r->idx].name[WORKSPACE_NAME_MAX - 1] = '\0';
+            return 1;
+        }
+
         char path[WORKSPACE_FOLDER_MAX];
         snprintf(path, sizeof(path), "%s", st->folders.paths[r->idx]);
         char title[220];
@@ -1926,7 +1971,17 @@ static int palette_run(int cmd, const char *arg, WorkspaceStore *st, const char 
     }
 
     if (cmd == BC_DELETE) {
-        if (r == NULL || r->kind != WSROW_FOLDER) return 0;
+        if (r == NULL) return 0;
+
+        if (r->kind == WSROW_WS) {
+            char q[WORKSPACE_NAME_MAX + 32];
+            snprintf(q, sizeof(q), "Remove workspace '%.100s'?", st->ws[r->idx].name);
+            int yes = confirm_centered(q);
+            printf(ANSI_CURSOR_HIDE);
+            if (!yes) return 0;
+            return workspace_store_remove(st, r->idx) == 0;
+        }
+
         char path[WORKSPACE_FOLDER_MAX];
         snprintf(path, sizeof(path), "%s", st->folders.paths[r->idx]);
         int kids = wstree_count_children(&st->folders, path, st->ws, st->ws_count);
@@ -2005,6 +2060,45 @@ static int palette_run(int cmd, const char *arg, WorkspaceStore *st, const char 
     return 0;
 }
 
+/* ── /reorder ────────────────────────────────────────────────────────────────
+   The browser draws each level in the store's array order (wstree_build_rows no
+   longer sorts), so moving a row is moving the entry that backs it. Reordering
+   stays inside one kind block — folders are drawn above workspaces, and the two
+   are separate arrays — so a move that would cross the folder/workspace divide is
+   a no-op, the way a link reorder in the editor stops at its list's ends. */
+
+/* How many rows share the cursor row's kind — the count reorder has to move
+   within. 0 on an empty level. */
+static int same_kind_count(const WsRow *rows, int nrows, int cursor) {
+    if (nrows <= 0 || cursor < 0 || cursor >= nrows) return 0;
+    int kind = rows[cursor].kind, n = 0;
+    for (int i = 0; i < nrows; i++)
+        if (rows[i].kind == kind) n++;
+    return n;
+}
+
+/* Moves the cursor row one slot toward its same-kind neighbour in the direction of
+   `key` (KEY_UP = toward the top, KEY_DOWN = down), swapping the underlying store
+   entry so the new order is what a save writes. Consecutive same-kind rows have
+   increasing store indices, so the neighbour's index is the swap partner and the
+   cursor follows the row to its new slot. No-op at a block boundary or the
+   folder/workspace divide. Returns 1 if anything moved. */
+static int reorder_row(WorkspaceStore *st, const WsRow *rows, int nrows,
+                       int *cursor, int key) {
+    int i = *cursor;
+    int j = (key == KEY_UP) ? i - 1 : i + 1;
+    if (i < 0 || i >= nrows || j < 0 || j >= nrows) return 0;
+    if (rows[i].kind != rows[j].kind) return 0;   /* don't cross the folder/ws split */
+
+    if (rows[i].kind == WSROW_FOLDER)
+        targetlist_swap(st->folders.paths, rows[i].idx, rows[j].idx);
+    else if (workspace_store_swap(st, rows[i].idx, rows[j].idx) != 0)
+        return 0;
+
+    *cursor = j;
+    return 1;
+}
+
 /* ── Browser loop ──────────────────────────────────────────────────────── */
 
 int run_workspace_browser(WorkspaceStore *st, const char *title,
@@ -2014,6 +2108,7 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
     int rows_cap = 0;
     int cursor = 0, prev_cursor = 0, num_input = -1, show_error = 0;
     int done = 0, result = -1;
+    int reordering = 0;   /* 1 while a row is lifted for repositioning (/reorder) */
     char err[220] = {0};
     CmdPalette pal; memset(&pal, 0, sizeof(pal));
     Selection  sel; memset(&sel, 0, sizeof(sel));
@@ -2030,17 +2125,31 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
     picker_alt_enter();
     printf(ANSI_CURSOR_HIDE);
     render_ws_browser(st, rows, nrows, cwd, cursor, title, num_input, show_error,
-                      err, &pal, selset);
+                      err, &pal, selset, reordering);
 
     while (!done) {
         int key = read_key();
         show_error = 0;
         int activate = 0;
 
-        if (pal.open) {
+        if (reordering) {
+            /* A row is lifted by /reorder: only ↑/↓ shuffle it among its siblings
+               and Enter puts it down; everything else is ignored so it can't be
+               left behind mid-move. */
+            if (key == KEY_UP || key == KEY_DOWN) {
+                if (reorder_row(st, rows, nrows, &cursor, key)) {
+                    if (dirty) *dirty = 1;
+                    nrows = wstree_build_rows(&st->folders, st->ws, st->ws_count,
+                                              cwd, &rows, &rows_cap);
+                }
+            } else if (key == KEY_ENTER) {
+                reordering = 0;   /* put it down; the new order stands */
+            }
+        } else if (pal.open) {
             int row_kind = (nrows > 0) ? rows[cursor].kind : -1;
             int ticked   = (nrows > 0) && sel_has(&sel, st, &rows[cursor]);
-            unsigned mask = browse_mask(edit_mode, row_kind, cwd, sel.count, ticked);
+            int reord    = same_kind_count(rows, nrows, cursor) > 1;
+            unsigned mask = browse_mask(edit_mode, row_kind, cwd, sel.count, ticked, reord);
             if (key == KEY_UP) {
                 if (pal.nmatch) pal.sel = (pal.sel > 0) ? pal.sel - 1 : pal.nmatch - 1;
             } else if (key == KEY_DOWN) {
@@ -2071,6 +2180,11 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
                     for (int i = 0; i < nrows; i++)
                         if (rows[i].kind == WSROW_FOLDER &&
                             strcmp(st->folders.paths[rows[i].idx], was) == 0) { cursor = i; break; }
+                } else if (cmd == BC_REORDER) {
+                    /* Lift the cursor row; ↑/↓ now shuffle it and Enter drops it.
+                       It is only offered when a same-kind sibling exists to move
+                       against, so there is always somewhere for it to go. */
+                    reordering = 1;
                 } else {
                     int was_ws = st->ws_count;
                     if (palette_run(cmd, arg, st, cwd, rows, nrows, cursor,
@@ -2080,8 +2194,9 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
                                                   cwd, &rows, &rows_cap);
                         if (cursor >= nrows) cursor = nrows > 0 ? nrows - 1 : 0;
                         /* /create and /snap append: land on what was just made,
-                           the way /back lands on the folder it just left. The new
-                           one sorts in by name, so its row has to be looked up. */
+                           the way /back lands on the folder it just left. It is the
+                           last workspace in the store, so find the row carrying that
+                           index. */
                         if (st->ws_count > was_ws)
                             for (int i = 0; i < nrows; i++)
                                 if (rows[i].kind == WSROW_WS &&
@@ -2113,7 +2228,8 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
                                  browse_mask(edit_mode,
                                              (nrows > 0) ? rows[cursor].kind : -1, cwd,
                                              sel.count,
-                                             (nrows > 0) && sel_has(&sel, st, &rows[cursor])));
+                                             (nrows > 0) && sel_has(&sel, st, &rows[cursor]),
+                                             same_kind_count(rows, nrows, cursor) > 1));
                 } else if (key >= '1' && key <= '9') {
                     prev_cursor = cursor;
                     num_input = key - '0';
@@ -2138,7 +2254,7 @@ int run_workspace_browser(WorkspaceStore *st, const char *title,
 
         if (!done)
             render_ws_browser(st, rows, nrows, cwd, cursor, title, num_input,
-                              show_error, err, &pal, selset);
+                              show_error, err, &pal, selset, reordering);
     }
 
     free(rows);
@@ -2434,42 +2550,36 @@ static int placement_change(const WsEditorApp *a) {
    ordinary row only /remove. One entry called "/remove" that sometimes un-removes
    would read as a no-op on the very row where it does something.
 
-   /add, /rename and /delete act on the workspace and replace the three pseudo-
-   rows that used to sit under the app list ("+ Add a new app", "~ Rename this
-   workspace", "- Remove this workspace"). They were rows you had to scroll past
-   to reach and could land on by holding ↓; as commands they are named, filtered
-   and out of the way, and the list is now only the thing being edited.
+   /add acts on the workspace and replaces the "+ Add a new app" pseudo-row that
+   used to sit under the app list. Renaming and deleting the workspace itself are
+   /rename and /delete in the browser now — a workspace is one of the browser's
+   rows, so naming and removing it belong on the same screen that lists it, next to
+   the folders that share those commands. That leaves this screen as only the thing
+   being edited: the apps and links inside one workspace. */
 
-   /delete, not /remove, takes the workspace: /remove already means "stage the row
-   under the cursor", and the browser already spends /delete on removing a folder.
-   So /delete destroys the container you are inside, /remove stages a row within
-   it — the same split on both screens. */
-
-enum { EC_SAVE, EC_BACK, EC_EXIT, EC_ADD, EC_APPEND, EC_EDIT, EC_RENAME, EC_DELETE,
+enum { EC_SAVE, EC_BACK, EC_EXIT, EC_ADD, EC_APPEND, EC_EDIT,
        EC_REMOVE, EC_RESTORE, EC_PLACE, EC_REORDER, EC_COUNT };
 
 static const CmdDef EDIT_CMDS[EC_COUNT] = {
-    { "/save",    "", "save and keep editing"                  },
+    { "/save",    "", "save changes, back to the workspaces"   },
     { "/back",    "", "discard changes, back to the workspaces"},
     { "/exit",    "", "discard changes, return to the terminal"},
     { "/add",     "", "add an app to this workspace"           },
     { "/append",  "", "give this app a file, folder or URL"    },
     { "/edit",    "", "edit the selected link"                 },
-    { "/rename",  "", "rename this workspace"                  },
-    { "/delete",  "", "remove this workspace"                  },
     { "/remove",  "", "remove the selected app or link"        },
     { "/restore", "", "keep the selected app or link after all"},
     { "/place",   "", "put this app on part of the screen"     },
     { "/reorder", "", "move this link among the app's links"   },
 };
 
-/* Which editor commands apply to the row under the cursor. The workspace-level
-   four don't depend on one: an empty workspace still has to be fillable,
-   nameable, removable and savable, and it has no rows at all. */
+/* Which editor commands apply to the row under the cursor. The workspace-level two
+   (/add and the ways out) don't depend on one: an empty workspace still has to be
+   fillable and savable, and it has no rows at all. */
 static unsigned edit_mask(const WsEditorApp *apps, const WeditRow *rows,
                           int nrows, int cursor) {
     unsigned m = (1u << EC_SAVE) | (1u << EC_BACK) | (1u << EC_EXIT) |
-                 (1u << EC_ADD)  | (1u << EC_RENAME) | (1u << EC_DELETE);
+                 (1u << EC_ADD);
     if (nrows <= 0) return m;
 
     const WeditRow *r = &rows[cursor];
@@ -2720,10 +2830,8 @@ static void render_workspace_edit(const char *ws_name,
     fflush(stdout);
 }
 
-int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
-                              const char **taken_names, int taken_count,
-                              WsEditorApp *apps, int *count, int max,
-                              int *delete_workspace, const char *entry_status) {
+int run_workspace_edit_picker(const char *ws_name,
+                              WsEditorApp *apps, int *count, int max) {
     WeditRow *rows = NULL;
     int  rows_cap  = 0;
     int  cursor    = 0;
@@ -2744,11 +2852,6 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
     CmdPalette  pal; memset(&pal, 0, sizeof(pal));
 
     suggest_reset(&sg, typed);
-    *delete_workspace = 0;
-    /* A caller-supplied status (e.g. "Saved.") is shown once on entry, then
-       cleared by the first keypress like any other transient message. */
-    if (entry_status && entry_status[0])
-        snprintf(app_error, sizeof(app_error), "%s", entry_status);
     int nrows = build_edit_rows(apps, *count, &rows, &rows_cap);
 
     picker_alt_enter();
@@ -2873,9 +2976,9 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
             const WeditRow *r = (nrows > 0) ? &rows[cursor] : NULL;
             switch (edit_cmd) {
             case EC_SAVE:
-                /* Commit and stay: the caller writes the file and re-enters the
-                   editor with reloaded state, so a save doesn't end the session. */
-                outcome = WSEDIT_SAVE_STAY; done = 1;
+                /* Commit and go up: the caller writes the file and re-opens the
+                   browser, so /save both persists the work and leaves the editor. */
+                outcome = WSEDIT_SAVE; done = 1;
                 break;
             case EC_BACK:
             case EC_EXIT: {
@@ -2943,42 +3046,6 @@ int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
                 edit_pos  = typed_len;
                 mode      = WADD_EDIT_LINK;
                 suggest_reset(&sg, typed);
-                break;
-            }
-            case EC_RENAME: {
-                /* Re-ask on a collision rather than reporting it back on the list
-                   screen: the answer is a small edit to what was just typed, so
-                   the field stays open holding it. */
-                char newname[WORKSPACE_NAME_MAX];
-                char seed[WORKSPACE_NAME_MAX];
-                const char *error = NULL;
-                snprintf(seed, sizeof(seed), "%s", ws_name);
-                for (;;) {
-                    if (!run_text_input_centered("Rename workspace", "Name",
-                                                 newname, sizeof(newname), seed, error))
-                        break;
-                    snprintf(seed, sizeof(seed), "%s", newname);
-                    int taken = 0;
-                    for (int t = 0; t < taken_count; t++)
-                        if (strcmp(newname, taken_names[t]) == 0) { taken = 1; break; }
-                    if (taken) { error = "A workspace by that name already exists."; continue; }
-                    snprintf(ws_name, ws_name_size, "%s", newname);
-                    touched = 1;
-                    break;
-                }
-                printf(ANSI_CURSOR_HIDE);   /* input box re-showed the cursor */
-                break;
-            }
-            case EC_DELETE: {
-                char q[WORKSPACE_NAME_MAX + 32];
-                snprintf(q, sizeof(q), "Remove workspace '%s'?", ws_name);
-                if (confirm_centered(q)) {
-                    *delete_workspace = 1;
-                    outcome = WSEDIT_SAVE;
-                    done = 1;
-                } else {
-                    printf(ANSI_CURSOR_HIDE);   /* confirm screen re-showed it */
-                }
                 break;
             }
             case EC_REMOVE:

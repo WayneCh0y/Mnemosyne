@@ -340,6 +340,35 @@ int workspace_store_add(WorkspaceStore *st, const char *name, const char *folder
     return st->ws_count++;
 }
 
+int workspace_store_remove(WorkspaceStore *st, int idx) {
+    if (idx < 0 || idx >= st->ws_count) return -1;
+    Workspace *w = &st->ws[idx];
+    for (int j = 0; j < w->entry_count; j++)
+        targetlist_free(&w->entries[j].targets, &w->entries[j].target_cap,
+                        &w->entries[j].target_count);
+    /* Slide the tail down over the freed slot; the array block is freed whole by
+       workspace_store_free, so there is no need to shrink the allocation. */
+    memmove(&st->ws[idx], &st->ws[idx + 1],
+            (size_t)(st->ws_count - idx - 1) * sizeof(Workspace));
+    st->ws_count--;
+    return 0;
+}
+
+int workspace_store_swap(WorkspaceStore *st, int i, int j) {
+    if (i < 0 || j < 0 || i >= st->ws_count || j >= st->ws_count) return -1;
+    if (i == j) return 0;
+    /* A Workspace is large (its entries are fixed-width), so the temporary goes on
+       the heap rather than the stack. Copying whole structs carries each entry's
+       targets pointer with it, so ownership moves without a per-entry deep copy. */
+    Workspace *tmp = malloc(sizeof(Workspace));
+    if (tmp == NULL) return -2;
+    memcpy(tmp,          &st->ws[i], sizeof(Workspace));
+    memcpy(&st->ws[i],   &st->ws[j], sizeof(Workspace));
+    memcpy(&st->ws[j],   tmp,        sizeof(Workspace));
+    free(tmp);
+    return 0;
+}
+
 void workspace_store_free(WorkspaceStore *st) {
     workspace_free_all(st->ws, st->ws_count);
     workspace_free_folders(&st->folders);

@@ -56,10 +56,10 @@ void print_help(void) {
            p.cyan, p.reset, p.cyan, p.reset, p.dim, p.reset, p.dim, p.reset);
     printf("    %s/add%s %s/append%s          add an app, or give one a file or URL\n",
            p.cyan, p.reset, p.cyan, p.reset);
-    printf("    %s/rename%s %s/delete%s       rename or remove the workspace\n",
+    printf("    %s/rename%s %s/delete%s       rename or remove a folder or workspace\n",
            p.cyan, p.reset, p.cyan, p.reset);
-    printf("    %s/save%s %s/back%s %s/exit%s     the ways out\n\n",
-           p.cyan, p.reset, p.cyan, p.reset, p.cyan, p.reset);
+    printf("    %s/save%s %s/back%s %s/exit%s     the ways out%s (/save keeps your changes)%s\n\n",
+           p.cyan, p.reset, p.cyan, p.reset, p.cyan, p.reset, p.dim, p.reset);
 
     print_section("EXAMPLES");
     printf("  mn %sadd%s notes.txt\n", p.cyan, p.reset);

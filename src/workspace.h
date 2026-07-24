@@ -80,6 +80,18 @@ void workspace_store_free(WorkspaceStore *st);
    Returns the new workspace's index, -1 if the name is taken, -2 on out of memory. */
 int workspace_store_add(WorkspaceStore *st, const char *name, const char *folder);
 
+/* Removes workspace idx from the in-memory store, freeing its entries' targets and
+   shifting the tail down; the caller saves. This is what the browser's /delete goes
+   through rather than workspace_remove(), which writes to disk on its own and would
+   fight the store the browser is holding. Returns 0=ok, -1=index out of range. */
+int workspace_store_remove(WorkspaceStore *st, int idx);
+
+/* Swaps workspaces i and j in the store's array — the browser renders workspaces in
+   array order, so this is what /reorder uses to move one among its siblings. Whole
+   structs are exchanged, so each entry's heap targets travel with it. Returns 0=ok,
+   -1=index out of range, -2=out of memory. */
+int workspace_store_swap(WorkspaceStore *st, int i, int j);
+
 /* Returns heap-allocated array of all workspaces; caller must workspace_free_all(). */
 Workspace *workspace_load_all(int *count);
 
