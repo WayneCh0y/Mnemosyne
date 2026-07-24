@@ -161,41 +161,33 @@ typedef struct {
     char orig_layout[16];   /* layout as loaded from disk ("" for a new app) */
 } WsEditorApp;
 
-/* How run_workspace_edit_picker ended. BACK returns to the workspace browser;
-   EXIT returns to the terminal discarding staged changes; SAVE_STAY commits and
-   the caller re-enters the editor; SAVE means commit-and-end and is now only
-   produced by /delete (with *delete_workspace set). */
-#define WSEDIT_SAVE_STAY 2
+/* How run_workspace_edit_picker ended. SAVE commits the staged changes and returns
+   to the workspace browser (one level up); BACK discards them and returns to the
+   browser; EXIT discards them and returns to the terminal. Both /save and /back
+   land back in the browser — the difference is whether the work is kept. */
 #define WSEDIT_SAVE   1
 #define WSEDIT_EXIT   0
 #define WSEDIT_BACK (-1)
 
 /* Workspace editor picker for `mn open edit`. Shows existing apps and their links.
-   Driven like the browser: arrows move and every action is a "/" command — /add,
-   /rename and /delete act on the workspace itself, /append gives the selected app
-   a file, folder or URL, /edit opens the selected link's text, /remove and
-   /restore stage and unstage a row, /place assigns a screen partition, /reorder
-   lifts a link for ←/→, and /save (commit and keep editing), /back and /exit are
-   the ways out. The list has no Esc; only the palette does, to close itself
-   without running anything.
+   Driven like the browser: arrows move and every action is a "/" command — /add
+   adds an app, /append gives the selected app a file, folder or URL, /edit opens
+   the selected link's text, /remove and /restore stage and unstage a row, /place
+   assigns a screen partition, /reorder lifts a link for ←/→, and /save (commit and
+   return to the browser), /back and /exit are the ways out. Renaming and deleting
+   the workspace itself live in the browser now, not here. The list has no Esc; only
+   the palette does, to close itself without running anything.
 
    A typed link is checked before it is accepted: a URI is trusted, a path must
    exist. So must an app named to /add.
 
    apps[]/count are in/out: new apps are appended (is_new=1), the links list is
    filled (new entries have orig_pos=-1), and per-link deleted / marked_delete
-   flags are set. Everything is staged — /save (WSEDIT_SAVE_STAY) is what commits.
-   ws_name is an in/out buffer of ws_name_size bytes holding the workspace name; a
-   rename updates it in place (the caller persists it). taken_names (length
-   taken_count) lists the other workspaces' names so a rename can reject duplicates.
-   *delete_workspace is set to 1 if the whole workspace is staged for removal.
-   entry_status, if non-NULL, is shown once on the status line on entry (e.g.
-   "Saved." after a /save re-opens the editor).
-   Returns WSEDIT_SAVE_STAY / WSEDIT_SAVE / WSEDIT_BACK / WSEDIT_EXIT. */
-int run_workspace_edit_picker(char *ws_name, size_t ws_name_size,
-                              const char **taken_names, int taken_count,
-                              WsEditorApp *apps, int *count, int max,
-                              int *delete_workspace, const char *entry_status);
+   flags are set. Everything is staged — /save (WSEDIT_SAVE) is what commits.
+   ws_name is the workspace name, shown in the title (not modified here).
+   Returns WSEDIT_SAVE / WSEDIT_BACK / WSEDIT_EXIT. */
+int run_workspace_edit_picker(const char *ws_name,
+                              WsEditorApp *apps, int *count, int max);
 int run_search_picker(SearchResult *results, int count);
 int run_list_picker(IndexEntry *entries, int count,
                     const char *title, const char *subtitle);
@@ -208,9 +200,12 @@ int run_list_picker(IndexEntry *entries, int count,
    both how you act on a row and the only way out (/back, /exit). Esc inside the
    palette closes it again without running anything. `mn open` is read-only and
    gets just those two ways out; with edit_mode set, /create and /snap (which make
-   a workspace in the folder being shown), /new-folder, /move, /rename and /delete
-   join them, /select ticks rows so one /move can carry several, and st is mutated
-   in place.
+   a workspace in the folder being shown), /new-folder, /move, /reorder, /rename
+   and /delete join them, /select ticks rows so one /move can carry several, and st
+   is mutated in place. /rename and /delete act on the cursor row whichever it is —
+   this is where a workspace is named and removed, not the editor — and /reorder
+   lifts it for ↑/↓ among its same-kind siblings, swapping the store entries so the
+   arrangement is what the next save writes.
    *dirty is set to 1 if anything changed, so the caller can persist even when the
    browse itself ends in /exit. dirty may be NULL when edit_mode is 0.
 

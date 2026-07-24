@@ -63,8 +63,9 @@ int wstree_move(FolderList *f, const char *path, const char *dest,
 
 /* ── Rows ───────────────────────────────────────────────────────────────────
    One level's contents, flattened for the picker: folders first, then
-   workspaces, each alphabetical. Rebuilt on every keystroke rather than cached,
-   matching build_edit_rows() in picker.c. */
+   workspaces, each in the stored array order (the browser's /reorder swaps the
+   underlying entries, so that order is what shows). Rebuilt on every keystroke
+   rather than cached, matching build_edit_rows() in picker.c. */
 
 enum { WSROW_FOLDER, WSROW_WS };
 

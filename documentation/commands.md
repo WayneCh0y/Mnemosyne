@@ -241,37 +241,38 @@ Once you have more than a handful of workspaces, a flat list stops helping. Both
 | `/exit` | both | Return to the terminal |
 | `/new-folder [name]` | `mn open edit` | Create a folder at the level you're currently in. Go into a folder first to nest one inside it |
 | `/move` | `mn open edit` | File the selected folder or workspace under another folder (or back at the top level) |
-| `/rename [name]` | `mn open edit` | Rename the selected folder |
-| `/delete` | `mn open edit` | Remove the selected folder |
+| `/reorder` | `mn open edit` | Lift the selected row; `↑`/`↓` move it among its same-kind siblings (folders stay above workspaces) and `Enter` puts it down. Offered only when there's a sibling to move against |
+| `/rename [name]` | `mn open edit` | Rename the selected folder **or workspace** |
+| `/delete` | `mn open edit` | Remove the selected folder or workspace. Deleting a folder reparents its contents; deleting a workspace removes it outright (with a confirmation) |
 
 `mn open` is read-only, so it offers only `/back` and `/exit`.
 
-Folder changes save as you make them, so `/exit` still keeps them — unlike the app/link edits inside a workspace, which stay staged until you `/save`. Deleting a folder never deletes a workspace: everything inside moves up to the parent, and the confirmation says so. Workspace names are unique across the whole tree, so a workspace can be moved between folders without ever being renamed.
+Rows are shown in the order you arrange them with `/reorder`, folders first and then workspaces; a freshly created item lands at the end of its block.
 
-New workspaces from `mn open create` and `mn open snap` start at the top level; use `/move` to file them.
+Browser changes — new folders, moves, reorders, and workspace renames and deletes — save as you make them, so `/exit` still keeps them, unlike the app/link edits inside a workspace, which stay staged until you `/save`. Deleting a folder never deletes a workspace: everything inside moves up to the parent, and the confirmation says so. Workspace names are unique across the whole tree, so a workspace can be moved between folders without ever colliding.
+
+New workspaces from `/create` and `/snap` start in the folder you're browsing; use `/move` to refile them.
 
 **Inside a workspace**
 
-You see the workspace's apps, each with its links beneath it. Changes are **staged** — nothing is written until you `/save`, and `/back` (return to the workspace list) or `/exit` discards them, asking first if anything is staged.
+You see the workspace's apps, each with its links beneath it. Changes are **staged** — nothing is written until you `/save`, and `/back` (return to the workspace list) or `/exit` discards them, asking first if anything is staged. Renaming and deleting the workspace itself are done from the workspace list (`/rename`, `/delete`), not from here — this screen edits only what's inside the workspace.
 
-`Enter` opens the row under the cursor:
-
-- On an **app** — a field to add a link to it. Type a URL or path. New links show in **green** with a `+`.
-- On a **link** — its text, to edit in place.
-- On `[+ Add a new app]` — a field for a program name (e.g. `chrome`) or a full path (e.g. `C:\Users\you\AppData\Local\Discord\app-1.0\Discord.exe`, `/Applications/Discord.app`, `/usr/bin/foo`); if that value doesn't exist on this machine you'll get a non-blocking warning. New apps show in **green** with a `+`.
-- On `[~ Rename this workspace]` or `[- Remove this workspace]` — the matching dialog.
-
-Everything else is a command:
+The list has no `Enter` action; every change is a `/` command that acts on the row under the cursor:
 
 | Command | Action |
 |---|---|
-| `/save` | Write the staged changes and return to the terminal |
+| `/save` | Write the staged changes and return to the workspace list |
 | `/back` | Discard staged changes and return to the workspace list |
 | `/exit` | Discard staged changes and return to the terminal |
+| `/add` | Add an app — a field for a program name (e.g. `chrome`) or a full path (e.g. `C:\Users\you\AppData\Local\Discord\app-1.0\Discord.exe`, `/Applications/Discord.app`, `/usr/bin/foo`); if that value doesn't exist on this machine you'll get a non-blocking warning. New apps show in **green** with a `+` |
+| `/append` | Give the selected app a link — a field for a URL or path. New links show in **green** with a `+` |
+| `/edit` | Edit the selected link's text in place |
 | `/remove` | Stage the selected app or link for removal — shown in **red** with a `-`. A not-yet-saved (green) item is simply dropped |
 | `/restore` | Keep an item you staged for removal. Offered in place of `/remove` on a staged row |
 | `/place` | Give the selected app a screen partition |
 | `/reorder` | Lift the selected link; `←`/`→` move it among the app's links and `Enter` puts it down |
+
+`/save` both writes your changes and returns you to the workspace list, so saving and leaving the editor are one step.
 
 When typing in one of the fields above, `Backspace` deletes characters and `Esc` cancels that field (it does not leave the editor).
 

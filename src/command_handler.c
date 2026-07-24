@@ -609,20 +609,18 @@ static int commit_editor_apps(WorkspaceStore *st, int ws_idx, const char *ws_nam
    terminal. */
 enum { PEND_NONE = 0, PEND_OK, PEND_ERR, PEND_INFO };
 
-/* Edits one workspace: builds the editor state, then runs the editor in a loop so
-   /save commits and re-enters rather than ending the session — each save writes
-   the file and reloads the editor from the saved workspace, so staged removals
-   drop out of the view. Returns the way the session ended (WSEDIT_BACK re-opens
-   the browser; WSEDIT_EXIT and WSEDIT_SAVE — the latter only from /delete — end
-   it). A session-ending outcome stages its terminal message into msg and
-   *msg_kind; WSEDIT_BACK leaves them untouched. */
+/* Edits one workspace: builds the editor state, runs the editor once, and returns
+   how it ended. /save commits the staged changes and returns to the browser
+   (WSEDIT_SAVE); /back discards and returns to the browser (WSEDIT_BACK); /exit
+   discards and returns to the terminal (WSEDIT_EXIT). Only a save write-failure
+   stages a message here (into msg / *msg_kind), downgrading the outcome to
+   WSEDIT_EXIT; the caller composes the ordinary exit message. Renaming and
+   deleting the workspace itself are the browser's job now, so this touches only the
+   apps and links inside it. */
 static int edit_one_workspace(WorkspaceStore *st, int ws_idx,
                               char *msg, size_t msg_sz, int *msg_kind) {
-    Workspace *ws = st->ws;
-    int count = st->ws_count;
-
-    /* Step 2: build workspace editor state. calloc zeroes every slot so unused
-       link lists start as {NULL,0,0}. */
+    /* Build workspace editor state. calloc zeroes every slot so unused link lists
+       start as {NULL,0,0}. */
     WsEditorApp *editor_apps = calloc(WORKSPACE_ENTRIES_MAX, sizeof(WsEditorApp));
     if (!editor_apps) {
         snprintf(msg, msg_sz, "out of memory");
@@ -630,81 +628,24 @@ static int edit_one_workspace(WorkspaceStore *st, int ws_idx,
         return WSEDIT_EXIT;
     }
     int editor_count = 0;
-    load_editor_apps(&ws[ws_idx], editor_apps, &editor_count);
+    load_editor_apps(&st->ws[ws_idx], editor_apps, &editor_count);
 
-    /* ws_name is in/out so a rename inside the editor updates it; taken_names lets
-       the editor reject a rename that collides with another workspace. */
+    /* A private copy of the name for the title and the commit: commit_editor_apps
+       writes it back into the same workspace, so it must not alias that buffer. */
     char ws_name[WORKSPACE_NAME_MAX];
-    strncpy(ws_name, ws[ws_idx].name, sizeof(ws_name) - 1);
-    ws_name[sizeof(ws_name) - 1] = '\0';
+    snprintf(ws_name, sizeof(ws_name), "%s", st->ws[ws_idx].name);
 
-    const char **taken_names = malloc((size_t)count * sizeof(*taken_names));
-    int taken_count = 0;
-    if (taken_names)
-        for (int i = 0; i < count; i++)
-            if (i != ws_idx) taken_names[taken_count++] = ws[i].name;
+    int outcome = run_workspace_edit_picker(ws_name, editor_apps, &editor_count,
+                                            WORKSPACE_ENTRIES_MAX);
 
-    /* Step 3: run the editor. /save commits and loops back with a fresh view;
-       /delete removes the workspace and ends; /back and /exit are the ways out. */
-    int outcome;
-    int saved_any = 0;
-    const char *status = NULL;   /* shown once on entry, e.g. "Saved." after a save */
-    for (;;) {
-        int delete_ws = 0;
-        outcome = run_workspace_edit_picker(ws_name, sizeof(ws_name),
-                                            taken_names, taken_count,
-                                            editor_apps, &editor_count,
-                                            WORKSPACE_ENTRIES_MAX, &delete_ws, status);
-
-        if (outcome == WSEDIT_SAVE && delete_ws) {
-            /* /delete: remove the whole workspace and end the session. */
-            if (workspace_remove(ws_name) == 0) {
-                snprintf(msg, msg_sz, "Workspace '%s' removed.", ws_name);
-                *msg_kind = PEND_OK;
-            } else {
-                snprintf(msg, msg_sz, "failed to remove workspace '%s'", ws_name);
-                *msg_kind = PEND_ERR;
-            }
-            break;
-        }
-
-        if (outcome == WSEDIT_SAVE_STAY) {
-            if (commit_editor_apps(st, ws_idx, ws_name, editor_apps, editor_count) != 0) {
-                snprintf(msg, msg_sz, "failed to save workspace '%s'", ws_name);
-                *msg_kind = PEND_ERR;
-                outcome = WSEDIT_EXIT;   /* bail to the terminal on a write failure */
-                break;
-            }
-            saved_any = 1;
-            /* Reload from the just-saved workspace so staged removals leave the
-               view and the per-link flags reset cleanly. */
-            free_editor_apps(editor_apps, WORKSPACE_ENTRIES_MAX);
-            editor_apps = calloc(WORKSPACE_ENTRIES_MAX, sizeof(WsEditorApp));
-            if (!editor_apps) {
-                free(taken_names);
-                snprintf(msg, msg_sz, "out of memory");
-                *msg_kind = PEND_ERR;
-                return WSEDIT_EXIT;
-            }
-            editor_count = 0;
-            load_editor_apps(&ws[ws_idx], editor_apps, &editor_count);
-            status = "Saved.";
-            continue;
-        }
-
-        break;   /* WSEDIT_BACK or WSEDIT_EXIT */
+    if (outcome == WSEDIT_SAVE &&
+        commit_editor_apps(st, ws_idx, ws_name, editor_apps, editor_count) != 0) {
+        snprintf(msg, msg_sz, "failed to save workspace '%s'", ws_name);
+        *msg_kind = PEND_ERR;
+        outcome = WSEDIT_EXIT;   /* bail to the terminal on a write failure */
     }
 
-    free(taken_names);
     free_editor_apps(editor_apps, WORKSPACE_ENTRIES_MAX);
-    /* A normal /exit reports the session's net result; a save or remove failure
-       above has already staged its own message, so don't overwrite it. */
-    if (outcome == WSEDIT_EXIT && *msg_kind == PEND_NONE) {
-        if (saved_any) { snprintf(msg, msg_sz, "Saved workspace '%s'.", ws_name); *msg_kind = PEND_OK; }
-        else           { snprintf(msg, msg_sz, "Cancelled."); *msg_kind = PEND_INFO; }
-    }
-    /* WSEDIT_BACK re-enters the browser and WSEDIT_SAVE (delete) already staged
-       its message; neither needs one here. */
     return outcome;
 }
 
@@ -731,29 +672,42 @@ static void cmd_open_edit(void) {
     picker_alt_enter();
     int  pend_kind = PEND_NONE;
     char pend_msg[256] = "";
+    int  changed = 0;   /* any store change this session — folder, workspace, or edit */
 
     for (;;) {
         int dirty = 0;
         int ws_idx = run_workspace_browser(&st, "Edit which workspace?", 1, &dirty,
                                            cwd, sizeof(cwd));
 
-        /* Folder edits are committed on the way out however the browse ended:
-           creating three folders and then leaving is a session's work, not a
-           cancellation of it. */
-        if (dirty && workspace_store_save(&st) != 0) {
-            snprintf(pend_msg, sizeof(pend_msg), "failed to save folder changes");
-            pend_kind = PEND_ERR;
+        /* Browser edits (new folders, moves, reorders, workspace renames/deletes)
+           are committed on the way out however the browse ended: a session's work
+           is not a cancellation of it. */
+        if (dirty) {
+            changed = 1;
+            if (workspace_store_save(&st) != 0) {
+                snprintf(pend_msg, sizeof(pend_msg), "failed to save changes");
+                pend_kind = PEND_ERR;
+                break;
+            }
+        }
+
+        if (ws_idx == -1) {   /* /exit from the browser */
+            if (changed) { snprintf(pend_msg, sizeof(pend_msg), "Changes saved."); pend_kind = PEND_OK; }
+            else         { snprintf(pend_msg, sizeof(pend_msg), "Cancelled.");      pend_kind = PEND_INFO; }
             break;
         }
 
-        if (ws_idx == -1) {   /* /exit */
-            if (dirty) { snprintf(pend_msg, sizeof(pend_msg), "Folders updated."); pend_kind = PEND_OK; }
-            else       { snprintf(pend_msg, sizeof(pend_msg), "Cancelled.");       pend_kind = PEND_INFO; }
-            break;
-        }
+        /* /save and /back both return to the browser; /save committed first. Only
+           /exit (or a save failure) leaves for the terminal. */
+        int oc = edit_one_workspace(&st, ws_idx, pend_msg, sizeof(pend_msg), &pend_kind);
+        if (oc == WSEDIT_SAVE) { changed = 1; continue; }
+        if (oc == WSEDIT_BACK) continue;
 
-        if (edit_one_workspace(&st, ws_idx, pend_msg, sizeof(pend_msg), &pend_kind) != WSEDIT_BACK)
-            break;
+        if (pend_kind == PEND_NONE) {   /* WSEDIT_EXIT with no error staged */
+            if (changed) { snprintf(pend_msg, sizeof(pend_msg), "Changes saved."); pend_kind = PEND_OK; }
+            else         { snprintf(pend_msg, sizeof(pend_msg), "Cancelled.");      pend_kind = PEND_INFO; }
+        }
+        break;
     }
 
     picker_alt_leave();

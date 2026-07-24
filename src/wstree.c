@@ -174,11 +174,6 @@ int wstree_move(FolderList *f, const char *path, const char *dest,
 
 /* ── Rows ──────────────────────────────────────────────────────────────── */
 
-/* Sort key for a row: its folder path or workspace name. */
-static const char *row_key(const FolderList *f, const Workspace *ws, const WsRow *r) {
-    return r->kind == WSROW_FOLDER ? wstree_leaf(f->paths[r->idx]) : ws[r->idx].name;
-}
-
 int wstree_build_rows(const FolderList *f, const Workspace *ws, int ws_count,
                       const char *cwd, WsRow **rows, int *cap) {
     int need = f->count + ws_count;
@@ -192,29 +187,19 @@ int wstree_build_rows(const FolderList *f, const Workspace *ws, int ws_count,
 
     /* Folders first, then workspaces: containers above contents reads as a
        hierarchy, and it keeps the folders in one predictable block no matter how
-       many workspaces sit alongside them. Each block is sorted by name — an
-       insertion sort because a level holds a handful of rows, not thousands. */
+       many workspaces sit alongside them. Within each block the stored order is
+       preserved rather than re-sorted — the browser's /reorder swaps the underlying
+       entries, so their array order is the display order, and a freshly created
+       item lands at the end of its block. */
     WsRow *rw = *rows;
     int n = 0;
     for (int i = 0; i < f->count; i++)
         if (wstree_is_child_of(f->paths[i], cwd)) {
-            WsRow r = { WSROW_FOLDER, i };
-            int j = n++;
-            while (j > 0 && strcmp(row_key(f, ws, &rw[j - 1]), wstree_leaf(f->paths[i])) > 0) {
-                rw[j] = rw[j - 1]; j--;
-            }
-            rw[j] = r;
+            rw[n].kind = WSROW_FOLDER; rw[n].idx = i; n++;
         }
-
-    int folder_rows = n;
     for (int i = 0; i < ws_count; i++)
         if (strcmp(ws[i].folder, cwd) == 0) {
-            WsRow r = { WSROW_WS, i };
-            int j = n++;
-            while (j > folder_rows && strcmp(row_key(f, ws, &rw[j - 1]), ws[i].name) > 0) {
-                rw[j] = rw[j - 1]; j--;
-            }
-            rw[j] = r;
+            rw[n].kind = WSROW_WS; rw[n].idx = i; n++;
         }
 
     return n;
